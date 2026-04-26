@@ -1,0 +1,231 @@
+use crate::platform::Platform;
+use crate::skill::Skill;
+use crate::state::SafeState;
+
+// --- View types ---
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PlatformView {
+    pub id: String,
+    pub display_name: String,
+    pub description: String,
+    pub skill_dir: String,
+    pub skill_count: usize,
+}
+
+impl From<&Platform> for PlatformView {
+    fn from(p: &Platform) -> Self {
+        Self { id: p.id.clone(), display_name: p.display_name.clone(), description: p.description.clone(),
+            skill_dir: p.skill_dir.display().to_string(), skill_count: p.skills.len() }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SkillSummary {
+    pub name: String,
+    pub version: Option<String>,
+    pub description: String,
+    pub is_symlink: bool,
+    pub symlink_target: Option<String>,
+    pub total_size: u64,
+}
+
+impl From<&Skill> for SkillSummary {
+    fn from(s: &Skill) -> Self {
+        Self { name: s.name.clone(), version: s.version.clone(), description: s.description.clone(),
+            is_symlink: s.is_symlink, symlink_target: s.symlink_target.as_ref().map(|p| p.display().to_string()),
+            total_size: s.total_size }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SkillDetail {
+    pub name: String,
+    pub version: Option<String>,
+    pub description: String,
+    pub platform_id: String,
+    pub path: String,
+    pub is_symlink: bool,
+    pub symlink_target: Option<String>,
+    pub files: Vec<String>,
+    pub total_size: u64,
+    pub body: String,
+}
+
+impl From<&Skill> for SkillDetail {
+    fn from(s: &Skill) -> Self {
+        Self { name: s.name.clone(), version: s.version.clone(), description: s.description.clone(),
+            platform_id: s.platform_id.clone(), path: s.path.display().to_string(),
+            is_symlink: s.is_symlink, symlink_target: s.symlink_target.as_ref().map(|p| p.display().to_string()),
+            files: s.files.iter().map(|f| f.display().to_string()).collect(),
+            total_size: s.total_size, body: s.body.clone() }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SearchResult {
+    pub platform_id: String,
+    pub platform_name: String,
+    pub skill_name: String,
+    pub description: String,
+}
+
+// --- Error ---
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub enum CommandError {
+    NotFound(String),
+    SyncError(String),
+}
+
+// --- Commands ---
+
+#[tauri::command]
+pub fn list_platforms(state: tauri::State<'_, SafeState>) -> Vec<PlatformView> {
+    let s = state.lock().unwrap();
+    s.platforms.iter().map(PlatformView::from).collect()
+}
+
+#[tauri::command]
+pub fn get_platform_skills(state: tauri::State<'_, SafeState>, platform_id: String) -> Vec<SkillSummary> {
+    let s = state.lock().unwrap();
+    s.platforms.iter()
+        .find(|p| p.id == platform_id)
+        .map(|p| p.skills.iter().map(SkillSummary::from).collect())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+pub fn get_skill_detail(state: tauri::State<'_, SafeState>, platform_id: String, skill_name: String) -> Result<SkillDetail, CommandError> {
+    let s = state.lock().unwrap();
+    let platform = s.platforms.iter().find(|p| p.id == platform_id)
+        .ok_or_else(|| CommandError::NotFound(format!("Platform {} not found", platform_id)))?;
+    let skill = platform.skills.iter().find(|sk| sk.name == skill_name)
+        .ok_or_else(|| CommandError::NotFound(format!("Skill {} not found", skill_name)))?;
+    Ok(SkillDetail::from(skill))
+}
+
+#[tauri::command]
+pub fn get_diff_candidates(state: tauri::State<'_, SafeState>, platform_id: String, skill_name: String) -> Vec<PlatformView> {
+    let s = state.lock().unwrap();
+    s.platforms.iter()
+        .filter(|p| p.id != platform_id && p.skills.iter().any(|sk| sk.name == skill_name))
+        .map(PlatformView::from)
+        .collect()
+}
+
+#[tauri::command]
+pub fn diff_skills_cmd(state: tauri::State<'_, SafeState>, source_platform_id: String, target_platform_id: String, skill_name: String) -> Result<crate::diff::DiffResult, CommandError> {
+    let s = state.lock().unwrap();
+    let source_platform = s.platforms.iter().find(|p| p.id == source_platform_id)
+        .ok_or_else(|| CommandError::NotFound("Source platform not found".into()))?;
+    let target_platform = s.platforms.iter().find(|p| p.id == target_platform_id)
+        .ok_or_else(|| CommandError::NotFound("Target platform not found".into()))?;
+    let source_skill = source_platform.skills.iter().find(|sk| sk.name == skill_name).cloned()
+        .ok_or_else(|| CommandError::NotFound("Source skill not found".into()))?;
+    let target_skill = target_platform.skills.iter().find(|sk| sk.name == skill_name).cloned()
+        .ok_or_else(|| CommandError::NotFound("Target skill not found".into()))?;
+    Ok(crate::diff::diff_skills(&source_skill, &target_skill))
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SyncTarget {
+    pub id: String,
+    pub display_name: String,
+    pub has_skill: bool,
+}
+
+#[tauri::command]
+pub fn get_sync_targets(state: tauri::State<'_, SafeState>, platform_id: String, skill_name: String) -> Vec<SyncTarget> {
+    let s = state.lock().unwrap();
+    s.platforms.iter()
+        .filter(|p| p.id != platform_id)
+        .map(|p| SyncTarget { id: p.id.clone(), display_name: p.display_name.clone(),
+            has_skill: p.skills.iter().any(|sk| sk.name == skill_name) })
+        .collect()
+}
+
+#[tauri::command]
+pub fn sync_skill_cmd(state: tauri::State<'_, SafeState>, source_platform_id: String, target_platform_id: String, skill_name: String, overwrite: bool) -> Result<String, CommandError> {
+    let (source_skill, target_platform) = {
+        let s = state.lock().unwrap();
+        let source_platform = s.platforms.iter().find(|p| p.id == source_platform_id)
+            .ok_or_else(|| CommandError::NotFound("Source platform not found".into()))?;
+        let target = s.platforms.iter().find(|p| p.id == target_platform_id)
+            .ok_or_else(|| CommandError::NotFound("Target platform not found".into()))?;
+        let skill = source_platform.skills.iter().find(|sk| sk.name == skill_name).cloned()
+            .ok_or_else(|| CommandError::NotFound("Source skill not found".into()))?;
+        (skill, target.clone())
+    };
+
+    let result = if overwrite { crate::sync::sync_overwrite(&source_skill, &target_platform) }
+                 else { crate::sync::sync_skill(&source_skill, &target_platform) };
+
+    match result {
+        Ok(()) => {
+            let mut s = state.lock().unwrap();
+            s.platforms = crate::platform::discover_platforms(&s.config);
+            Ok("ok".to_string())
+        }
+        Err(e) => Err(CommandError::SyncError(e.to_string())),
+    }
+}
+
+#[tauri::command]
+pub fn refresh_platforms(state: tauri::State<'_, SafeState>) -> Vec<PlatformView> {
+    let mut s = state.lock().unwrap();
+    s.platforms = crate::platform::discover_platforms(&s.config);
+    s.platforms.iter().map(PlatformView::from).collect()
+}
+
+#[tauri::command]
+pub fn get_locale(state: tauri::State<'_, SafeState>) -> String {
+    let s = state.lock().unwrap();
+    s.locale.tag().to_string()
+}
+
+#[tauri::command]
+pub fn set_locale(state: tauri::State<'_, SafeState>, locale: String) -> String {
+    let mut s = state.lock().unwrap();
+    s.locale = match locale.as_str() {
+        "zh-CN" | "zh" => crate::i18n::Locale::ZhCn,
+        _ => crate::i18n::Locale::En,
+    };
+    s.locale.tag().to_string()
+}
+
+#[tauri::command]
+pub fn search_skills(state: tauri::State<'_, SafeState>, query: String) -> Vec<SearchResult> {
+    let q = query.to_lowercase();
+    let s = state.lock().unwrap();
+    let mut results = Vec::new();
+    for platform in &s.platforms {
+        for skill in &platform.skills {
+            if skill.name.to_lowercase().contains(&q) || skill.description.to_lowercase().contains(&q) {
+                results.push(SearchResult { platform_id: platform.id.clone(), platform_name: platform.display_name.clone(),
+                    skill_name: skill.name.clone(), description: skill.description.clone() });
+            }
+        }
+    }
+    results
+}
+
+#[tauri::command]
+pub fn read_skill_file(state: tauri::State<'_, SafeState>, platform_id: String, skill_name: String, file_path: String) -> Result<String, CommandError> {
+    let s = state.lock().unwrap();
+    let platform = s.platforms.iter().find(|p| p.id == platform_id)
+        .ok_or_else(|| CommandError::NotFound(format!("Platform {} not found", platform_id)))?;
+    let skill = platform.skills.iter().find(|sk| sk.name == skill_name)
+        .ok_or_else(|| CommandError::NotFound(format!("Skill {} not found", skill_name)))?;
+    let full_path = skill.path.join(&file_path);
+    if !full_path.exists() {
+        return Err(CommandError::NotFound(format!("File {} not found", file_path)));
+    }
+    // Safety: only allow reading files within the skill directory
+    let canonical_skill = std::fs::canonicalize(&skill.path).unwrap_or_else(|_| skill.path.clone());
+    let canonical_file = std::fs::canonicalize(&full_path).unwrap_or_else(|_| full_path.clone());
+    if !canonical_file.starts_with(&canonical_skill) {
+        return Err(CommandError::NotFound("Path traversal not allowed".into()));
+    }
+    std::fs::read_to_string(&full_path).map_err(|e| CommandError::NotFound(e.to_string()))
+}

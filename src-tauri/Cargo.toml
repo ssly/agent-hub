@@ -1,0 +1,23 @@
+[package]
+name = "agent-hub"
+version = "0.1.0"
+edition = "2021"
+description = "A desktop hub for managing AI agent skills across platforms"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+similar = "2"
+dirs = "6"
+toml = "0.8"
+walkdir = "2"
+fs_extra = "1"
+sys-locale = "0.3"
+
+[dev-dependencies]
+tempfile = "3"

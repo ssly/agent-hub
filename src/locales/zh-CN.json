@@ -1,0 +1,63 @@
+{
+  "ui": {
+    "title": "Agent Hub",
+    "platforms": "平台列表",
+    "skills": "技能列表",
+    "skill_detail": "技能详情",
+    "no_platforms": "未发现任何 Agent 平台。",
+    "no_skills": "该平台下没有技能。",
+    "search_placeholder": "搜索技能...",
+    "search_results": "搜索结果"
+  },
+  "platform": {
+    "skills_count": "{count} 个技能"
+  },
+  "skill": {
+    "name": "名称",
+    "version": "版本",
+    "description": "描述",
+    "files": "文件",
+    "platform": "平台",
+    "symlink_to": "软链接 → {target}",
+    "size": "大小",
+    "no_description": "（无描述）",
+    "total_files": "{count} 个文件"
+  },
+  "action": {
+    "sync": "同步",
+    "diff": "对比",
+    "refresh": "刷新",
+    "back": "返回",
+    "cancel": "取消",
+    "confirm": "确认",
+    "overwrite": "使用源覆盖目标",
+    "keep_target": "保留目标不变",
+    "lang": "中文"
+  },
+  "sync": {
+    "title": "同步技能",
+    "source": "源",
+    "target": "目标",
+    "select_target": "选择目标平台",
+    "conflict_warning": "目标平台已存在该技能！",
+    "confirm_new": "将 {skill} 同步到 {platform}？",
+    "done": "同步完成。",
+    "failed": "同步失败：{error}",
+    "has_skill": "已有",
+    "new": "新建"
+  },
+  "diff": {
+    "title": "差异对比",
+    "source_label": "源",
+    "target_label": "目标",
+    "only_in": "仅在 {platform}",
+    "added": "+{n}",
+    "removed": "-{n}",
+    "no_diff": "文件内容完全一致。",
+    "select_platform": "选择对比平台",
+    "no_other": "没有其他平台拥有此技能。"
+  },
+  "error": {
+    "no_target": "没有可用的目标平台"
+  }
+}

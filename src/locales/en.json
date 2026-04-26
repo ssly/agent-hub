@@ -1,0 +1,63 @@
+{
+  "ui": {
+    "title": "Agent Hub",
+    "platforms": "Platforms",
+    "skills": "Skills",
+    "skill_detail": "Skill Detail",
+    "no_platforms": "No agent platforms found.",
+    "no_skills": "No skills in this platform.",
+    "search_placeholder": "Search skills...",
+    "search_results": "Search Results"
+  },
+  "platform": {
+    "skills_count": "{count} skills"
+  },
+  "skill": {
+    "name": "Name",
+    "version": "Version",
+    "description": "Description",
+    "files": "Files",
+    "platform": "Platform",
+    "symlink_to": "Symlink to {target}",
+    "size": "Size",
+    "no_description": "(No description)",
+    "total_files": "{count} files"
+  },
+  "action": {
+    "sync": "Sync",
+    "diff": "Diff",
+    "refresh": "Refresh",
+    "back": "Back",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "overwrite": "Overwrite with source",
+    "keep_target": "Keep target unchanged",
+    "lang": "EN"
+  },
+  "sync": {
+    "title": "Sync Skill",
+    "source": "Source",
+    "target": "Target",
+    "select_target": "Select target platform",
+    "conflict_warning": "Target platform already has this skill!",
+    "confirm_new": "Sync {skill} to {platform}?",
+    "done": "Sync completed.",
+    "failed": "Sync failed: {error}",
+    "has_skill": "has skill",
+    "new": "new"
+  },
+  "diff": {
+    "title": "Diff",
+    "source_label": "Source",
+    "target_label": "Target",
+    "only_in": "Only in {platform}",
+    "added": "+{n}",
+    "removed": "-{n}",
+    "no_diff": "Files are identical.",
+    "select_platform": "Select platform to compare",
+    "no_other": "No other platform has this skill."
+  },
+  "error": {
+    "no_target": "No target platform available"
+  }
+}

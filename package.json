@@ -1,0 +1,12 @@
+{
+  "name": "agent-hub-frontend",
+  "private": true,
+  "scripts": {
+    "dev:css": "npx @tailwindcss/cli -i ./src/input.css -o ./src/styles.css --watch",
+    "build:css": "npx @tailwindcss/cli -i ./src/input.css -o ./src/styles.css --minify"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4",
+    "tailwindcss": "^4"
+  }
+}
