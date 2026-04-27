@@ -1,6 +1,6 @@
 # Agent Hub（枢纽）
 
-一个桌面应用，统一管理本地多个 AI Agent 平台（Claude Code、Codex CLI、Cursor、OpenClaw、Hermes、Trae 等）的 Skill 生态。
+一个桌面应用，统一管理本地多个 AI Agent 平台（Claude Code、Codex CLI、Cursor、OpenClaw、Hermes、Trae、Kiro 等）的 Skill 生态。
 
 ## 功能
 
@@ -110,6 +110,7 @@ skill_dir = "~/.my-agent/skills"
 | OpenClaw | `~/.openclaw/skills/` |
 | Hermes | `~/.hermes/skills/` |
 | Trae | `~/.trae/skills/` |
+| Kiro | `~/.kiro/skills/` |
 | Shared Pool | `~/.agents/skills/` |
 
 ## License

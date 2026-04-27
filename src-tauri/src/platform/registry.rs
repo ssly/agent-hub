@@ -17,6 +17,7 @@ pub fn builtin_platforms() -> Vec<PlatformDef> {
         PlatformDef { id: "openclaw".into(), display_name: "OpenClaw".into(), description: String::new(), skill_dir: home.join(".openclaw/skills") },
         PlatformDef { id: "hermes".into(), display_name: "Hermes".into(), description: String::new(), skill_dir: home.join(".hermes/skills") },
         PlatformDef { id: "trae".into(), display_name: "Trae".into(), description: String::new(), skill_dir: home.join(".trae/skills") },
+        PlatformDef { id: "kiro".into(), display_name: "Kiro".into(), description: String::new(), skill_dir: home.join(".kiro/skills") },
         PlatformDef { id: "shared-pool".into(), display_name: "Shared Pool".into(),
             description: "Shared skill pool symlinked into multiple platforms (~/.agents/skills)".into(),
             skill_dir: home.join(".agents/skills") },
