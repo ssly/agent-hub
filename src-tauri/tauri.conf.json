@@ -33,5 +33,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": [
+        "https://github.com/YOUR_USER/agent-hub/releases/download/updater/{{target}}-{{arch}}.json"
+      ]
+    }
   }
 }

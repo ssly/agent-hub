@@ -1,6 +1,17 @@
 import { I18n } from './i18n.js';
 import * as Api from './api.js';
 
+// Updater / Process plugins via global Tauri API (no bundler)
+const tauriInvoke = window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);
+async function checkUpdate() {
+    try {
+        return await tauriInvoke('plugin:updater|check');
+    } catch { return null; }
+}
+function relaunch() {
+    return tauriInvoke('plugin:process|restart');
+}
+
 class App {
     constructor() {
         this.platforms = [];
@@ -22,6 +33,8 @@ class App {
         this.mcpServerDetails = {};  // name -> { config_text, format, editing }
         this.expandedMcpServer = null;  // name of currently expanded server
         this.selectedMcpPlatform = null;
+        // Update state
+        this.updateInfo = null; // { version, body, date } when update available
     }
 
     async init() {
@@ -31,6 +44,7 @@ class App {
         await this.refreshMcpPlatforms();
         this.bindEvents();
         this.render();
+        this.checkForUpdate();
     }
 
     async refreshPlatforms() {
@@ -118,6 +132,72 @@ class App {
         this.render();
     }
 
+    // --- Update ---
+    async checkForUpdate() {
+        try {
+            const update = await checkUpdate();
+            if (update) {
+                this.updateInfo = { version: update.version, body: update.body, date: update.date, currentVersion: update.currentVersion };
+                this.renderUpdateBadge();
+            }
+        } catch {}
+    }
+
+    renderUpdateBadge() {
+        if (!this.updateInfo) return;
+        const el = document.getElementById('update-badge');
+        const i = this.i18n;
+        el.className = 'p-2 border-t border-gray-700 cursor-pointer hover:bg-gray-700/50';
+        el.innerHTML = `<div class="flex items-center gap-1.5 px-1">
+            <span class="text-green-400 text-xs">●</span>
+            <span class="text-xs text-gray-300">${i.t('update.badge')}</span>
+            <span class="text-xs text-gray-500">v${esc(this.updateInfo.version)}</span>
+        </div>`;
+        el.onclick = () => this.showUpdateModal();
+    }
+
+    showUpdateModal() {
+        const i = this.i18n;
+        const info = this.updateInfo;
+        const transition = i.tWith('update.transition', { current: info.currentVersion, latest: info.version });
+        const bodyHtml = info.body ? `<div class="text-sm text-gray-400 mb-4 max-h-32 overflow-y-auto whitespace-pre-wrap">${esc(info.body)}</div>` : '';
+        const html = `<div class="p-5">
+            <h2 class="text-lg font-bold text-yellow-400 mb-3">${i.t('update.title')}</h2>
+            <p class="text-sm text-green-400 font-mono mb-3">${transition}</p>
+            ${bodyHtml}
+            <div id="update-status" class="text-sm text-gray-500 mb-3"></div>
+            <div class="flex gap-3 justify-end">
+                <button class="px-4 py-2 bg-green-700 hover:bg-green-600 rounded text-sm cursor-pointer update-confirm-btn">${i.t('update.confirm')}</button>
+                <button class="px-4 py-2 text-gray-400 hover:text-white text-sm cursor-pointer modal-cancel">${i.t('action.cancel')}</button>
+            </div>
+        </div>`;
+        this.openModal(html);
+        this.modalEl().querySelector('.update-confirm-btn').addEventListener('click', () => this.doUpdate());
+        this.modalEl().querySelector('.modal-cancel').addEventListener('click', () => this.closeModal());
+    }
+
+    async doUpdate() {
+        const i = this.i18n;
+        const statusEl = document.getElementById('update-status');
+        const confirmBtn = this.modalEl().querySelector('.update-confirm-btn');
+        const cancelBtn = this.modalEl().querySelector('.modal-cancel');
+        try {
+            confirmBtn.disabled = true;
+            confirmBtn.classList.add('opacity-50');
+            cancelBtn.classList.add('hidden');
+            statusEl.textContent = i.t('update.downloading');
+            await tauriInvoke('plugin:updater|download');
+            statusEl.textContent = i.t('update.installing');
+            await tauriInvoke('plugin:updater|install');
+            await relaunch();
+        } catch (e) {
+            statusEl.textContent = i.tWith('update.error', { error: e.message || e });
+            confirmBtn.disabled = false;
+            confirmBtn.classList.remove('opacity-50');
+            cancelBtn.classList.remove('hidden');
+        }
+    }
+
     async switchLang() {
         await this.i18n.switchLocale();
         await Api.setLocale(this.i18n.locale);
@@ -164,7 +244,11 @@ class App {
         this.selectedMcpPlatform = id;
         this.expandedMcpServer = null;
         this.mcpServerDetails = {};
-        this.mcpServers = await Api.getMcpServers(id);
+        try {
+            this.mcpServers = await Api.getMcpServers(id);
+        } catch {
+            this.mcpServers = [];
+        }
         this.render();
     }
 
@@ -205,6 +289,90 @@ class App {
         if (!confirm(i.tWith('mcp.confirm_delete', { name }))) return;
         await Api.deleteMcpServer(this.selectedMcpPlatform, name);
         await this.selectMcpPlatform(this.selectedMcpPlatform);
+    }
+
+    async showMcpSyncModal(serverName) {
+        const targets = await Api.getMcpSyncTargets(this.selectedMcpPlatform, serverName);
+        if (targets.length === 0) {
+            alert(this.i18n.t('error.no_target'));
+            return;
+        }
+        this.pendingSyncTarget = null;
+        const i = this.i18n;
+        let html = `<div class="p-5">
+            <h2 class="text-lg font-bold text-yellow-400 mb-4">${i.t('mcp.sync_title')} - ${i.t('mcp.select_target')}</h2>
+            <div class="space-y-1">`;
+        for (const t of targets) {
+            const badge = t.has_server
+                ? `<span class="text-yellow-500 text-xs ml-2">[${i.t('mcp.has_server')}]</span>`
+                : `<span class="text-green-500 text-xs ml-2">[${i.t('mcp.new_server')}]</span>`;
+            const fmt = t.format === 'toml' ? ' <span class="text-gray-600 text-xs">TOML</span>' : '';
+            html += `<button class="w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200 cursor-pointer mcp-sync-target"
+                data-id="${t.id}" data-has="${t.has_server}">${esc(t.display_name)}${fmt}${badge}</button>`;
+        }
+        html += `</div><div class="mt-4 flex justify-end">
+            <button class="px-4 py-2 text-gray-400 hover:text-white cursor-pointer modal-cancel">${i.t('action.cancel')}</button>
+        </div></div>`;
+        this.openModal(html);
+        this.modalEl().querySelectorAll('.mcp-sync-target').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const targetId = btn.dataset.id;
+                if (this.pendingSyncTarget !== targetId) {
+                    this.modalEl().querySelectorAll('.mcp-sync-target').forEach(b => {
+                        b.classList.remove('bg-red-900', 'hover:bg-red-800');
+                        b.classList.add('hover:bg-gray-700');
+                        const hint = b.querySelector('.sync-confirm-hint');
+                        if (hint) hint.remove();
+                    });
+                    this.pendingSyncTarget = targetId;
+                    btn.classList.remove('hover:bg-gray-700');
+                    btn.classList.add('bg-red-900', 'hover:bg-red-800');
+                    const hint = document.createElement('span');
+                    hint.className = 'text-red-400 text-xs ml-2 font-bold sync-confirm-hint';
+                    hint.textContent = i.t('action.confirm');
+                    btn.appendChild(hint);
+                    return;
+                }
+                this.pendingSyncTarget = null;
+                await this.showMcpSyncPreview(this.selectedMcpPlatform, targetId, serverName);
+            });
+        });
+        this.modalEl().querySelector('.modal-cancel').addEventListener('click', () => this.closeModal());
+    }
+
+    async showMcpSyncPreview(sourcePlatformId, targetPlatformId, serverName) {
+        const preview = await Api.previewMcpSync(sourcePlatformId, targetPlatformId, serverName);
+        const i = this.i18n;
+        const srcName = this.mcpPlatforms.find(p => p.id === sourcePlatformId)?.display_name || sourcePlatformId;
+        const tgtName = this.mcpPlatforms.find(p => p.id === targetPlatformId)?.display_name || targetPlatformId;
+
+        const diffHtml = renderSideBySide(toSideBySide(preview.diff_lines));
+
+        let html = `<div class="p-5">
+            <h2 class="text-lg font-bold text-yellow-400 mb-3">${i.t('mcp.sync_title')}</h2>
+            <p class="text-sm mb-1"><span class="text-cyan-400">${i.t('sync.source')}:</span> ${esc(srcName)} / ${esc(serverName)}</p>
+            <p class="text-sm mb-1"><span class="text-cyan-400">${i.t('sync.target')}:</span> ${esc(tgtName)} (${preview.target_format.toUpperCase()})</p>
+            <p class="text-sm mb-2"><span class="text-gray-500">${esc(preview.target_config_path)}</span></p>
+            ${preview.has_conflict ? `<p class="text-yellow-400 text-sm mb-3">⚠ ${i.t('mcp.conflict_warning')}</p>` : ''}
+            <div class="text-sm mb-2"><span class="text-green-400">+${preview.added}</span> <span class="text-red-400">-${preview.removed}</span></div>
+            <div style="max-height:50vh;overflow-y:auto">${diffHtml}</div>
+            <div class="flex gap-3 justify-end mt-4">
+                <button class="px-4 py-2 bg-cyan-700 hover:bg-cyan-600 rounded text-sm cursor-pointer mcp-sync-confirm">${i.t('mcp.confirm_sync')}</button>
+                <button class="px-4 py-2 text-gray-400 hover:text-white cursor-pointer modal-cancel">${i.t('action.cancel')}</button>
+            </div>
+        </div>`;
+        this.modalEl().innerHTML = html;
+        this.modalEl().querySelector('.mcp-sync-confirm').addEventListener('click', async () => {
+            try {
+                await Api.syncMcpServer(sourcePlatformId, targetPlatformId, serverName);
+                this.closeModal();
+                await this.refreshMcpPlatforms();
+                await this.selectMcpPlatform(this.selectedMcpPlatform);
+            } catch (e) {
+                alert(i.tWith('mcp.sync_failed', { error: e.SyncError || e }));
+            }
+        });
+        this.modalEl().querySelector('.modal-cancel').addEventListener('click', () => this.closeModal());
     }
 
     // --- Modals ---
@@ -531,6 +699,7 @@ class App {
                             <div class="text-gray-500 text-sm">${esc(s.summary)}</div>
                         </div>
                     </button>
+                    <button class="text-xs text-cyan-600 hover:text-cyan-400 px-2 py-1 cursor-pointer hidden group-hover:inline mcp-sync-btn" data-name="${esc(s.name)}">${i.t('mcp.sync')}</button>
                     <button class="text-xs text-red-600 hover:text-red-400 px-2 py-1 cursor-pointer hidden group-hover:inline mcp-delete-btn" data-name="${esc(s.name)}">${i.t('mcp.delete')}</button>
                 </div>
                 <div class="mcp-expand-area ${expanded ? '' : 'hidden'}" data-server="${esc(s.name)}">
@@ -550,6 +719,12 @@ class App {
                 this.deleteMcpServer(btn.dataset.name);
             });
         });
+        el.querySelectorAll('.mcp-sync-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.showMcpSyncModal(btn.dataset.name);
+            });
+        });
         // Bind blur auto-save on textareas
         el.querySelectorAll('textarea[data-edit-name]').forEach(ta => {
             const name = ta.dataset.editName;
@@ -563,7 +738,13 @@ class App {
                 // Validate and unwrap
                 let saveText;
                 if (detail.format === 'toml') {
-                    saveText = text;
+                    // Strip [mcp_servers.xxx] header if present
+                    saveText = text.replace(/^\[mcp_servers\.[^\]]+\]\s*\n?/, '');
+                    if (!saveText.trim()) {
+                        alert('Empty config');
+                        ta.value = originalText;
+                        return;
+                    }
                 } else {
                     try {
                         const parsed = JSON.parse(text);
@@ -595,13 +776,11 @@ class App {
     renderMcpAccordionContent(name, detail) {
         const i = this.i18n;
         const isToml = detail.format === 'toml';
-        // Wrap config inside { "serverName": { ...config } }
+        // Wrap config for display
         let wrapped;
         if (isToml) {
-            // For TOML, display as [mcp_servers.name] section style
-            wrapped = detail.config_text;
+            wrapped = `[mcp_servers.${name}]\n${detail.config_text}`;
         } else {
-            // Wrap JSON in outer object with server name as key
             try {
                 const configObj = JSON.parse(detail.config_text);
                 const wrappedObj = {};
@@ -818,20 +997,9 @@ class App {
             } else {
                 html += `<span class="text-gray-500">+${fd.stats.added} -${fd.stats.removed}</span>`;
             }
-            html += `</div><pre class="text-sm font-mono bg-gray-950 rounded-lg p-3 overflow-x-auto">`;
-
-            for (const line of fd.lines) {
-                if (line.Context !== undefined) {
-                    html += `<div class="text-gray-600">${esc(line.Context)}</div>`;
-                } else if (line.Added !== undefined) {
-                    html += `<div class="text-green-400 bg-green-950/30">${esc(line.Added)}</div>`;
-                } else if (line.Removed !== undefined) {
-                    html += `<div class="text-red-400 bg-red-950/30">${esc(line.Removed)}</div>`;
-                } else if (line.FileHeader !== undefined) {
-                    html += `<div class="text-yellow-400">${esc(line.FileHeader)}</div>`;
-                }
-            }
-            html += `</pre></div>`;
+            html += `</div>`;
+            html += renderSideBySide(toSideBySide(fd.lines));
+            html += `</div>`;
         }
 
         if (diff.file_diffs.length === 0) {
@@ -879,6 +1047,73 @@ function esc(str) {
 
 function truncate(str, len) {
     return str && str.length > len ? str.substring(0, len) + '...' : str;
+}
+
+// Convert unified diff lines to side-by-side pairs
+// Input: [{ tag: 'context'|'removed'|'added', content }] or [{ Context, Added, Removed, FileHeader }]
+// Output: [{ left: {text, type}, right: {text, type} }]
+function toSideBySide(lines) {
+    const pairs = [];
+    const normalized = lines.map(l => {
+        if (l.tag !== undefined) return l;
+        if (l.Context !== undefined) return { tag: 'context', content: l.Context };
+        if (l.Added !== undefined) return { tag: 'added', content: l.Added };
+        if (l.Removed !== undefined) return { tag: 'removed', content: l.Removed };
+        if (l.FileHeader !== undefined) return { tag: 'context', content: l.FileHeader };
+        return { tag: 'context', content: '' };
+    });
+
+    let i = 0;
+    while (i < normalized.length) {
+        const line = normalized[i];
+        if (line.tag === 'context') {
+            pairs.push({ left: { text: line.content, type: 'context' }, right: { text: line.content, type: 'context' } });
+            i++;
+        } else if (line.tag === 'removed') {
+            // Collect consecutive removed
+            const removed = [];
+            while (i < normalized.length && normalized[i].tag === 'removed') {
+                removed.push(normalized[i].content);
+                i++;
+            }
+            // Collect consecutive added
+            const added = [];
+            while (i < normalized.length && normalized[i].tag === 'added') {
+                added.push(normalized[i].content);
+                i++;
+            }
+            // Pair them up
+            const max = Math.max(removed.length, added.length);
+            for (let j = 0; j < max; j++) {
+                pairs.push({
+                    left: j < removed.length ? { text: removed[j], type: 'removed' } : { text: '', type: 'empty' },
+                    right: j < added.length ? { text: added[j], type: 'added' } : { text: '', type: 'empty' },
+                });
+            }
+        } else if (line.tag === 'added') {
+            pairs.push({ left: { text: '', type: 'empty' }, right: { text: line.content, type: 'added' } });
+            i++;
+        } else {
+            i++;
+        }
+    }
+    return pairs;
+}
+
+function renderSideBySide(pairs) {
+    let html = `<div style="display:grid;grid-template-columns:1fr 1fr;font-size:0.8125rem;line-height:1.6;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;background:#0a0a0f;border-radius:0.5rem;overflow:hidden;border:1px solid #1e293b">`;
+    html += `<div style="background:#1e293b;color:#94a3b8;font-size:0.7rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;text-align:center;padding:0.4rem 0;border-right:1px solid #334155">Before</div>`;
+    html += `<div style="background:#1e293b;color:#94a3b8;font-size:0.7rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;text-align:center;padding:0.4rem 0">After</div>`;
+    for (const p of pairs) {
+        const lBg = p.left.type === 'removed' ? 'background:rgba(153,27,27,0.25);color:#fca5a5' : p.left.type === 'empty' ? 'background:rgba(10,10,15,0.6)' : 'color:#64748b';
+        const rBg = p.right.type === 'added' ? 'background:rgba(22,101,52,0.25);color:#86efac' : p.right.type === 'empty' ? 'background:rgba(10,10,15,0.6)' : 'color:#64748b';
+        const leftPre = p.left.type === 'removed' ? '<span style="color:#ef4444;font-weight:600">-</span> ' : '<span style="color:#334155"> </span> ';
+        const rightPre = p.right.type === 'added' ? '<span style="color:#22c55e;font-weight:600">+</span> ' : '<span style="color:#334155"> </span> ';
+        html += `<div style="${lBg};padding:0 0.75rem;white-space:pre;overflow-x:auto;border-right:1px solid #1e293b;min-height:1.6em">${leftPre}${esc(p.left.text)}</div>`;
+        html += `<div style="${rBg};padding:0 0.75rem;white-space:pre;overflow-x:auto;min-height:1.6em">${rightPre}${esc(p.right.text)}</div>`;
+    }
+    html += `</div>`;
+    return html;
 }
 
 const app = new App();

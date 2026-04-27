@@ -78,3 +78,16 @@ export async function deleteMcpServer(platformId, name) {
 export async function importMcpServer(platformId, name, configText) {
     return invoke('import_mcp_server_cmd', { platformId, name, configText });
 }
+
+// MCP Sync
+export async function getMcpSyncTargets(platformId, serverName) {
+    return invoke('get_mcp_sync_targets', { platformId, serverName });
+}
+
+export async function previewMcpSync(sourcePlatformId, targetPlatformId, serverName) {
+    return invoke('preview_mcp_sync_cmd', { sourcePlatformId, targetPlatformId, serverName });
+}
+
+export async function syncMcpServer(sourcePlatformId, targetPlatformId, serverName) {
+    return invoke('sync_mcp_server_cmd', { sourcePlatformId, targetPlatformId, serverName });
+}

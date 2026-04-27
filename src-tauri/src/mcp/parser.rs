@@ -1,6 +1,7 @@
 use std::fs;
 
 use serde_json::Value;
+use similar::{ChangeTag, TextDiff};
 
 use super::registry::{find_mcp_platform, McpFormat};
 
@@ -31,9 +32,10 @@ pub fn read_mcp_server(platform_id: &str, name: &str) -> Result<McpServer, Strin
 
 fn parse_json_servers(content: &str, mcp_key: &str) -> Result<Vec<McpServer>, String> {
     let mut doc: Value = serde_json::from_str(content).map_err(|e| e.to_string())?;
-    let servers_obj = doc.get_mut(mcp_key)
-        .and_then(|v| v.as_object_mut())
-        .ok_or_else(|| format!("No '{}' key found", mcp_key))?;
+    let servers_obj = match doc.get_mut(mcp_key).and_then(|v| v.as_object_mut()) {
+        Some(obj) => obj,
+        None => return Ok(Vec::new()),
+    };
 
     let mut servers = Vec::new();
     let keys: Vec<String> = servers_obj.keys().cloned().collect();
@@ -48,9 +50,10 @@ fn parse_json_servers(content: &str, mcp_key: &str) -> Result<Vec<McpServer>, St
 
 fn parse_toml_servers(content: &str, mcp_key: &str) -> Result<Vec<McpServer>, String> {
     let mut doc: toml::Value = toml::from_str(content).map_err(|e| e.to_string())?;
-    let table = doc.get_mut(mcp_key)
-        .and_then(|v| v.as_table_mut())
-        .ok_or_else(|| format!("No '{}' section found", mcp_key))?;
+    let table = match doc.get_mut(mcp_key).and_then(|v| v.as_table_mut()) {
+        Some(t) => t,
+        None => return Ok(Vec::new()),
+    };
 
     let mut servers = Vec::new();
     let keys: Vec<String> = table.keys().cloned().collect();
@@ -114,4 +117,122 @@ pub fn config_to_display(config: &Value, format: McpFormat) -> String {
             toml::to_string_pretty(&toml_val).unwrap_or_default()
         }
     }
+}
+
+// --- MCP Sync Preview ---
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DiffLine {
+    pub tag: String, // "context" | "added" | "removed"
+    pub content: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct McpSyncPreview {
+    pub server_name: String,
+    pub target_format: String,
+    pub target_config_path: String,
+    pub has_conflict: bool,
+    pub diff_lines: Vec<DiffLine>,
+    pub added: usize,
+    pub removed: usize,
+}
+
+pub fn preview_mcp_sync(
+    source_platform_id: &str,
+    target_platform_id: &str,
+    server_name: &str,
+) -> Result<McpSyncPreview, String> {
+    let source_server = read_mcp_server(source_platform_id, server_name)?;
+    let target_def = find_mcp_platform(target_platform_id).ok_or("Target platform not found")?;
+    let has_conflict = read_mcp_server(target_platform_id, server_name).is_ok();
+
+    let before_text = if target_def.config_path.exists() {
+        fs::read_to_string(&target_def.config_path).unwrap_or_default()
+    } else {
+        match target_def.format {
+            McpFormat::Json => "{}".to_string(),
+            McpFormat::Toml => String::new(),
+        }
+    };
+
+    let after_text = match target_def.format {
+        McpFormat::Json => apply_json_server(&before_text, &target_def.mcp_key, server_name, &source_server.config),
+        McpFormat::Toml => apply_toml_server(&before_text, &target_def.mcp_key, server_name, &source_server.config),
+    }?;
+
+    let diff_lines = compute_text_diff(&before_text, &after_text);
+    let added = diff_lines.iter().filter(|l| l.tag == "added").count();
+    let removed = diff_lines.iter().filter(|l| l.tag == "removed").count();
+
+    Ok(McpSyncPreview {
+        server_name: server_name.to_string(),
+        target_format: match target_def.format {
+            McpFormat::Json => "json",
+            McpFormat::Toml => "toml",
+        }.to_string(),
+        target_config_path: target_def.config_path.display().to_string(),
+        has_conflict,
+        diff_lines,
+        added,
+        removed,
+    })
+}
+
+fn apply_json_server(before: &str, mcp_key: &str, name: &str, config: &Value) -> Result<String, String> {
+    let mut doc: Value = if before.trim().is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_str(before).map_err(|e| e.to_string())?
+    };
+    let obj = doc.as_object_mut().ok_or("Not a JSON object")?;
+    let mut servers_map = obj.get(mcp_key)
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    servers_map.insert(name.to_string(), config.clone());
+    obj.insert(mcp_key.to_string(), Value::Object(servers_map));
+    serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())
+}
+
+fn apply_toml_server(before: &str, mcp_key: &str, name: &str, config: &Value) -> Result<String, String> {
+    let section_header = format!("[{}.{}]", mcp_key, name);
+    let new_config = toml::to_string_pretty(&json_to_toml(config)).map_err(|e| e.to_string())?;
+    let new_section = format!("{}\n{}", section_header, new_config.trim_end());
+
+    if before.trim().is_empty() {
+        return Ok(new_section);
+    }
+
+    // Check if the section already exists
+    if let Some(pos) = before.find(&section_header) {
+        // Find the end of this section: next "[xxx" at line start or end of file
+        let after_header = &before[pos + section_header.len()..];
+        let section_end = after_header.find("\n[").map(|i| pos + section_header.len() + i + 1).unwrap_or(before.len());
+        // Replace: keep before + new section + after
+        let mut result = String::with_capacity(before.len() + new_section.len());
+        result.push_str(&before[..pos]);
+        result.push_str(&new_section);
+        result.push('\n');
+        if section_end < before.len() {
+            result.push_str(&before[section_end..]);
+        }
+        Ok(result)
+    } else {
+        // Append new section at end
+        let trimmed = before.trim_end();
+        Ok(format!("{}\n\n{}\n", trimmed, new_section))
+    }
+}
+
+fn compute_text_diff(before: &str, after: &str) -> Vec<DiffLine> {
+    let diff = TextDiff::from_lines(before, after);
+    diff.iter_all_changes().map(|change| {
+        let content = change.to_string_lossy().into_owned();
+        let tag = match change.tag() {
+            ChangeTag::Equal => "context",
+            ChangeTag::Insert => "added",
+            ChangeTag::Delete => "removed",
+        };
+        DiffLine { tag: tag.to_string(), content }
+    }).collect()
 }

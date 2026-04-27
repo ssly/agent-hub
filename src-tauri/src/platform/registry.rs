@@ -20,7 +20,7 @@ pub fn builtin_platforms() -> Vec<PlatformDef> {
         PlatformDef { id: "trae".into(), display_name: "Trae".into(), description: "ByteDance Trae IDE agent skills".into(), skill_dir: home.join(".trae/skills") },
         PlatformDef { id: "kiro".into(), display_name: "Kiro".into(), description: "Amazon Kiro IDE agent skills".into(), skill_dir: home.join(".kiro/skills") },
         PlatformDef { id: "shared-pool".into(), display_name: "Shared Pool".into(),
-            description: "Shared skill pool symlinked into multiple platforms (~/.agents/skills)".into(),
+            description: "Shared skill pool for all agents".into(),
             skill_dir: home.join(".agents/skills") },
     ]
 }

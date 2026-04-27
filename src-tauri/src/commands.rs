@@ -367,3 +367,44 @@ pub fn import_mcp_server_cmd(platform_id: String, name: String, config_text: Str
         .map_err(|e| CommandError::SyncError(e))?;
     Ok("ok".to_string())
 }
+
+// --- MCP Sync Commands ---
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct McpSyncTarget {
+    pub id: String,
+    pub display_name: String,
+    pub has_server: bool,
+    pub format: String,
+}
+
+#[tauri::command]
+pub fn get_mcp_sync_targets(platform_id: String, server_name: String) -> Vec<McpSyncTarget> {
+    crate::mcp::builtin_mcp_platforms().into_iter()
+        .filter(|def| def.id != platform_id)
+        .map(|def| {
+            let has_server = crate::mcp::read_mcp_server(&def.id, &server_name).is_ok();
+            McpSyncTarget {
+                id: def.id,
+                display_name: def.display_name,
+                has_server,
+                format: match def.format { crate::mcp::McpFormat::Json => "json", crate::mcp::McpFormat::Toml => "toml" }.to_string(),
+            }
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub fn preview_mcp_sync_cmd(source_platform_id: String, target_platform_id: String, server_name: String) -> Result<crate::mcp::McpSyncPreview, CommandError> {
+    crate::mcp::preview_mcp_sync(&source_platform_id, &target_platform_id, &server_name)
+        .map_err(|e| CommandError::SyncError(e))
+}
+
+#[tauri::command]
+pub fn sync_mcp_server_cmd(source_platform_id: String, target_platform_id: String, server_name: String) -> Result<String, CommandError> {
+    let server = crate::mcp::read_mcp_server(&source_platform_id, &server_name)
+        .map_err(|e| CommandError::NotFound(e))?;
+    crate::mcp::save_mcp_server(&target_platform_id, &server_name, server.config)
+        .map_err(|e| CommandError::SyncError(e))?;
+    Ok("ok".to_string())
+}

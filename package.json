@@ -8,5 +8,9 @@
   "devDependencies": {
     "@tailwindcss/cli": "^4",
     "tailwindcss": "^4"
+  },
+  "dependencies": {
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.10.1"
   }
 }

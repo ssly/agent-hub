@@ -80,6 +80,25 @@
     "saved": "已保存。",
     "deleted": "已删除。",
     "import_hint": "粘贴 JSON 或 TOML 配置...",
-    "parse_error": "解析错误：{error}"
+    "parse_error": "解析错误：{error}",
+    "sync": "同步",
+    "sync_title": "同步 MCP 服务器",
+    "select_target": "选择目标平台",
+    "has_server": "已有",
+    "new_server": "新建",
+    "confirm_sync": "确认同步",
+    "sync_done": "同步完成。",
+    "sync_failed": "同步失败：{error}",
+    "conflict_warning": "目标平台已有该服务器！"
+  },
+  "update": {
+    "badge": "发现新版本",
+    "title": "发现新版本",
+    "transition": "{current} → {latest}",
+    "confirm": "更新",
+    "downloading": "下载中...",
+    "progress": "{percent}%",
+    "error": "更新失败: {error}",
+    "installing": "安装中..."
   }
 }

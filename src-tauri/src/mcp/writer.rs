@@ -90,15 +90,34 @@ fn read_or_create_toml_doc(path: &std::path::Path) -> Result<toml::Value, String
 
 fn save_toml_server(def: &super::registry::McpPlatformDef, name: &str, config: Value) -> Result<(), String> {
     ensure_parent(&def.config_path)?;
-    let mut doc = read_or_create_toml_doc(&def.config_path)?;
-    let table = doc.as_table_mut()
-        .ok_or("Config file is not a TOML table")?;
-    let servers = table.entry(&def.mcp_key)
-        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
-    let servers_table = servers.as_table_mut()
-        .ok_or("mcp_servers is not a table")?;
-    servers_table.insert(name.to_string(), json_to_toml(&config));
-    let content = toml::to_string_pretty(&doc).map_err(|e| e.to_string())?;
+    let before = if def.config_path.exists() {
+        fs::read_to_string(&def.config_path).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let section_header = format!("[{}.{}]", def.mcp_key, name);
+    let new_config = toml::to_string_pretty(&super::parser::json_to_toml(&config)).map_err(|e| e.to_string())?;
+    let new_section = format!("{}\n{}", section_header, new_config.trim_end());
+
+    let content = if before.trim().is_empty() {
+        new_section
+    } else if let Some(pos) = before.find(&section_header) {
+        // Replace existing section
+        let after_header = &before[pos + section_header.len()..];
+        let section_end = after_header.find("\n[").map(|i| pos + section_header.len() + i + 1).unwrap_or(before.len());
+        let mut result = String::with_capacity(before.len() + new_section.len());
+        result.push_str(&before[..pos]);
+        result.push_str(&new_section);
+        result.push('\n');
+        if section_end < before.len() {
+            result.push_str(&before[section_end..]);
+        }
+        result
+    } else {
+        // Append new section
+        format!("{}\n\n{}\n", before.trim_end(), new_section)
+    };
+
     fs::write(&def.config_path, content).map_err(|e| e.to_string())
 }
 

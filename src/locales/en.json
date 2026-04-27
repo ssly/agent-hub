@@ -80,6 +80,25 @@
     "saved": "Saved.",
     "deleted": "Deleted.",
     "import_hint": "Paste JSON or TOML config...",
-    "parse_error": "Parse error: {error}"
+    "parse_error": "Parse error: {error}",
+    "sync": "Sync",
+    "sync_title": "Sync MCP Server",
+    "select_target": "Select target platform",
+    "has_server": "has server",
+    "new_server": "new",
+    "confirm_sync": "Confirm Sync",
+    "sync_done": "Sync completed.",
+    "sync_failed": "Sync failed: {error}",
+    "conflict_warning": "Target already has this server!"
+  },
+  "update": {
+    "badge": "New version available",
+    "title": "Update Available",
+    "transition": "{current} → {latest}",
+    "confirm": "Update",
+    "downloading": "Downloading...",
+    "progress": "{percent}%",
+    "error": "Update failed: {error}",
+    "installing": "Installing..."
   }
 }

@@ -14,6 +14,13 @@ use state::AppState;
 pub fn run() {
     tauri::Builder::default()
         .manage(std::sync::Mutex::new(AppState::new()))
+        .setup(|app| {
+            #[cfg(desktop)]
+            app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+            #[cfg(desktop)]
+            app.handle().plugin(tauri_plugin_process::init())?;
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::list_platforms,
             commands::get_platform_skills,
@@ -34,6 +41,9 @@ pub fn run() {
             commands::save_mcp_server_cmd,
             commands::delete_mcp_server_cmd,
             commands::import_mcp_server_cmd,
+            commands::get_mcp_sync_targets,
+            commands::preview_mcp_sync_cmd,
+            commands::sync_mcp_server_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running agent-hub");
