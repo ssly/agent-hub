@@ -1,13 +1,15 @@
 # Agent Hub（枢纽）
 
-一个桌面应用，统一管理本地多个 AI Agent 平台（Claude Code、Codex CLI、Cursor、OpenClaw、Hermes、Trae、Kiro 等）的 Skill 生态。
+一个桌面应用，统一管理本地多个 AI Agent 平台（Claude Code、Codex CLI、Cursor、Gemini、OpenClaw、Hermes、Trae、Kiro 等）的 Skill 生态。
 
 ## 功能
 
 - **平台总览** — 自动发现已安装的 Agent 平台，一目了然查看各平台的 Skill 数量和目录位置
 - **Skill 详情** — 查看 Skill 元数据（名称、版本、描述、文件列表），点击任意文件在线预览内容
 - **跨平台 Diff** — 选择两个平台对比同一个 Skill 的差异，精确到行级别的增删标注
-- **一键同步** — 将 Skill 从平台 A 同步到平台 B，目标已存在时展示差异供你决定覆盖或保留
+- **一键同步** — 将 Skill 从平台 A 同步到平台 B，二次确认防止误操作，目标已存在时展示差异供你决定覆盖或保留
+- **文件夹支持** — 支持嵌套在子文件夹中的 Skill，按层级分组展示，可整文件夹批量同步
+- **符号链接** — 自动识别符号链接 Skill，同步时复制实际源文件内容
 - **全局搜索** — 跨平台搜索 Skill 名称和描述
 - **中英双语** — 自动检测系统语言，支持即时切换
 
@@ -34,6 +36,27 @@ cargo tauri dev
 - 修改 `src/js/*.js` 或 `src/index.html` 会自动刷新窗口
 - 修改 `src-tauri/src/*.rs` 会自动重编译
 - 另开终端运行 `npm run dev:css` 可监听 CSS 变更
+
+## 安装
+
+### macOS
+
+下载 `.dmg` 后打开，将应用拖入 Applications 文件夹：
+
+- **有管理员权限**：拖到 `/Applications`
+- **无管理员权限**：拖到 `~/Applications`（用户级，如不存在可先在 Finder 中创建）
+
+首次打开可能被 macOS Gatekeeper 拦截（未签名应用），在终端执行以下命令移除隔离标记：
+
+```bash
+xattr -cr /Applications/"Agent Hub.app"
+# 或用户级安装：
+# xattr -cr ~/Applications/"Agent Hub.app"
+```
+
+### Windows
+
+下载 `.exe` 安装包运行即可。如遇到 Windows SmartScreen 拦截，点击"更多信息" → "仍要运行"。
 
 ## 打包
 
@@ -107,6 +130,7 @@ skill_dir = "~/.my-agent/skills"
 | Claude Code | `~/.claude/skills/` |
 | Codex CLI | `~/.codex/skills/` |
 | Cursor | `~/.cursor/skills-cursor/` |
+| Gemini | `~/.gemini/skills/` |
 | OpenClaw | `~/.openclaw/skills/` |
 | Hermes | `~/.hermes/skills/` |
 | Trae | `~/.trae/skills/` |

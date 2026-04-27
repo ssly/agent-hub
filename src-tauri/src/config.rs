@@ -41,7 +41,24 @@ impl Config {
                 }
             }
         }
-        Config::default()
+        let config = Config::default();
+        if let Some(parent) = config_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(&config_path, toml::to_string_pretty(&config).unwrap_or_default());
+        config
+    }
+
+    pub fn save(&self) -> Result<(), String> {
+        let config_path = dirs::home_dir()
+            .map(|h| h.join(".agent-hub/config.toml"))
+            .ok_or("Cannot determine home directory")?;
+        if let Some(parent) = config_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let content = toml::to_string_pretty(self).map_err(|e| e.to_string())?;
+        std::fs::write(&config_path, content).map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     pub fn resolved_language(&self) -> Option<&str> {

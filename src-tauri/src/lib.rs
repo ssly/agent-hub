@@ -7,7 +7,7 @@ mod skill;
 mod state;
 mod sync;
 
-use state::{AppState, SafeState};
+use state::AppState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -21,6 +21,7 @@ pub fn run() {
             commands::diff_skills_cmd,
             commands::get_sync_targets,
             commands::sync_skill_cmd,
+            commands::sync_folder_cmd,
             commands::refresh_platforms,
             commands::get_locale,
             commands::set_locale,

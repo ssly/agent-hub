@@ -29,7 +29,7 @@ pub fn parse_skill(skill_dir: &Path, platform_id: &str) -> Option<Skill> {
     let modified_at = fs::metadata(skill_dir).ok().and_then(|m| m.modified().ok());
     let total_size = calc_total_size(skill_dir);
 
-    Some(Skill { name, version, description, platform_id: platform_id.to_string(),
+    Some(Skill { name, folder: String::new(), version, description, platform_id: platform_id.to_string(),
         path: skill_dir.to_path_buf(), skill_file, content, body, metadata,
         is_symlink, symlink_target, files, modified_at, total_size })
 }

@@ -5,6 +5,8 @@ use std::time::SystemTime;
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Skill {
     pub name: String,
+    #[serde(skip)]
+    pub folder: String,
     pub version: Option<String>,
     pub description: String,
     pub platform_id: String,

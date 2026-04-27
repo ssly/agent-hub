@@ -19,14 +19,33 @@ impl std::fmt::Display for SyncError {
     }
 }
 
+fn target_dir(source: &Skill, target_platform: &Platform) -> std::path::PathBuf {
+    if source.folder.is_empty() {
+        target_platform.skill_dir.join(&source.name)
+    } else {
+        target_platform.skill_dir.join(&source.folder).join(&source.name)
+    }
+}
+
+fn ensure_parent(dir: &Path) -> Result<(), SyncError> {
+    if let Some(parent) = dir.parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent).map_err(|e| SyncError::IoError(e.to_string()))?;
+        }
+    }
+    Ok(())
+}
+
 pub fn sync_skill(source: &Skill, target_platform: &Platform) -> Result<(), SyncError> {
-    let target_dir = target_platform.skill_dir.join(&source.name);
+    let target_dir = target_dir(source, target_platform);
     if target_dir.exists() { return Err(SyncError::TargetExists(target_dir.display().to_string())); }
+    ensure_parent(&target_dir)?;
     copy_dir_recursive(&source.path, &target_dir)
 }
 
 pub fn sync_overwrite(source: &Skill, target_platform: &Platform) -> Result<(), SyncError> {
-    let target_dir = target_platform.skill_dir.join(&source.name);
+    let target_dir = target_dir(source, target_platform);
+    ensure_parent(&target_dir)?;
     if target_dir.exists() {
         if target_dir.is_symlink() { fs::remove_file(&target_dir).map_err(|e| SyncError::IoError(e.to_string()))?; }
         else { fs::remove_dir_all(&target_dir).map_err(|e| SyncError::IoError(e.to_string()))?; }
@@ -35,8 +54,10 @@ pub fn sync_overwrite(source: &Skill, target_platform: &Platform) -> Result<(), 
 }
 
 fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), SyncError> {
+    let resolved_source = std::path::Path::canonicalize(source)
+        .map_err(|e| SyncError::IoError(format!("Failed to resolve path: {}", e)))?;
     let options = fs_extra::dir::CopyOptions::new().content_only(false).copy_inside(false);
-    fs_extra::dir::copy(source, target.parent().unwrap(), &options)
+    fs_extra::dir::copy(&resolved_source, target.parent().unwrap(), &options)
         .map_err(|e| SyncError::IoError(e.to_string()))?;
     Ok(())
 }

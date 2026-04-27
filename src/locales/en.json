@@ -7,7 +7,8 @@
     "no_platforms": "No agent platforms found.",
     "no_skills": "No skills in this platform.",
     "search_placeholder": "Search skills...",
-    "search_results": "Search Results"
+    "search_results": "Search Results",
+    "no_results": "No results found."
   },
   "platform": {
     "skills_count": "{count} skills"
@@ -56,6 +57,10 @@
     "no_diff": "Files are identical.",
     "select_platform": "Select platform to compare",
     "no_other": "No other platform has this skill."
+  },
+  "folder": {
+    "sync_all": "Sync all ({count})",
+    "sync_all_confirm": "Sync {count} skills from '{folder}' to {platform}?"
   },
   "error": {
     "no_target": "No target platform available"

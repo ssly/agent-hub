@@ -7,11 +7,14 @@ class App {
         this.skills = [];
         this.selectedPlatformId = null;
         this.selectedSkillName = null;
-        this.currentView = 'skills'; // skills | detail | diff | search
+        this.selectedFolder = '';
+        this.currentView = 'skills';
         this.diffResult = null;
         this.searchResults = [];
-        this.fileViewing = null; // { path, content }
+        this.fileViewing = null;
         this.i18n = new I18n();
+        this.collapsedFolders = new Set();
+        this.pendingSyncTarget = null;
     }
 
     async init() {
@@ -40,25 +43,28 @@ class App {
     selectPlatform(id) {
         this.selectedPlatformId = id;
         this.selectedSkillName = null;
+        this.selectedFolder = '';
         this.currentView = 'skills';
         this.loadSkills().then(() => this.render());
     }
 
-    async selectSkill(name) {
+    async selectSkill(name, folder) {
         this.selectedSkillName = name;
+        this.selectedFolder = folder || '';
         this.currentView = 'detail';
         this.render();
     }
 
     backToList() {
         this.selectedSkillName = null;
+        this.selectedFolder = '';
         this.currentView = 'skills';
         this.diffResult = null;
         this.render();
     }
 
     async doDiff(targetPlatformId) {
-        this.diffResult = await Api.diffSkills(this.selectedPlatformId, targetPlatformId, this.selectedSkillName);
+        this.diffResult = await Api.diffSkills(this.selectedPlatformId, targetPlatformId, this.selectedSkillName, this.selectedFolder);
         this.currentView = 'diff';
         this.closeModal();
         this.render();
@@ -66,12 +72,27 @@ class App {
 
     async doSync(targetPlatformId, overwrite) {
         try {
-            await Api.syncSkill(this.selectedPlatformId, targetPlatformId, this.selectedSkillName, overwrite);
+            await Api.syncSkill(this.selectedPlatformId, targetPlatformId, this.selectedSkillName, this.selectedFolder, overwrite);
             this.closeModal();
             await this.refreshPlatforms();
             this.currentView = 'skills';
             this.selectedSkillName = null;
+            this.selectedFolder = '';
             this.render();
+        } catch (e) {
+            alert(this.i18n.tWith('sync.failed', { error: e.SyncError || e }));
+        }
+    }
+
+    async doFolderSync(targetPlatformId, folder) {
+        try {
+            const result = await Api.syncFolder(this.selectedPlatformId, targetPlatformId, folder);
+            this.closeModal();
+            await this.refreshPlatforms();
+            this.currentView = 'skills';
+            this.render();
+            const i = this.i18n;
+            alert(i.tWith('sync.done') + ` (${result.synced}/${result.total})`);
         } catch (e) {
             alert(this.i18n.tWith('sync.failed', { error: e.SyncError || e }));
         }
@@ -116,7 +137,7 @@ class App {
 
     // --- Modals ---
     async showDiffModal() {
-        const candidates = await Api.getDiffCandidates(this.selectedPlatformId, this.selectedSkillName);
+        const candidates = await Api.getDiffCandidates(this.selectedPlatformId, this.selectedSkillName, this.selectedFolder);
         if (candidates.length === 0) {
             alert(this.i18n.t('diff.no_other'));
             return;
@@ -140,11 +161,12 @@ class App {
     }
 
     async showSyncModal() {
-        const targets = await Api.getSyncTargets(this.selectedPlatformId, this.selectedSkillName);
+        const targets = await Api.getSyncTargets(this.selectedPlatformId, this.selectedSkillName, this.selectedFolder);
         if (targets.length === 0) {
             alert(this.i18n.t('error.no_target'));
             return;
         }
+        this.pendingSyncTarget = null;
         const i = this.i18n;
         let html = `<div class="p-5">
             <h2 class="text-lg font-bold text-yellow-400 mb-4">${i.t('sync.title')} - ${i.t('sync.select_target')}</h2>
@@ -164,6 +186,29 @@ class App {
             btn.addEventListener('click', async () => {
                 const targetId = btn.dataset.id;
                 const hasSkill = btn.dataset.has === 'true';
+
+                // Two-click confirmation: first click turns button red
+                if (this.pendingSyncTarget !== targetId) {
+                    // Reset any other pending buttons
+                    this.modalEl().querySelectorAll('.sync-target').forEach(b => {
+                        b.classList.remove('bg-red-900', 'hover:bg-red-800');
+                        b.classList.add('hover:bg-gray-700');
+                        const hint = b.querySelector('.sync-confirm-hint');
+                        if (hint) hint.remove();
+                    });
+
+                    this.pendingSyncTarget = targetId;
+                    btn.classList.remove('hover:bg-gray-700');
+                    btn.classList.add('bg-red-900', 'hover:bg-red-800');
+                    const hint = document.createElement('span');
+                    hint.className = 'text-red-400 text-xs ml-2 font-bold sync-confirm-hint';
+                    hint.textContent = i.t('action.confirm');
+                    btn.appendChild(hint);
+                    return;
+                }
+
+                // Second click — confirmed
+                this.pendingSyncTarget = null;
                 if (hasSkill) {
                     await this.showSyncConflict(targetId);
                 } else {
@@ -175,7 +220,7 @@ class App {
     }
 
     async showSyncConflict(targetPlatformId) {
-        const diff = await Api.diffSkills(this.selectedPlatformId, targetPlatformId, this.selectedSkillName);
+        const diff = await Api.diffSkills(this.selectedPlatformId, targetPlatformId, this.selectedSkillName, this.selectedFolder);
         const i = this.i18n;
         const targetName = this.platforms.find(p => p.id === targetPlatformId)?.display_name || targetPlatformId;
 
@@ -199,6 +244,52 @@ class App {
         this.modalEl().querySelector('.modal-cancel').addEventListener('click', () => this.closeModal());
     }
 
+    showFolderSyncModal(folder, count) {
+        const targets = this.platforms.filter(p => p.id !== this.selectedPlatformId);
+        if (targets.length === 0) {
+            alert(this.i18n.t('error.no_target'));
+            return;
+        }
+        this.pendingSyncTarget = null;
+        const i = this.i18n;
+        let html = `<div class="p-5">
+            <h2 class="text-lg font-bold text-yellow-400 mb-4">${i.tWith('folder.sync_all', { count })}</h2>
+            <p class="text-sm text-gray-400 mb-3">${esc(folder)}/</p>
+            <div class="space-y-1">`;
+        for (const t of targets) {
+            html += `<button class="w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200 cursor-pointer folder-sync-target"
+                data-id="${t.id}">${t.display_name}</button>`;
+        }
+        html += `</div><div class="mt-4 flex justify-end">
+            <button class="px-4 py-2 text-gray-400 hover:text-white cursor-pointer modal-cancel">${i.t('action.cancel')}</button>
+        </div></div>`;
+        this.openModal(html);
+        this.modalEl().querySelectorAll('.folder-sync-target').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const targetId = btn.dataset.id;
+                if (this.pendingSyncTarget !== targetId) {
+                    this.modalEl().querySelectorAll('.folder-sync-target').forEach(b => {
+                        b.classList.remove('bg-red-900', 'hover:bg-red-800');
+                        b.classList.add('hover:bg-gray-700');
+                        const hint = b.querySelector('.sync-confirm-hint');
+                        if (hint) hint.remove();
+                    });
+                    this.pendingSyncTarget = targetId;
+                    btn.classList.remove('hover:bg-gray-700');
+                    btn.classList.add('bg-red-900', 'hover:bg-red-800');
+                    const hint = document.createElement('span');
+                    hint.className = 'text-red-400 text-xs ml-2 font-bold sync-confirm-hint';
+                    hint.textContent = i.t('action.confirm');
+                    btn.appendChild(hint);
+                    return;
+                }
+                this.pendingSyncTarget = null;
+                await this.doFolderSync(targetId, folder);
+            });
+        });
+        this.modalEl().querySelector('.modal-cancel').addEventListener('click', () => this.closeModal());
+    }
+
     openModal(html) {
         const overlay = document.getElementById('modal-overlay');
         overlay.style.display = 'flex';
@@ -206,6 +297,7 @@ class App {
     }
 
     closeModal() {
+        this.pendingSyncTarget = null;
         document.getElementById('modal-overlay').style.display = 'none';
     }
 
@@ -262,7 +354,9 @@ class App {
             const p = this.platforms.find(p => p.id === this.selectedPlatformId);
             breadcrumb.textContent = p ? p.display_name : '';
         } else if (this.selectedSkillName) {
-            breadcrumb.textContent = this.selectedSkillName;
+            breadcrumb.textContent = this.selectedFolder
+                ? `${this.selectedFolder}/${this.selectedSkillName}`
+                : this.selectedSkillName;
         } else {
             breadcrumb.textContent = '';
         }
@@ -286,25 +380,94 @@ class App {
             el.innerHTML = `<p class="text-gray-500">${i.t('ui.no_skills')}</p>`;
             return;
         }
-        el.innerHTML = `<div class="space-y-0.5">${this.skills.map(s => {
-            const version = s.version ? `<span class="text-gray-500 text-xs ml-2">v${esc(s.version)}</span>` : '';
-            const symlink = s.is_symlink ? `<span class="text-cyan-600 text-xs ml-1">🔗</span>` : '';
-            const desc = s.description ? `<span class="text-gray-500 text-sm ml-2">${esc(truncate(s.description, 60))}</span>` : '';
-            const size = s.total_size > 1024 ? `<span class="text-gray-600 text-xs ml-2">${(s.total_size / 1024).toFixed(0)}KB</span>` : '';
-            return `<button class="w-full text-left px-3 py-2 rounded hover:bg-gray-800 text-gray-200 cursor-pointer flex items-center skill-item" data-name="${esc(s.name)}">
-                <span class="text-cyan-400">${esc(s.name)}</span>${version}${desc}${symlink}${size}
-            </button>`;
-        }).join('')}</div>`;
+
+        // Group skills by folder
+        const groups = new Map();
+        for (const s of this.skills) {
+            const folder = s.folder || '';
+            if (!groups.has(folder)) groups.set(folder, []);
+            groups.get(folder).push(s);
+        }
+
+        let html = '<div class="space-y-0.5">';
+
+        // Root-level skills first
+        if (groups.has('')) {
+            for (const s of groups.get('')) {
+                html += this.renderSkillItem(s);
+            }
+            groups.delete('');
+        }
+
+        // Folder groups
+        for (const [folder, folderSkills] of groups) {
+            const count = folderSkills.length;
+            const collapsed = this.collapsedFolders.has(folder);
+            html += `<div class="mt-2">
+                <div class="flex items-center">
+                    <button class="flex-1 text-left px-2 py-1.5 text-sm text-gray-400 hover:text-gray-200 cursor-pointer folder-header flex items-center gap-1"
+                        data-folder="${esc(folder)}">
+                        <span class="text-xs transition ${collapsed ? '' : 'rotate-90'} inline-block">&#9654;</span>
+                        <span class="text-yellow-500">${esc(folder)}</span>
+                        <span class="text-gray-600 text-xs ml-1">(${count})</span>
+                    </button>
+                    <button class="text-xs text-cyan-600 hover:text-cyan-400 px-2 py-1 cursor-pointer folder-sync-btn"
+                        data-folder="${esc(folder)}" data-count="${count}" title="Sync all in folder">⤴</button>
+                </div>
+                <div class="pl-3 ${collapsed ? 'hidden' : ''}" data-folder-content="${esc(folder)}">`;
+            for (const s of folderSkills) {
+                html += this.renderSkillItem(s);
+            }
+            html += `</div></div>`;
+        }
+
+        html += '</div>';
+        el.innerHTML = html;
+
+        // Bind skill item clicks
         el.querySelectorAll('.skill-item').forEach(btn => {
-            btn.addEventListener('click', () => this.selectSkill(btn.dataset.name));
+            btn.addEventListener('click', () => this.selectSkill(btn.dataset.name, btn.dataset.folder));
         });
+
+        // Bind folder toggle
+        el.querySelectorAll('.folder-header').forEach(btn => {
+            btn.addEventListener('click', () => this.toggleFolder(btn.dataset.folder));
+        });
+
+        // Bind folder sync
+        el.querySelectorAll('.folder-sync-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.showFolderSyncModal(btn.dataset.folder, parseInt(btn.dataset.count));
+            });
+        });
+    }
+
+    renderSkillItem(s) {
+        const version = s.version ? `<span class="text-gray-500 text-xs ml-2">v${esc(s.version)}</span>` : '';
+        const symlink = s.is_symlink ? `<span class="text-cyan-600 text-xs ml-1">🔗</span>` : '';
+        const desc = s.description ? `<span class="text-gray-500 text-sm ml-2">${esc(truncate(s.description, 60))}</span>` : '';
+        const size = s.total_size > 1024 ? `<span class="text-gray-600 text-xs ml-2">${(s.total_size / 1024).toFixed(0)}KB</span>` : '';
+        return `<button class="w-full text-left px-3 py-2 rounded hover:bg-gray-800 text-gray-200 cursor-pointer flex items-center skill-item"
+            data-name="${esc(s.name)}" data-folder="${esc(s.folder)}">
+            <span class="text-cyan-400">${esc(s.name)}</span>${version}${desc}${symlink}${size}
+        </button>`;
+    }
+
+    toggleFolder(folder) {
+        if (this.collapsedFolders.has(folder)) {
+            this.collapsedFolders.delete(folder);
+        } else {
+            this.collapsedFolders.add(folder);
+        }
+        this.renderSkillList();
     }
 
     async renderSkillDetail() {
         const el = document.getElementById('view-detail');
         const i = this.i18n;
         try {
-            const detail = await Api.getSkillDetail(this.selectedPlatformId, this.selectedSkillName);
+            const detail = await Api.getSkillDetail(this.selectedPlatformId, this.selectedSkillName, this.selectedFolder);
             const version = detail.version ? `<div class="mb-1"><span class="text-yellow-400">${i.t('skill.version')}:</span> ${esc(detail.version)}</div>` : '';
             const sizeStr = detail.total_size < 1024 ? `${detail.total_size} B`
                 : detail.total_size < 1048576 ? `${(detail.total_size / 1024).toFixed(1)} KB`
@@ -343,7 +506,7 @@ class App {
                 item.addEventListener('click', async () => {
                     const filePath = item.dataset.file;
                     try {
-                        const content = await Api.readSkillFile(this.selectedPlatformId, this.selectedSkillName, filePath);
+                        const content = await Api.readSkillFile(this.selectedPlatformId, this.selectedSkillName, this.selectedFolder, filePath);
                         document.getElementById('file-viewer-path').textContent = filePath;
                         document.getElementById('file-viewer-content').textContent = content;
                         document.getElementById('file-viewer').classList.remove('hidden');
@@ -417,14 +580,15 @@ class App {
         const el = document.getElementById('view-search');
         const i = this.i18n;
         if (this.searchResults.length === 0) {
-            el.innerHTML = `<p class="text-gray-500">No results.</p>`;
+            el.innerHTML = `<p class="text-gray-500">${i.t('ui.no_results')}</p>`;
             return;
         }
         el.innerHTML = `<h2 class="text-lg font-bold text-gray-300 mb-3">${i.t('ui.search_results')}</h2>
             <div class="space-y-0.5">${this.searchResults.map(r => {
+                const folderTag = r.folder ? `<span class="text-yellow-600 text-xs ml-1">${esc(r.folder)}/</span>` : '';
                 return `<button class="w-full text-left px-3 py-2 rounded hover:bg-gray-800 cursor-pointer search-result"
-                    data-platform="${esc(r.platform_id)}" data-skill="${esc(r.skill_name)}">
-                    <span class="text-cyan-400">${esc(r.skill_name)}</span>
+                    data-platform="${esc(r.platform_id)}" data-skill="${esc(r.skill_name)}" data-folder="${esc(r.folder)}">
+                    <span class="text-cyan-400">${esc(r.skill_name)}</span>${folderTag}
                     <span class="text-gray-500 text-xs ml-2">${esc(r.platform_name)}</span>
                     <span class="text-gray-600 text-sm ml-2">${esc(truncate(r.description, 50))}</span>
                 </button>`;
@@ -433,6 +597,7 @@ class App {
             btn.addEventListener('click', () => {
                 this.selectedPlatformId = btn.dataset.platform;
                 this.selectedSkillName = btn.dataset.skill;
+                this.selectedFolder = btn.dataset.folder || '';
                 this.currentView = 'detail';
                 this.loadSkills().then(() => this.render());
             });

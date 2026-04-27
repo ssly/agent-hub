@@ -10,24 +10,28 @@ export async function getPlatformSkills(platformId) {
     return invoke('get_platform_skills', { platformId });
 }
 
-export async function getSkillDetail(platformId, skillName) {
-    return invoke('get_skill_detail', { platformId, skillName });
+export async function getSkillDetail(platformId, skillName, folder) {
+    return invoke('get_skill_detail', { platformId, skillName, folder });
 }
 
-export async function getDiffCandidates(platformId, skillName) {
-    return invoke('get_diff_candidates', { platformId, skillName });
+export async function getDiffCandidates(platformId, skillName, folder) {
+    return invoke('get_diff_candidates', { platformId, skillName, folder });
 }
 
-export async function diffSkills(sourcePlatformId, targetPlatformId, skillName) {
-    return invoke('diff_skills_cmd', { sourcePlatformId, targetPlatformId, skillName });
+export async function diffSkills(sourcePlatformId, targetPlatformId, skillName, folder) {
+    return invoke('diff_skills_cmd', { sourcePlatformId, targetPlatformId, skillName, folder });
 }
 
-export async function getSyncTargets(platformId, skillName) {
-    return invoke('get_sync_targets', { platformId, skillName });
+export async function getSyncTargets(platformId, skillName, folder) {
+    return invoke('get_sync_targets', { platformId, skillName, folder });
 }
 
-export async function syncSkill(sourcePlatformId, targetPlatformId, skillName, overwrite) {
-    return invoke('sync_skill_cmd', { sourcePlatformId, targetPlatformId, skillName, overwrite });
+export async function syncSkill(sourcePlatformId, targetPlatformId, skillName, folder, overwrite) {
+    return invoke('sync_skill_cmd', { sourcePlatformId, targetPlatformId, skillName, folder, overwrite });
+}
+
+export async function syncFolder(sourcePlatformId, targetPlatformId, folder) {
+    return invoke('sync_folder_cmd', { sourcePlatformId, targetPlatformId, folder });
 }
 
 export async function refreshPlatforms() {
@@ -46,6 +50,6 @@ export async function searchSkills(query) {
     return invoke('search_skills', { query });
 }
 
-export async function readSkillFile(platformId, skillName, filePath) {
-    return invoke('read_skill_file', { platformId, skillName, filePath });
+export async function readSkillFile(platformId, skillName, folder, filePath) {
+    return invoke('read_skill_file', { platformId, skillName, folder, filePath });
 }
