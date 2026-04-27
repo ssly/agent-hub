@@ -53,3 +53,28 @@ export async function searchSkills(query) {
 export async function readSkillFile(platformId, skillName, folder, filePath) {
     return invoke('read_skill_file', { platformId, skillName, folder, filePath });
 }
+
+// MCP
+export async function listMcpPlatforms() {
+    return invoke('list_mcp_platforms');
+}
+
+export async function getMcpServers(platformId) {
+    return invoke('get_mcp_servers', { platformId });
+}
+
+export async function getMcpServer(platformId, name) {
+    return invoke('get_mcp_server', { platformId, name });
+}
+
+export async function saveMcpServer(platformId, name, configJson) {
+    return invoke('save_mcp_server_cmd', { platformId, name, configJson });
+}
+
+export async function deleteMcpServer(platformId, name) {
+    return invoke('delete_mcp_server_cmd', { platformId, name });
+}
+
+export async function importMcpServer(platformId, name, configText) {
+    return invoke('import_mcp_server_cmd', { platformId, name, configText });
+}

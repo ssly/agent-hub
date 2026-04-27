@@ -275,3 +275,95 @@ pub fn read_skill_file(state: tauri::State<'_, SafeState>, platform_id: String, 
     }
     std::fs::read_to_string(&full_path).map_err(|e| CommandError::NotFound(e.to_string()))
 }
+
+// --- MCP Commands ---
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct McpPlatformView {
+    pub id: String,
+    pub display_name: String,
+    pub config_path: String,
+    pub format: String,
+    pub server_count: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct McpServerView {
+    pub name: String,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct McpServerDetail {
+    pub name: String,
+    pub config_text: String,
+    pub format: String,
+}
+
+fn server_summary(config: &serde_json::Value) -> String {
+    let command = config.get("command").and_then(|v| v.as_str()).unwrap_or("");
+    let args = config.get("args")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(" "))
+        .unwrap_or_default();
+    if args.is_empty() { command.to_string() } else { format!("{} {}", command, args) }
+}
+
+#[tauri::command]
+pub fn list_mcp_platforms() -> Vec<McpPlatformView> {
+    crate::mcp::builtin_mcp_platforms().into_iter().map(|def| {
+        let servers = crate::mcp::read_mcp_servers(&def.id).unwrap_or_default();
+        McpPlatformView {
+            id: def.id,
+            display_name: def.display_name,
+            config_path: def.config_path.display().to_string(),
+            format: match def.format { crate::mcp::McpFormat::Json => "json", crate::mcp::McpFormat::Toml => "toml" }.to_string(),
+            server_count: servers.len(),
+        }
+    }).collect()
+}
+
+#[tauri::command]
+pub fn get_mcp_servers(platform_id: String) -> Result<Vec<McpServerView>, CommandError> {
+    let servers = crate::mcp::read_mcp_servers(&platform_id)
+        .map_err(|e| CommandError::NotFound(e))?;
+    Ok(servers.into_iter().map(|s| {
+        McpServerView { name: s.name, summary: server_summary(&s.config) }
+    }).collect())
+}
+
+#[tauri::command]
+pub fn get_mcp_server(platform_id: String, name: String) -> Result<McpServerDetail, CommandError> {
+    let server = crate::mcp::read_mcp_server(&platform_id, &name)
+        .map_err(|e| CommandError::NotFound(e))?;
+    let def = crate::mcp::find_mcp_platform(&platform_id).ok_or_else(|| CommandError::NotFound("Platform not found".into()))?;
+    let config_text = crate::mcp::config_to_display(&server.config, def.format);
+    Ok(McpServerDetail {
+        name: server.name,
+        config_text,
+        format: match def.format { crate::mcp::McpFormat::Json => "json", crate::mcp::McpFormat::Toml => "toml" }.to_string(),
+    })
+}
+
+#[tauri::command]
+pub fn save_mcp_server_cmd(platform_id: String, name: String, config_json: String) -> Result<String, CommandError> {
+    let config: serde_json::Value = serde_json::from_str(&config_json)
+        .map_err(|e| CommandError::SyncError(format!("Invalid JSON: {}", e)))?;
+    crate::mcp::save_mcp_server(&platform_id, &name, config)
+        .map_err(|e| CommandError::SyncError(e))?;
+    Ok("ok".to_string())
+}
+
+#[tauri::command]
+pub fn delete_mcp_server_cmd(platform_id: String, name: String) -> Result<String, CommandError> {
+    crate::mcp::delete_mcp_server(&platform_id, &name)
+        .map_err(|e| CommandError::SyncError(e))?;
+    Ok("ok".to_string())
+}
+
+#[tauri::command]
+pub fn import_mcp_server_cmd(platform_id: String, name: String, config_text: String) -> Result<String, CommandError> {
+    crate::mcp::import_mcp_server(&platform_id, &name, &config_text)
+        .map_err(|e| CommandError::SyncError(e))?;
+    Ok("ok".to_string())
+}

@@ -64,5 +64,22 @@
   },
   "error": {
     "no_target": "No target platform available"
+  },
+  "mcp": {
+    "title": "MCP Servers",
+    "no_servers": "No MCP servers configured.",
+    "add": "Add Server",
+    "edit": "Edit",
+    "delete": "Delete",
+    "save": "Save",
+    "server_name": "Server Name",
+    "config": "Configuration",
+    "format_json": "JSON",
+    "format_toml": "TOML",
+    "confirm_delete": "Delete MCP server '{name}'?",
+    "saved": "Saved.",
+    "deleted": "Deleted.",
+    "import_hint": "Paste JSON or TOML config...",
+    "parse_error": "Parse error: {error}"
   }
 }

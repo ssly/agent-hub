@@ -9,18 +9,24 @@ class App {
         this.selectedSkillName = null;
         this.selectedFolder = '';
         this.currentView = 'skills';
+        this.currentTab = 'skills'; // 'skills' | 'mcp'
         this.diffResult = null;
         this.searchResults = [];
         this.fileViewing = null;
         this.i18n = new I18n();
         this.collapsedFolders = new Set();
         this.pendingSyncTarget = null;
+        // MCP state
+        this.mcpPlatforms = [];
+        this.mcpServers = [];
+        this.selectedMcpPlatform = null;
     }
 
     async init() {
         this.i18n.locale = await Api.getLocale();
         await this.i18n.load();
         await this.refreshPlatforms();
+        await this.refreshMcpPlatforms();
         this.bindEvents();
         this.render();
     }
@@ -118,7 +124,10 @@ class App {
 
     // --- Events ---
     bindEvents() {
-        document.getElementById('btn-refresh').addEventListener('click', () => this.refreshPlatforms().then(() => this.render()));
+        document.getElementById('btn-refresh').addEventListener('click', () => {
+            if (this.currentTab === 'mcp') { this.refreshMcpPlatforms().then(() => this.render()); }
+            else { this.refreshPlatforms().then(() => this.render()); }
+        });
         document.getElementById('btn-lang').addEventListener('click', () => this.switchLang());
         document.getElementById('btn-back').addEventListener('click', () => this.backToList());
         document.getElementById('btn-diff').addEventListener('click', () => this.showDiffModal());
@@ -133,6 +142,94 @@ class App {
         document.getElementById('modal-overlay').addEventListener('click', (e) => {
             if (e.target.id === 'modal-overlay') this.closeModal();
         });
+
+        // Tab switching
+        document.getElementById('tab-skills').addEventListener('click', () => this.switchTab('skills'));
+        document.getElementById('tab-mcp').addEventListener('click', () => this.switchTab('mcp'));
+    }
+
+    switchTab(tab) {
+        this.currentTab = tab;
+        this.render();
+    }
+
+    // --- MCP ---
+    async refreshMcpPlatforms() {
+        this.mcpPlatforms = await Api.listMcpPlatforms();
+    }
+
+    async selectMcpPlatform(id) {
+        this.selectedMcpPlatform = id;
+        this.mcpServers = await Api.getMcpServers(id);
+        this.render();
+    }
+
+    async showMcpEditor(name) {
+        const i = this.i18n;
+        try {
+            const detail = await Api.getMcpServer(this.selectedMcpPlatform, name);
+            let html = `<div class="p-5">
+                <h2 class="text-lg font-bold text-yellow-400 mb-3">${esc(name)}</h2>
+                <div class="text-xs text-gray-500 mb-2">${detail.format === 'toml' ? 'TOML' : 'JSON'}</div>
+                <textarea id="mcp-edit-area" class="w-full h-48 bg-gray-900 text-sm text-gray-200 font-mono rounded p-3 border border-gray-600 focus:border-cyan-500 outline-none resize-y">${esc(detail.config_text)}</textarea>
+                <div class="flex gap-3 justify-end mt-3">
+                    <button class="px-4 py-2 bg-cyan-700 hover:bg-cyan-600 rounded text-sm cursor-pointer mcp-save" data-name="${esc(name)}">${i.t('mcp.save')}</button>
+                    <button class="px-4 py-2 text-gray-400 hover:text-white text-sm cursor-pointer modal-cancel">${i.t('action.cancel')}</button>
+                </div></div>`;
+            this.openModal(html);
+            this.modalEl().querySelector('.mcp-save').addEventListener('click', async () => {
+                const text = document.getElementById('mcp-edit-area').value;
+                try {
+                    await Api.importMcpServer(this.selectedMcpPlatform, name, text);
+                    this.closeModal();
+                    await this.selectMcpPlatform(this.selectedMcpPlatform);
+                } catch (e) {
+                    alert(i.tWith('mcp.parse_error', { error: e.SyncError || e }));
+                }
+            });
+            this.modalEl().querySelector('.modal-cancel').addEventListener('click', () => this.closeModal());
+        } catch (e) {
+            alert('Error: ' + e);
+        }
+    }
+
+    async showMcpAdd() {
+        const i = this.i18n;
+        let html = `<div class="p-5">
+            <h2 class="text-lg font-bold text-yellow-400 mb-3">${i.t('mcp.add')}</h2>
+            <div class="mb-2">
+                <label class="text-xs text-gray-400">${i.t('mcp.server_name')}</label>
+                <input id="mcp-add-name" class="w-full bg-gray-900 text-sm text-gray-200 rounded px-3 py-1.5 border border-gray-600 focus:border-cyan-500 outline-none" />
+            </div>
+            <div class="mb-2">
+                <label class="text-xs text-gray-400">${i.t('mcp.config')} (${i.t('mcp.format_json')} / ${i.t('mcp.format_toml')})</label>
+                <textarea id="mcp-add-area" class="w-full h-48 bg-gray-900 text-sm text-gray-200 font-mono rounded p-3 border border-gray-600 focus:border-cyan-500 outline-none resize-y" placeholder="${i.t('mcp.import_hint')}"></textarea>
+            </div>
+            <div class="flex gap-3 justify-end mt-3">
+                <button class="px-4 py-2 bg-cyan-700 hover:bg-cyan-600 rounded text-sm cursor-pointer mcp-add-save">${i.t('mcp.save')}</button>
+                <button class="px-4 py-2 text-gray-400 hover:text-white text-sm cursor-pointer modal-cancel">${i.t('action.cancel')}</button>
+            </div></div>`;
+        this.openModal(html);
+        this.modalEl().querySelector('.mcp-add-save').addEventListener('click', async () => {
+            const name = document.getElementById('mcp-add-name').value.trim();
+            const text = document.getElementById('mcp-add-area').value.trim();
+            if (!name) { alert('Server name required'); return; }
+            try {
+                await Api.importMcpServer(this.selectedMcpPlatform, name, text);
+                this.closeModal();
+                await this.selectMcpPlatform(this.selectedMcpPlatform);
+            } catch (e) {
+                alert(i.tWith('mcp.parse_error', { error: e.SyncError || e }));
+            }
+        });
+        this.modalEl().querySelector('.modal-cancel').addEventListener('click', () => this.closeModal());
+    }
+
+    async deleteMcpServer(name) {
+        const i = this.i18n;
+        if (!confirm(i.tWith('mcp.confirm_delete', { name }))) return;
+        await Api.deleteMcpServer(this.selectedMcpPlatform, name);
+        await this.selectMcpPlatform(this.selectedMcpPlatform);
     }
 
     // --- Modals ---
@@ -305,15 +402,50 @@ class App {
 
     // --- Render ---
     render() {
+        this.renderTabBar();
         this.renderSidebar();
         this.renderToolbar();
         this.renderView();
         document.getElementById('btn-lang').textContent = this.i18n.locale === 'en' ? 'EN' : '中文';
     }
 
+    renderTabBar() {
+        const skillsTab = document.getElementById('tab-skills');
+        const mcpTab = document.getElementById('tab-mcp');
+        skillsTab.className = `flex-1 py-2 text-sm text-center cursor-pointer border-b-2 ${this.currentTab === 'skills' ? 'text-gray-300 border-cyan-500' : 'text-gray-500 hover:text-white border-transparent'}`;
+        mcpTab.className = `flex-1 py-2 text-sm text-center cursor-pointer border-b-2 ${this.currentTab === 'mcp' ? 'text-gray-300 border-cyan-500' : 'text-gray-500 hover:text-white border-transparent'}`;
+    }
+
     renderSidebar() {
         const i = this.i18n;
         const el = document.getElementById('platform-list');
+        const searchEl = document.getElementById('search-input');
+
+        if (this.currentTab === 'mcp') {
+            searchEl.classList.add('hidden');
+            if (this.mcpPlatforms.length === 0) {
+                el.innerHTML = `<p class="text-gray-500 text-sm p-3">No MCP-capable platforms.</p>`;
+                return;
+            }
+            el.innerHTML = this.mcpPlatforms.map(p => {
+                const active = p.id === this.selectedMcpPlatform;
+                return `<button class="w-full text-left px-3 py-2 rounded cursor-pointer ${active ? 'bg-gray-700 text-green-400 font-bold' : 'text-gray-300 hover:bg-gray-700/50'}"
+                    data-mcp-platform="${p.id}">
+                    <div class="flex items-center justify-between">
+                        <span class="text-sm">${esc(p.display_name)}</span>
+                        <span class="text-xs text-gray-500">${p.server_count}</span>
+                    </div>
+                    ${active ? `<div class="text-xs text-gray-600 truncate mt-0.5">${esc(p.config_path)}</div>` : ''}
+                </button>`;
+            }).join('');
+            el.querySelectorAll('button[data-mcp-platform]').forEach(btn => {
+                btn.addEventListener('click', () => this.selectMcpPlatform(btn.dataset.mcpPlatform));
+            });
+            return;
+        }
+
+        // Skills tab (default)
+        searchEl.classList.remove('hidden');
         if (this.platforms.length === 0) {
             el.innerHTML = `<p class="text-gray-500 text-sm p-3">${i.t('ui.no_platforms')}</p>`;
             return;
@@ -343,6 +475,16 @@ class App {
         const sync = document.getElementById('btn-sync');
         const breadcrumb = document.getElementById('breadcrumb');
 
+        if (this.currentTab === 'mcp') {
+            back.classList.add('hidden');
+            diff.classList.add('hidden');
+            sync.classList.add('hidden');
+            breadcrumb.textContent = this.selectedMcpPlatform
+                ? (this.mcpPlatforms.find(p => p.id === this.selectedMcpPlatform)?.display_name || '')
+                : i.t('mcp.title');
+            return;
+        }
+
         back.classList.toggle('hidden', this.currentView === 'skills');
         const showAction = this.currentView === 'detail' || this.currentView === 'diff';
         diff.classList.toggle('hidden', !showAction);
@@ -363,14 +505,66 @@ class App {
     }
 
     renderView() {
-        const views = ['skills', 'detail', 'diff', 'search'];
-        for (const v of views) {
-            document.getElementById(`view-${v}`).classList.toggle('hidden', this.currentView !== v);
+        const skillViews = ['skills', 'detail', 'diff', 'search'];
+        const allViews = ['skills', 'detail', 'diff', 'search', 'mcp-servers'];
+
+        if (this.currentTab === 'mcp') {
+            for (const v of allViews) {
+                document.getElementById(`view-${v}`).classList.toggle('hidden', v !== 'mcp-servers');
+            }
+            this.renderMcpServerList();
+            return;
+        }
+
+        for (const v of allViews) {
+            document.getElementById(`view-${v}`).classList.toggle('hidden', !skillViews.includes(v) || this.currentView !== v);
         }
         if (this.currentView === 'skills') this.renderSkillList();
         if (this.currentView === 'detail') this.renderSkillDetail();
         if (this.currentView === 'diff') this.renderDiffView();
         if (this.currentView === 'search') this.renderSearchResults();
+    }
+
+    renderMcpServerList() {
+        const el = document.getElementById('view-mcp-servers');
+        const i = this.i18n;
+        if (!this.selectedMcpPlatform) {
+            el.innerHTML = `<p class="text-gray-500">${i.t('mcp.title')}</p>`;
+            return;
+        }
+        if (this.mcpServers.length === 0) {
+            el.innerHTML = `<div class="flex justify-between items-center mb-4">
+                <p class="text-gray-500">${i.t('mcp.no_servers')}</p>
+                <button class="px-3 py-1 text-xs bg-cyan-700 hover:bg-cyan-600 rounded cursor-pointer mcp-add-btn">+ ${i.t('mcp.add')}</button>
+            </div>`;
+            el.querySelector('.mcp-add-btn').addEventListener('click', () => this.showMcpAdd());
+            return;
+        }
+        let html = `<div class="flex justify-end mb-4">
+            <button class="px-3 py-1 text-xs bg-cyan-700 hover:bg-cyan-600 rounded cursor-pointer mcp-add-btn">+ ${i.t('mcp.add')}</button>
+        </div>
+        <div class="space-y-1">`;
+        for (const s of this.mcpServers) {
+            html += `<div class="flex items-center gap-2 px-3 py-2 rounded hover:bg-gray-800 group">
+                <button class="flex-1 text-left cursor-pointer mcp-server-item" data-name="${esc(s.name)}">
+                    <div class="text-cyan-400 font-medium">${esc(s.name)}</div>
+                    <div class="text-gray-500 text-sm">${esc(s.summary)}</div>
+                </button>
+                <button class="text-xs text-red-600 hover:text-red-400 px-2 py-1 cursor-pointer hidden group-hover:inline mcp-delete-btn" data-name="${esc(s.name)}">${i.t('mcp.delete')}</button>
+            </div>`;
+        }
+        html += '</div>';
+        el.innerHTML = html;
+        el.querySelector('.mcp-add-btn').addEventListener('click', () => this.showMcpAdd());
+        el.querySelectorAll('.mcp-server-item').forEach(btn => {
+            btn.addEventListener('click', () => this.showMcpEditor(btn.dataset.name));
+        });
+        el.querySelectorAll('.mcp-delete-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.deleteMcpServer(btn.dataset.name);
+            });
+        });
     }
 
     renderSkillList() {

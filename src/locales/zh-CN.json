@@ -64,5 +64,22 @@
   },
   "error": {
     "no_target": "没有可用的目标平台"
+  },
+  "mcp": {
+    "title": "MCP 服务器",
+    "no_servers": "未配置 MCP 服务器。",
+    "add": "添加服务器",
+    "edit": "编辑",
+    "delete": "删除",
+    "save": "保存",
+    "server_name": "服务器名称",
+    "config": "配置",
+    "format_json": "JSON",
+    "format_toml": "TOML",
+    "confirm_delete": "确认删除 MCP 服务器 '{name}'？",
+    "saved": "已保存。",
+    "deleted": "已删除。",
+    "import_hint": "粘贴 JSON 或 TOML 配置...",
+    "parse_error": "解析错误：{error}"
   }
 }

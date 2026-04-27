@@ -2,6 +2,7 @@ mod commands;
 mod config;
 mod diff;
 mod i18n;
+mod mcp;
 mod platform;
 mod skill;
 mod state;
@@ -27,6 +28,12 @@ pub fn run() {
             commands::set_locale,
             commands::search_skills,
             commands::read_skill_file,
+            commands::list_mcp_platforms,
+            commands::get_mcp_servers,
+            commands::get_mcp_server,
+            commands::save_mcp_server_cmd,
+            commands::delete_mcp_server_cmd,
+            commands::import_mcp_server_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running agent-hub");
