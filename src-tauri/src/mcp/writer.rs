@@ -2,7 +2,7 @@ use std::fs;
 
 use serde_json::Value;
 
-use super::parser::{json_to_toml, parse_input_config};
+use super::parser::parse_input_config;
 use super::registry::{find_mcp_platform, McpFormat};
 
 pub fn save_mcp_server(platform_id: &str, name: &str, config: Value) -> Result<(), String> {

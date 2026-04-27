@@ -258,6 +258,23 @@ pub fn search_skills(state: tauri::State<'_, SafeState>, query: String) -> Vec<S
 }
 
 #[tauri::command]
+pub fn delete_skill_cmd(state: tauri::State<'_, SafeState>, platform_id: String, skill_name: String, folder: String) -> Result<String, CommandError> {
+    let skill_path = {
+        let s = state.lock().unwrap();
+        let platform = s.platforms.iter().find(|p| p.id == platform_id)
+            .ok_or_else(|| CommandError::NotFound("Platform not found".into()))?;
+        let skill = find_skill(platform, &skill_name, &folder)
+            .ok_or_else(|| CommandError::NotFound(format!("Skill {} not found", skill_name)))?;
+        skill.path.clone()
+    };
+    crate::trash::move_skill_to_trash(&platform_id, &skill_name, &folder, &skill_path)
+        .map_err(|e| CommandError::SyncError(e))?;
+    let mut s = state.lock().unwrap();
+    s.platforms = crate::platform::discover_platforms(&s.config);
+    Ok("ok".to_string())
+}
+
+#[tauri::command]
 pub fn read_skill_file(state: tauri::State<'_, SafeState>, platform_id: String, skill_name: String, folder: String, file_path: String) -> Result<String, CommandError> {
     let s = state.lock().unwrap();
     let platform = s.platforms.iter().find(|p| p.id == platform_id)
@@ -274,6 +291,59 @@ pub fn read_skill_file(state: tauri::State<'_, SafeState>, platform_id: String, 
         return Err(CommandError::NotFound("Path traversal not allowed".into()));
     }
     std::fs::read_to_string(&full_path).map_err(|e| CommandError::NotFound(e.to_string()))
+}
+
+// --- Trash Commands ---
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TrashItemView {
+    pub id: String,
+    pub item_type: String,
+    pub name: String,
+    pub platform_id: String,
+    pub folder: Option<String>,
+    pub deleted_at: u64,
+}
+
+impl From<&crate::trash::TrashItem> for TrashItemView {
+    fn from(item: &crate::trash::TrashItem) -> Self {
+        Self {
+            id: item.id.clone(),
+            item_type: match item.item_type {
+                crate::trash::TrashItemType::Skill => "skill".to_string(),
+                crate::trash::TrashItemType::Mcp => "mcp".to_string(),
+            },
+            name: item.name.clone(),
+            platform_id: item.platform_id.clone(),
+            folder: item.folder.clone(),
+            deleted_at: item.deleted_at,
+        }
+    }
+}
+
+#[tauri::command]
+pub fn list_trash_cmd() -> Vec<TrashItemView> {
+    crate::trash::list_trash().iter().map(TrashItemView::from).collect()
+}
+
+#[tauri::command]
+pub fn restore_trash_item_cmd(state: tauri::State<'_, SafeState>, id: String) -> Result<String, CommandError> {
+    crate::trash::restore_item(&id).map_err(|e| CommandError::SyncError(e))?;
+    let mut s = state.lock().unwrap();
+    s.platforms = crate::platform::discover_platforms(&s.config);
+    Ok("ok".to_string())
+}
+
+#[tauri::command]
+pub fn permanently_delete_trash_item_cmd(id: String) -> Result<String, CommandError> {
+    crate::trash::permanently_delete_item(&id).map_err(|e| CommandError::SyncError(e))?;
+    Ok("ok".to_string())
+}
+
+#[tauri::command]
+pub fn empty_trash_cmd() -> Result<String, CommandError> {
+    crate::trash::empty_trash().map_err(|e| CommandError::SyncError(e))?;
+    Ok("ok".to_string())
 }
 
 // --- MCP Commands ---
@@ -356,6 +426,10 @@ pub fn save_mcp_server_cmd(platform_id: String, name: String, config_json: Strin
 
 #[tauri::command]
 pub fn delete_mcp_server_cmd(platform_id: String, name: String) -> Result<String, CommandError> {
+    // Save config to trash before deleting
+    if let Ok(server) = crate::mcp::read_mcp_server(&platform_id, &name) {
+        let _ = crate::trash::move_mcp_to_trash(&platform_id, &name, server.config);
+    }
     crate::mcp::delete_mcp_server(&platform_id, &name)
         .map_err(|e| CommandError::SyncError(e))?;
     Ok("ok".to_string())

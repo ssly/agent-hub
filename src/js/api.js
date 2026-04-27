@@ -54,6 +54,10 @@ export async function readSkillFile(platformId, skillName, folder, filePath) {
     return invoke('read_skill_file', { platformId, skillName, folder, filePath });
 }
 
+export async function deleteSkill(platformId, skillName, folder) {
+    return invoke('delete_skill_cmd', { platformId, skillName, folder });
+}
+
 // MCP
 export async function listMcpPlatforms() {
     return invoke('list_mcp_platforms');
@@ -90,4 +94,21 @@ export async function previewMcpSync(sourcePlatformId, targetPlatformId, serverN
 
 export async function syncMcpServer(sourcePlatformId, targetPlatformId, serverName) {
     return invoke('sync_mcp_server_cmd', { sourcePlatformId, targetPlatformId, serverName });
+}
+
+// Trash
+export async function listTrash() {
+    return invoke('list_trash_cmd');
+}
+
+export async function restoreTrashItem(id) {
+    return invoke('restore_trash_item_cmd', { id });
+}
+
+export async function permanentlyDeleteTrashItem(id) {
+    return invoke('permanently_delete_trash_item_cmd', { id });
+}
+
+export async function emptyTrash() {
+    return invoke('empty_trash_cmd');
 }

@@ -1,0 +1,777 @@
+/* ============================================================
+   Agent Hub — Refined Dark Theme
+   A cohesive design system for a developer tools desktop app
+   ============================================================ */
+
+/* ----- Design Tokens ----- */
+:root {
+  --bg-root: #0b0e12;
+  --bg-surface: #13171f;
+  --bg-elevated: #1a1f2b;
+  --bg-hover: #1f2533;
+  --bg-active: #252c3b;
+  --border-subtle: #1e2530;
+  --border-default: #29303d;
+  --border-strong: #364050;
+  --text-primary: #e6ecf3;
+  --text-secondary: #8b95a8;
+  --text-muted: #58637a;
+  --accent: #38bdf8;
+  --accent-soft: rgba(56, 189, 248, 0.12);
+  --accent-glow: rgba(56, 189, 248, 0.25);
+  --success: #34d399;
+  --success-soft: rgba(52, 211, 153, 0.12);
+  --warning: #fbbf24;
+  --warning-soft: rgba(251, 191, 36, 0.12);
+  --danger: #f87171;
+  --danger-soft: rgba(248, 113, 113, 0.12);
+  --purple: #a78bfa;
+  --purple-soft: rgba(167, 139, 250, 0.12);
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-normal: 200ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow: 300ms cubic-bezier(0.4, 0, 0.2, 1);
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+}
+
+/* ----- Base Overrides ----- */
+body {
+  background: var(--bg-root);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ----- Scrollbar ----- */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* ----- Sidebar ----- */
+aside {
+  background: var(--bg-surface) !important;
+  border-color: var(--border-subtle) !important;
+  min-width: 17rem !important;
+  width: 17rem !important;
+}
+
+aside .p-4.border-b {
+  padding: 1rem 1.25rem !important;
+  border-color: var(--border-subtle) !important;
+  background: linear-gradient(180deg, var(--bg-elevated) 0%, var(--bg-surface) 100%);
+}
+
+aside h1 {
+  font-size: 1.05rem !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.01em;
+  background: linear-gradient(135deg, #38bdf8 0%, #34d399 50%, #a78bfa 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Tab bar */
+#tab-bar {
+  border-color: var(--border-subtle) !important;
+  padding: 0 0.5rem;
+}
+
+#tab-bar button {
+  font-size: 0.8rem !important;
+  font-weight: 500;
+  padding: 0.6rem 0 !important;
+  transition: all var(--transition-normal);
+  position: relative;
+  letter-spacing: 0.01em;
+}
+
+#tab-bar button.text-gray-300 {
+  color: var(--text-primary) !important;
+}
+
+#tab-bar button.text-gray-400,
+#tab-bar button.text-gray-500 {
+  color: var(--text-muted) !important;
+}
+
+/* Platform list */
+#platform-list {
+  padding: 0.5rem !important;
+}
+
+#platform-list button {
+  border-radius: var(--radius-md) !important;
+  margin-bottom: 1px;
+  transition: all var(--transition-fast);
+  padding: 0.6rem 0.75rem !important;
+}
+
+#platform-list button:hover:not(.bg-gray-700) {
+  background: var(--bg-hover) !important;
+}
+
+#platform-list button.bg-gray-700 {
+  background: var(--accent-soft) !important;
+  border-left: 2px solid var(--accent);
+}
+
+#platform-list button .text-green-400 {
+  color: var(--accent) !important;
+}
+
+#platform-list button .text-gray-500 {
+  color: var(--text-muted) !important;
+}
+
+#platform-list button .text-gray-600 {
+  color: var(--text-muted) !important;
+  opacity: 0.7;
+}
+
+/* Search input */
+#search-input {
+  background: var(--bg-root) !important;
+  border: 1px solid var(--border-default) !important;
+  border-radius: var(--radius-md) !important;
+  font-size: 0.8rem !important;
+  padding: 0.5rem 0.75rem !important;
+  transition: all var(--transition-fast);
+  color: var(--text-primary) !important;
+}
+
+#search-input:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px var(--accent-soft) !important;
+  ring: none !important;
+}
+
+#search-input::placeholder {
+  color: var(--text-muted) !important;
+  opacity: 0.7;
+}
+
+/* Sidebar footer area */
+aside .p-3.border-t {
+  border-color: var(--border-subtle) !important;
+  padding: 0.75rem !important;
+}
+
+/* ----- Main Content ----- */
+main {
+  background: var(--bg-root) !important;
+}
+
+/* Toolbar */
+#toolbar {
+  background: var(--bg-surface) !important;
+  border-color: var(--border-subtle) !important;
+  padding: 0.5rem 1.25rem !important;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+#toolbar button {
+  transition: all var(--transition-fast);
+}
+
+#btn-back {
+  font-size: 0.8rem !important;
+  font-weight: 500;
+  padding: 0.3rem 0.6rem !important;
+  border-radius: var(--radius-sm);
+}
+
+#btn-back:hover {
+  background: var(--bg-hover);
+}
+
+#btn-diff {
+  background: var(--purple-soft) !important;
+  color: var(--purple) !important;
+  font-weight: 500;
+  border-radius: var(--radius-sm) !important;
+  transition: all var(--transition-fast);
+}
+
+#btn-diff:hover {
+  background: rgba(167, 139, 250, 0.22) !important;
+}
+
+#btn-sync {
+  background: var(--accent-soft) !important;
+  color: var(--accent) !important;
+  font-weight: 500;
+  border-radius: var(--radius-sm) !important;
+  transition: all var(--transition-fast);
+}
+
+#btn-sync:hover {
+  background: rgba(56, 189, 248, 0.22) !important;
+}
+
+#breadcrumb {
+  color: var(--text-secondary) !important;
+  font-size: 0.8rem !important;
+  font-weight: 500;
+}
+
+/* ----- View Containers ----- */
+#view-skills,
+#view-detail,
+#view-diff,
+#view-search,
+#view-mcp-servers {
+  padding: 1.5rem !important;
+}
+
+/* ----- Skill List ----- */
+#view-skills .space-y-0\.5 > div {
+  margin-bottom: 2px;
+}
+
+.skill-item {
+  border-radius: var(--radius-sm) !important;
+  padding: 0.5rem 0.75rem !important;
+  transition: all var(--transition-fast);
+  font-size: 0.85rem !important;
+}
+
+.skill-item:hover {
+  background: var(--bg-hover) !important;
+}
+
+.skill-item .text-cyan-400 {
+  color: var(--accent) !important;
+  font-weight: 500;
+}
+
+/* Folder headers */
+.folder-header {
+  font-weight: 600 !important;
+  font-size: 0.78rem !important;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted) !important;
+  padding: 0.5rem 0.5rem !important;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+
+.folder-header:hover {
+  color: var(--text-secondary) !important;
+  background: var(--bg-hover);
+}
+
+.folder-header .text-yellow-500 {
+  color: var(--warning) !important;
+}
+
+.folder-sync-btn {
+  color: var(--text-muted) !important;
+  border-radius: var(--radius-sm);
+  padding: 0.25rem 0.5rem !important;
+  transition: all var(--transition-fast);
+}
+
+.folder-sync-btn:hover {
+  color: var(--accent) !important;
+  background: var(--accent-soft);
+}
+
+/* Delete buttons */
+.skill-delete-btn,
+.mcp-delete-btn {
+  font-size: 0.75rem !important;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  padding: 0.25rem 0.5rem !important;
+  transition: all var(--transition-fast);
+}
+
+.skill-delete-btn.text-red-600 {
+  color: var(--text-muted) !important;
+}
+
+.skill-delete-btn:hover {
+  color: var(--danger) !important;
+  background: var(--danger-soft);
+}
+
+/* Action buttons on hover */
+button.text-cyan-600 {
+  color: var(--text-muted) !important;
+  transition: all var(--transition-fast);
+}
+
+button.text-cyan-600:hover {
+  color: var(--accent) !important;
+  background: var(--accent-soft);
+}
+
+button.text-red-600 {
+  color: var(--text-muted) !important;
+  transition: all var(--transition-fast);
+}
+
+button.text-red-600:hover {
+  color: var(--danger) !important;
+  background: var(--danger-soft);
+}
+
+/* ----- MCP Server List ----- */
+#view-mcp-servers button.bg-cyan-700 {
+  background: var(--accent-soft) !important;
+  color: var(--accent) !important;
+  font-weight: 500;
+  border-radius: var(--radius-sm) !important;
+  padding: 0.35rem 0.75rem !important;
+  transition: all var(--transition-fast);
+}
+
+#view-mcp-servers button.bg-cyan-700:hover {
+  background: rgba(56, 189, 248, 0.22) !important;
+}
+
+/* MCP server accordion */
+#view-mcp-servers .rounded.bg-gray-800 {
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md) !important;
+  transition: all var(--transition-fast);
+}
+
+#view-mcp-servers .rounded.hover\:bg-gray-800\/50:hover {
+  background: var(--bg-hover) !important;
+}
+
+.mcp-server-item .text-cyan-400 {
+  color: var(--accent) !important;
+}
+
+.mcp-server-item .text-gray-500 {
+  color: var(--text-muted) !important;
+}
+
+/* MCP accordion content */
+.mcp-expand-area {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 0.5rem;
+}
+
+.mcp-expand-area textarea {
+  background: var(--bg-root) !important;
+  border-color: var(--border-default) !important;
+  border-radius: var(--radius-md) !important;
+  font-size: 0.8rem !important;
+  transition: all var(--transition-fast);
+}
+
+.mcp-expand-area textarea:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px var(--accent-soft) !important;
+  ring: none !important;
+}
+
+/* Arrow rotation */
+.rotate-90 {
+  transition: transform var(--transition-normal);
+}
+
+/* ----- Skill Detail ----- */
+#view-detail h2 {
+  color: var(--text-primary) !important;
+  font-size: 1.5rem !important;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+#view-detail .text-yellow-400 {
+  color: var(--text-muted) !important;
+  font-weight: 500;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+#view-detail .text-cyan-400 {
+  color: var(--accent) !important;
+}
+
+#view-detail pre {
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md) !important;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  line-height: 1.65;
+}
+
+#file-viewer pre {
+  background: var(--bg-root) !important;
+  border: 1px solid var(--border-default);
+}
+
+/* File list items */
+.file-item {
+  padding: 0.2rem 0.75rem !important;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.file-item:hover {
+  background: var(--bg-hover) !important;
+  color: var(--accent) !important;
+}
+
+/* ----- Diff View ----- */
+#view-diff .text-purple-400 {
+  color: var(--purple) !important;
+}
+
+/* Side-by-side diff */
+#view-diff [style*="display:grid"] {
+  border-radius: var(--radius-md) !important;
+  border-color: var(--border-default) !important;
+  overflow: hidden;
+}
+
+#view-diff [style*="display:grid"] [style*="background:#1e293b"] {
+  background: var(--bg-elevated) !important;
+}
+
+/* ----- Search Results ----- */
+.search-result {
+  border-radius: var(--radius-sm) !important;
+  padding: 0.5rem 0.75rem !important;
+  transition: all var(--transition-fast);
+}
+
+.search-result:hover {
+  background: var(--bg-hover) !important;
+}
+
+.search-result .text-cyan-400 {
+  color: var(--accent) !important;
+}
+
+/* ----- Modal ----- */
+#modal-overlay {
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  background: rgba(0, 0, 0, 0.55) !important;
+}
+
+#modal-content {
+  background: var(--bg-elevated) !important;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-xl) !important;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+
+#modal-content h2 {
+  color: var(--text-primary) !important;
+  font-size: 1.1rem !important;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+#modal-content h2.text-yellow-400 {
+  color: var(--text-primary) !important;
+}
+
+/* Modal buttons */
+#modal-content button.bg-cyan-700 {
+  background: var(--accent) !important;
+  color: #0b0e12 !important;
+  font-weight: 600;
+  border-radius: var(--radius-sm) !important;
+  padding: 0.5rem 1rem !important;
+  transition: all var(--transition-fast);
+}
+
+#modal-content button.bg-cyan-700:hover {
+  background: #7dd3fc !important;
+}
+
+#modal-content button.bg-purple-700 {
+  background: rgba(167, 139, 250, 0.15) !important;
+  color: var(--purple) !important;
+  font-weight: 500;
+  border-radius: var(--radius-sm) !important;
+  transition: all var(--transition-fast);
+}
+
+#modal-content button.bg-purple-700:hover {
+  background: rgba(167, 139, 250, 0.25) !important;
+}
+
+#modal-content button.bg-green-700 {
+  background: var(--success) !important;
+  color: #0b0e12 !important;
+  font-weight: 600;
+  border-radius: var(--radius-sm) !important;
+  padding: 0.5rem 1rem !important;
+  transition: all var(--transition-fast);
+}
+
+#modal-content button.bg-green-700:hover {
+  background: #6ee7b7 !important;
+}
+
+#modal-content button.bg-red-700 {
+  background: var(--danger-soft) !important;
+  color: var(--danger) !important;
+  font-weight: 500;
+  border-radius: var(--radius-sm) !important;
+  transition: all var(--transition-fast);
+}
+
+#modal-content button.bg-red-700:hover {
+  background: rgba(248, 113, 113, 0.22) !important;
+}
+
+#modal-content button.bg-gray-700 {
+  background: var(--bg-hover) !important;
+  color: var(--text-secondary) !important;
+  border-radius: var(--radius-sm) !important;
+  transition: all var(--transition-fast);
+}
+
+#modal-content button.bg-gray-700:hover {
+  background: var(--bg-active) !important;
+  color: var(--text-primary) !important;
+}
+
+/* Modal target buttons */
+#modal-content button.hover\:bg-gray-700 {
+  border-radius: var(--radius-sm) !important;
+  transition: all var(--transition-fast);
+  font-size: 0.85rem;
+}
+
+#modal-content button.bg-red-900 {
+  background: var(--danger-soft) !important;
+}
+
+/* Modal inputs */
+#modal-content input,
+#modal-content textarea {
+  background: var(--bg-root) !important;
+  border: 1px solid var(--border-default) !important;
+  border-radius: var(--radius-md) !important;
+  font-size: 0.85rem !important;
+  transition: all var(--transition-fast);
+}
+
+#modal-content input:focus,
+#modal-content textarea:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px var(--accent-soft) !important;
+  outline: none !important;
+}
+
+/* Modal cancel/close */
+.modal-cancel {
+  border-radius: var(--radius-sm) !important;
+  padding: 0.5rem 1rem !important;
+  font-weight: 500;
+  transition: all var(--transition-fast);
+}
+
+/* ----- Trash/Update badges ----- */
+#trash-bin {
+  transition: all var(--transition-fast);
+}
+
+#trash-bin:hover {
+  background: var(--bg-hover) !important;
+}
+
+#update-badge {
+  transition: all var(--transition-fast);
+}
+
+#update-badge:hover {
+  background: var(--bg-hover) !important;
+}
+
+/* ----- Transitions & Polish ----- */
+button {
+  transition: all var(--transition-fast);
+}
+
+/* Smooth modal enter */
+#modal-overlay[style*="flex"] {
+  animation: fadeIn 150ms ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+#modal-overlay[style*="flex"] #modal-content {
+  animation: slideUp 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ----- Status badges ----- */
+.text-green-400 { color: var(--success) !important; }
+.text-green-500 { color: var(--success) !important; }
+.text-green-600 { color: var(--success) !important; opacity: 0.7; }
+.text-yellow-400 { color: var(--warning) !important; }
+.text-yellow-500 { color: var(--warning) !important; }
+.text-yellow-600 { color: var(--warning) !important; opacity: 0.7; }
+.text-red-400 { color: var(--danger) !important; }
+.text-purple-400 { color: var(--purple) !important; }
+.text-cyan-300 { color: var(--accent) !important; }
+.text-cyan-400 { color: var(--accent) !important; }
+.text-cyan-500 { color: var(--accent) !important; }
+
+/* Code/pre backgrounds */
+pre, .font-mono {
+  font-family: var(--font-mono) !important;
+}
+
+/* ----- Utility: Divider line ----- */
+.border-gray-700 { border-color: var(--border-default) !important; }
+.border-t.border-gray-700 { border-color: var(--border-subtle) !important; }
+.border-b.border-gray-700 { border-color: var(--border-subtle) !important; }
+
+/* Empty state text */
+.text-gray-500 {
+  color: var(--text-muted) !important;
+}
+
+/* Platform button active state child - directory path */
+button[data-platform-id] .text-xs.text-gray-600,
+button[data-mcp-platform] .text-xs.text-gray-600 {
+  color: var(--text-muted) !important;
+  opacity: 0.6;
+}
+
+/* ----- Trash Modal Item Lines ----- */
+.trash-item {
+  background: var(--bg-hover);
+}
+
+#modal-content [data-trash-id] {
+  margin-bottom: 2px;
+}
+
+#modal-content .trash-restore-btn,
+#modal-content .trash-delete-btn {
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  padding: 0.25rem 0.6rem !important;
+}
+
+/* ----- Diff View Additions ----- */
+#view-diff [style*="display:grid"] [style*="rgba(153,27,27,0.25)"] {
+  background: rgba(248, 113, 113, 0.12) !important;
+  color: #fca5a5 !important;
+}
+
+#view-diff [style*="display:grid"] [style*="rgba(22,101,52,0.25)"] {
+  background: rgba(52, 211, 153, 0.12) !important;
+  color: #86efac !important;
+}
+
+/* ----- Hover card transitions for skill items ----- */
+#view-skills .flex.items-center.rounded {
+  border-radius: var(--radius-sm);
+  transition: background var(--transition-fast);
+}
+
+#view-skills .flex.items-center.rounded:hover {
+  background: var(--bg-hover) !important;
+}
+
+/* ----- Improve update modal body text ----- */
+#modal-content .text-sm.text-gray-400 {
+  color: var(--text-secondary) !important;
+  line-height: 1.6;
+}
+
+/* ----- MCP add/sync buttons ----- */
+.mcp-add-btn {
+  font-weight: 500;
+  border-radius: var(--radius-sm) !important;
+}
+
+/* ----- Form labels ----- */
+#modal-content label {
+  color: var(--text-muted) !important;
+  font-weight: 500;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  display: block;
+  margin-bottom: 0.35rem;
+}
+
+/* ----- Skill detail metadata labels ----- */
+#view-detail .text-yellow-400 {
+  color: var(--text-muted) !important;
+  font-weight: 500;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+/* ----- Scrollbar in modals ----- */
+#modal-content::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+}
+
+/* ----- Confirm states (red flash) ----- */
+button[data-confirming="true"] {
+  animation: pulse-confirm 0.6s ease-in-out;
+}
+
+@keyframes pulse-confirm {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.8; }
+}
+
+/* ----- Sidebar gradient top ----- */
+aside > div:first-child {
+  background: linear-gradient(180deg, rgba(56, 189, 248, 0.03) 0%, transparent 100%) !important;
+}
+
+/* ----- Diff stats ----- */
+#view-diff .text-green-400 { font-weight: 600; }
+#view-diff .text-red-400 { font-weight: 600; }
+
+/* ----- Smooth collapse/expand for MCP server areas ----- */
+.mcp-expand-area:not(.hidden) {
+  animation: expandIn 200ms ease-out;
+}
+
+@keyframes expandIn {
+  from { opacity: 0; max-height: 0; }
+  to { opacity: 1; max-height: 500px; }
+}

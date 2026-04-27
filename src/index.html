@@ -4,7 +4,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Agent Hub</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="theme.css" />
 </head>
 <body class="h-full bg-gray-900 text-gray-100 font-sans select-none">
     <div id="app" class="flex h-full">
@@ -12,9 +16,14 @@
         <aside class="w-64 min-w-[16rem] bg-gray-800 border-r border-gray-700 flex flex-col">
             <div class="p-4 border-b border-gray-700 flex items-center justify-between">
                 <h1 class="text-lg font-bold text-green-400">Agent Hub</h1>
-                <div class="flex gap-2">
-                    <button id="btn-lang" class="text-xs text-gray-400 hover:text-white cursor-pointer">EN</button>
-                    <button id="btn-refresh" class="text-xs text-gray-400 hover:text-white cursor-pointer">Refresh</button>
+                <div class="flex gap-1">
+                    <button id="btn-lang" class="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 cursor-pointer px-1.5 py-0.5 rounded transition-colors">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+                        <span id="btn-lang-label">EN</span>
+                    </button>
+                    <button id="btn-refresh" class="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 cursor-pointer px-1.5 py-0.5 rounded transition-colors">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                    </button>
                 </div>
             </div>
             <div id="tab-bar" class="flex border-b border-gray-700">
@@ -27,6 +36,7 @@
                     class="w-full bg-gray-700 text-sm text-gray-200 rounded px-3 py-1.5 placeholder-gray-500 outline-none focus:ring-1 focus:ring-cyan-500"
                     placeholder="Search skills..." />
             </div>
+            <div id="trash-bin" class="hidden border-t border-gray-700 cursor-pointer hover:bg-gray-700/50"></div>
             <div id="update-badge" class="hidden"></div>
         </aside>
 
@@ -34,7 +44,10 @@
         <main class="flex-1 flex flex-col overflow-hidden">
             <!-- Toolbar -->
             <div id="toolbar" class="flex items-center gap-2 px-4 py-2 bg-gray-800 border-b border-gray-700">
-                <button id="btn-back" class="hidden text-sm text-gray-400 hover:text-white cursor-pointer">&larr; Back</button>
+                <button id="btn-back" class="hidden text-sm text-gray-400 hover:text-white cursor-pointer flex items-center gap-1">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+                    Back
+                </button>
                 <span id="breadcrumb" class="text-sm text-gray-400"></span>
                 <div class="flex-1"></div>
                 <button id="btn-diff" class="hidden px-3 py-1 text-xs bg-purple-700 hover:bg-purple-600 rounded cursor-pointer">Diff</button>

@@ -7,6 +7,7 @@ mod platform;
 mod skill;
 mod state;
 mod sync;
+mod trash;
 
 use state::AppState;
 
@@ -35,6 +36,7 @@ pub fn run() {
             commands::set_locale,
             commands::search_skills,
             commands::read_skill_file,
+            commands::delete_skill_cmd,
             commands::list_mcp_platforms,
             commands::get_mcp_servers,
             commands::get_mcp_server,
@@ -44,6 +46,10 @@ pub fn run() {
             commands::get_mcp_sync_targets,
             commands::preview_mcp_sync_cmd,
             commands::sync_mcp_server_cmd,
+            commands::list_trash_cmd,
+            commands::restore_trash_item_cmd,
+            commands::permanently_delete_trash_item_cmd,
+            commands::empty_trash_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running agent-hub");

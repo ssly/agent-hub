@@ -1,6 +1,24 @@
 import { I18n } from './i18n.js';
 import * as Api from './api.js';
 
+// SVG Icons (replacing emoji)
+const Icons = {
+    trash: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+    symlink: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
+    warning: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+    sync: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>',
+    arrowRight: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>',
+    dot: '<svg width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="currentColor"/></svg>',
+    plus: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
+    back: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>',
+    search: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
+    folder: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>',
+    refresh: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>',
+    diff: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>',
+    globe: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>',
+    download: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
+};
+
 // Updater / Process plugins via global Tauri API (no bundler)
 const tauriInvoke = window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);
 async function checkUpdate() {
@@ -27,12 +45,15 @@ class App {
         this.i18n = new I18n();
         this.collapsedFolders = new Set();
         this.pendingSyncTarget = null;
+        this.pendingDeleteTarget = null; // { type: 'skill'|'mcp', key: string }
         // MCP state
         this.mcpPlatforms = [];
         this.mcpServers = [];
         this.mcpServerDetails = {};  // name -> { config_text, format, editing }
         this.expandedMcpServer = null;  // name of currently expanded server
         this.selectedMcpPlatform = null;
+        // Trash state
+        this.trashCount = 0;
         // Update state
         this.updateInfo = null; // { version, body, date } when update available
     }
@@ -42,6 +63,7 @@ class App {
         await this.i18n.load();
         await this.refreshPlatforms();
         await this.refreshMcpPlatforms();
+        await this.refreshTrashCount();
         this.bindEvents();
         this.render();
         this.checkForUpdate();
@@ -120,6 +142,42 @@ class App {
         }
     }
 
+    async deleteSkill(name, folder, btn) {
+        const i = this.i18n;
+        const key = `${this.selectedPlatformId}:${folder}:${name}`;
+        if (btn.dataset.confirming === 'true') {
+            try {
+                await Api.deleteSkill(this.selectedPlatformId, name, folder);
+                if (this.selectedSkillName === name && this.selectedFolder === folder) {
+                    this.selectedSkillName = null;
+                    this.selectedFolder = '';
+                    this.currentView = 'skills';
+                }
+                await this.refreshPlatforms();
+                await this.refreshTrashCount();
+                this.render();
+            } catch (e) {
+                alert(i.tWith('skill.delete_failed', { error: e.SyncError || e }));
+            }
+            return;
+        }
+        btn.dataset.confirming = 'true';
+        btn.textContent = i.t('skill.confirm_delete');
+        btn.classList.remove('text-red-600', 'hover:text-red-400');
+        btn.classList.add('bg-red-700', 'hover:bg-red-600', 'text-white', 'rounded', 'px-2', 'py-0.5');
+        const reset = () => {
+            btn.dataset.confirming = 'false';
+            btn.textContent = i.t('skill.delete');
+            btn.classList.add('text-red-600', 'hover:text-red-400');
+            btn.classList.remove('bg-red-700', 'hover:bg-red-600', 'text-white', 'rounded', 'px-2', 'py-0.5');
+        };
+        setTimeout(reset, 3000);
+        const onClickOutside = (e) => {
+            if (!btn.contains(e.target)) { reset(); document.removeEventListener('click', onClickOutside); }
+        };
+        setTimeout(() => document.addEventListener('click', onClickOutside), 0);
+    }
+
     async doSearch(query) {
         if (!query.trim()) {
             this.currentView = 'skills';
@@ -149,8 +207,8 @@ class App {
         const i = this.i18n;
         el.className = 'p-2 border-t border-gray-700 cursor-pointer hover:bg-gray-700/50';
         el.innerHTML = `<div class="flex items-center gap-1.5 px-1">
-            <span class="text-green-400 text-xs">●</span>
-            <span class="text-xs text-gray-300">${i.t('update.badge')}</span>
+            <span class="text-green-400 flex-shrink-0">${Icons.dot}</span>
+            <span class="text-xs text-gray-400">${i.t('update.badge')}</span>
             <span class="text-xs text-gray-500">v${esc(this.updateInfo.version)}</span>
         </div>`;
         el.onclick = () => this.showUpdateModal();
@@ -284,11 +342,169 @@ class App {
         this.modalEl().querySelector('.modal-cancel').addEventListener('click', () => this.closeModal());
     }
 
-    async deleteMcpServer(name) {
+    async deleteMcpServer(name, btn) {
         const i = this.i18n;
-        if (!confirm(i.tWith('mcp.confirm_delete', { name }))) return;
-        await Api.deleteMcpServer(this.selectedMcpPlatform, name);
-        await this.selectMcpPlatform(this.selectedMcpPlatform);
+        if (btn.dataset.confirming === 'true') {
+            try {
+                await Api.deleteMcpServer(this.selectedMcpPlatform, name);
+                this.expandedMcpServer = null;
+                delete this.mcpServerDetails[name];
+                await this.refreshMcpPlatforms();
+                await this.selectMcpPlatform(this.selectedMcpPlatform);
+                await this.refreshTrashCount();
+            } catch (e) {
+                alert(i.tWith('mcp.delete_failed', { error: e.SyncError || e }));
+            }
+            return;
+        }
+        btn.dataset.confirming = 'true';
+        btn.textContent = i.t('mcp.confirm_delete');
+        btn.classList.remove('text-red-600', 'hover:text-red-400');
+        btn.classList.add('bg-red-700', 'hover:bg-red-600', 'text-white', 'rounded', 'px-2', 'py-0.5');
+        const reset = () => {
+            btn.dataset.confirming = 'false';
+            btn.textContent = i.t('mcp.delete');
+            btn.classList.add('text-red-600', 'hover:text-red-400');
+            btn.classList.remove('bg-red-700', 'hover:bg-red-600', 'text-white', 'rounded', 'px-2', 'py-0.5');
+        };
+        setTimeout(reset, 3000);
+        const onClickOutside = (e) => {
+            if (!btn.contains(e.target)) { reset(); document.removeEventListener('click', onClickOutside); }
+        };
+        setTimeout(() => document.addEventListener('click', onClickOutside), 0);
+    }
+
+    // --- Trash ---
+
+    async refreshTrashCount() {
+        try {
+            const items = await Api.listTrash();
+            this.trashCount = items.length;
+        } catch {
+            this.trashCount = 0;
+        }
+        this.renderTrashBadge();
+    }
+
+    renderTrashBadge() {
+        const el = document.getElementById('trash-bin');
+        if (!el) return;
+        if (this.trashCount === 0) {
+            el.classList.add('hidden');
+            return;
+        }
+        el.classList.remove('hidden');
+        const i = this.i18n;
+        el.innerHTML = `<div class="flex items-center gap-2 px-2 py-2">
+            <span class="text-gray-500 flex-shrink-0">${Icons.trash}</span>
+            <span class="text-xs text-gray-400">${i.tWith('trash.item_count', { count: this.trashCount })}</span>
+        </div>`;
+        el.onclick = () => this.showTrashModal();
+    }
+
+    async showTrashModal() {
+        const i = this.i18n;
+        let items;
+        try {
+            items = await Api.listTrash();
+        } catch {
+            items = [];
+        }
+        if (items.length === 0) {
+            alert(i.t('trash.empty'));
+            return;
+        }
+        const now = Math.floor(Date.now() / 1000);
+        let html = `<div class="p-5">
+            <h2 class="text-lg font-bold text-yellow-400 mb-4">${i.t('trash.title')} (${items.length})</h2>
+            <div class="space-y-1 mb-4 max-h-[60vh] overflow-y-auto">`;
+        for (const item of items) {
+            const secondsLeft = (item.deleted_at + 7 * 24 * 3600) - now;
+            const daysLeft = Math.max(0, Math.ceil(secondsLeft / 86400));
+            const daysStr = daysLeft > 0 ? i.tWith('trash.days_left', { n: daysLeft }) : `<span class="text-red-400">${i.t('trash.expired')}</span>`;
+            const typeLabel = item.item_type === 'skill' ? i.t('trash.type_skill') : i.t('trash.type_mcp');
+            const typeColor = item.item_type === 'skill' ? 'text-cyan-400' : 'text-purple-400';
+            html += `<div class="flex items-center gap-2 px-3 py-2 rounded hover:bg-gray-700 group trash-item" data-trash-id="${esc(item.id)}">
+                <div class="flex-1">
+                    <div><span class="${typeColor} text-xs font-bold">[${typeLabel}]</span> <span class="text-gray-200">${esc(item.name)}</span></div>
+                    <div class="text-xs text-gray-500">${esc(item.platform_id)}${item.folder ? ' / ' + esc(item.folder) : ''} · ${daysStr}</div>
+                </div>
+                <button class="text-xs text-green-600 hover:text-green-400 px-2 py-1 cursor-pointer hidden group-hover:inline trash-restore-btn">${i.t('trash.restore')}</button>
+                <button class="text-xs text-red-600 hover:text-red-400 px-2 py-1 cursor-pointer hidden group-hover:inline trash-delete-btn">${i.t('trash.delete_forever')}</button>
+            </div>`;
+        }
+        html += `</div>
+            <div class="flex gap-3 justify-between">
+                <button class="px-4 py-2 bg-red-800 hover:bg-red-700 rounded text-sm cursor-pointer trash-empty-btn">${i.t('trash.empty_trash')}</button>
+                <button class="px-4 py-2 text-gray-400 hover:text-white cursor-pointer modal-cancel">${i.t('action.cancel')}</button>
+            </div></div>`;
+        this.openModal(html);
+
+        // Restore buttons
+        this.modalEl().querySelectorAll('.trash-restore-btn').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const row = btn.closest('[data-trash-id]');
+                await this.restoreTrashItem(row.dataset.trashId);
+            });
+        });
+
+        // Permanent delete buttons
+        this.modalEl().querySelectorAll('.trash-delete-btn').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                if (!confirm(i.t('trash.confirm_delete_forever'))) return;
+                const row = btn.closest('[data-trash-id]');
+                await this.permanentlyDeleteTrashItem(row.dataset.trashId);
+            });
+        });
+
+        // Empty trash button
+        this.modalEl().querySelector('.trash-empty-btn').addEventListener('click', async () => {
+            if (!confirm(i.t('trash.confirm_empty'))) return;
+            await this.emptyTrash();
+        });
+
+        this.modalEl().querySelector('.modal-cancel').addEventListener('click', () => this.closeModal());
+    }
+
+    async restoreTrashItem(id) {
+        const i = this.i18n;
+        try {
+            await Api.restoreTrashItem(id);
+            this.closeModal();
+            await this.refreshPlatforms();
+            await this.refreshMcpPlatforms();
+            await this.refreshTrashCount();
+            // If MCP tab and was viewing a platform, re-select it
+            if (this.currentTab === 'mcp' && this.selectedMcpPlatform) {
+                await this.selectMcpPlatform(this.selectedMcpPlatform);
+            }
+            this.render();
+        } catch (e) {
+            alert(i.tWith('trash.restore_failed', { error: e.SyncError || e }));
+        }
+    }
+
+    async permanentlyDeleteTrashItem(id) {
+        try {
+            await Api.permanentlyDeleteTrashItem(id);
+            this.closeModal();
+            await this.refreshTrashCount();
+            if (this.trashCount > 0) this.showTrashModal();
+        } catch (e) {
+            alert('Error: ' + (e.SyncError || e));
+        }
+    }
+
+    async emptyTrash() {
+        try {
+            await Api.emptyTrash();
+            this.closeModal();
+            await this.refreshTrashCount();
+        } catch (e) {
+            alert('Error: ' + (e.SyncError || e));
+        }
     }
 
     async showMcpSyncModal(serverName) {
@@ -353,7 +569,7 @@ class App {
             <p class="text-sm mb-1"><span class="text-cyan-400">${i.t('sync.source')}:</span> ${esc(srcName)} / ${esc(serverName)}</p>
             <p class="text-sm mb-1"><span class="text-cyan-400">${i.t('sync.target')}:</span> ${esc(tgtName)} (${preview.target_format.toUpperCase()})</p>
             <p class="text-sm mb-2"><span class="text-gray-500">${esc(preview.target_config_path)}</span></p>
-            ${preview.has_conflict ? `<p class="text-yellow-400 text-sm mb-3">⚠ ${i.t('mcp.conflict_warning')}</p>` : ''}
+            ${preview.has_conflict ? `<p class="text-yellow-400 text-sm mb-3 flex items-center gap-1">${Icons.warning} ${i.t('mcp.conflict_warning')}</p>` : ''}
             <div class="text-sm mb-2"><span class="text-green-400">+${preview.added}</span> <span class="text-red-400">-${preview.removed}</span></div>
             <div style="max-height:50vh;overflow-y:auto">${diffHtml}</div>
             <div class="flex gap-3 justify-end mt-4">
@@ -468,7 +684,7 @@ class App {
             <h2 class="text-lg font-bold text-yellow-400 mb-3">${i.t('sync.title')}</h2>
             <p class="text-sm mb-1"><span class="text-cyan-400">${i.t('sync.source')}:</span> ${this.selectedPlatformId} / ${this.selectedSkillName}</p>
             <p class="text-sm mb-2"><span class="text-cyan-400">${i.t('sync.target')}:</span> ${targetName}</p>
-            <p class="text-yellow-400 text-sm mb-3">⚠ ${i.t('sync.conflict_warning')}</p>
+            <p class="text-yellow-400 text-sm mb-3 flex items-center gap-1">${Icons.warning} ${i.t('sync.conflict_warning')}</p>
             <div class="text-sm mb-4 space-y-1">`;
         for (const fd of diff.file_diffs) {
             html += `<div class="text-purple-400">${fd.file_path} <span class="text-gray-500">+${fd.stats.added} -${fd.stats.removed}</span></div>`;
@@ -547,9 +763,11 @@ class App {
     render() {
         this.renderTabBar();
         this.renderSidebar();
+        this.renderTrashBadge();
         this.renderToolbar();
         this.renderView();
-        document.getElementById('btn-lang').textContent = this.i18n.locale === 'en' ? 'EN' : '中文';
+        const langLabel = document.getElementById('btn-lang-label');
+        if (langLabel) langLabel.textContent = this.i18n.locale === 'en' ? 'EN' : '中文';
     }
 
     renderTabBar() {
@@ -693,7 +911,7 @@ class App {
             html += `<div class="rounded ${expanded ? 'bg-gray-800' : 'hover:bg-gray-800/50'}">
                 <div class="flex items-center gap-2 px-3 py-2 group">
                     <button class="flex-1 text-left cursor-pointer mcp-server-item flex items-center gap-2" data-name="${esc(s.name)}">
-                        <span class="text-xs transition ${expanded ? 'rotate-90' : ''} inline-block text-gray-500">&#9654;</span>
+                        <span class="flex-shrink-0 text-gray-500 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}">${Icons.arrowRight}</span>
                         <div class="flex-1">
                             <div class="text-cyan-400 font-medium">${esc(s.name)}</div>
                             <div class="text-gray-500 text-sm">${esc(s.summary)}</div>
@@ -716,7 +934,7 @@ class App {
         el.querySelectorAll('.mcp-delete-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                this.deleteMcpServer(btn.dataset.name);
+                this.deleteMcpServer(btn.dataset.name, btn);
             });
         });
         el.querySelectorAll('.mcp-sync-btn').forEach(btn => {
@@ -851,12 +1069,12 @@ class App {
                 <div class="flex items-center">
                     <button class="flex-1 text-left px-2 py-1.5 text-sm text-gray-400 hover:text-gray-200 cursor-pointer folder-header flex items-center gap-1"
                         data-folder="${esc(folder)}">
-                        <span class="text-xs transition ${collapsed ? '' : 'rotate-90'} inline-block">&#9654;</span>
+                        <span class="flex-shrink-0 text-gray-500 transition-transform duration-200 ${collapsed ? '' : 'rotate-90'}">${Icons.arrowRight}</span>
                         <span class="text-yellow-500">${esc(folder)}</span>
                         <span class="text-gray-600 text-xs ml-1">(${count})</span>
                     </button>
-                    <button class="text-xs text-cyan-600 hover:text-cyan-400 px-2 py-1 cursor-pointer folder-sync-btn"
-                        data-folder="${esc(folder)}" data-count="${count}" title="Sync all in folder">⤴</button>
+                    <button class="flex items-center gap-1 text-xs text-gray-500 hover:text-cyan-400 px-2 py-1 cursor-pointer folder-sync-btn transition-colors"
+                        data-folder="${esc(folder)}" data-count="${count}" title="Sync all in folder">${Icons.sync}</button>
                 </div>
                 <div class="pl-3 ${collapsed ? 'hidden' : ''}" data-folder-content="${esc(folder)}">`;
             for (const s of folderSkills) {
@@ -871,6 +1089,14 @@ class App {
         // Bind skill item clicks
         el.querySelectorAll('.skill-item').forEach(btn => {
             btn.addEventListener('click', () => this.selectSkill(btn.dataset.name, btn.dataset.folder));
+        });
+
+        // Bind skill delete buttons
+        el.querySelectorAll('.skill-delete-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.deleteSkill(btn.dataset.name, btn.dataset.folder, btn);
+            });
         });
 
         // Bind folder toggle
@@ -888,14 +1114,19 @@ class App {
     }
 
     renderSkillItem(s) {
+        const i = this.i18n;
         const version = s.version ? `<span class="text-gray-500 text-xs ml-2">v${esc(s.version)}</span>` : '';
-        const symlink = s.is_symlink ? `<span class="text-cyan-600 text-xs ml-1">🔗</span>` : '';
+        const symlink = s.is_symlink ? `<span class="text-cyan-500 text-xs ml-1 inline-flex align-middle">${Icons.symlink}</span>` : '';
         const desc = s.description ? `<span class="text-gray-500 text-sm ml-2">${esc(truncate(s.description, 60))}</span>` : '';
         const size = s.total_size > 1024 ? `<span class="text-gray-600 text-xs ml-2">${(s.total_size / 1024).toFixed(0)}KB</span>` : '';
-        return `<button class="w-full text-left px-3 py-2 rounded hover:bg-gray-800 text-gray-200 cursor-pointer flex items-center skill-item"
-            data-name="${esc(s.name)}" data-folder="${esc(s.folder)}">
-            <span class="text-cyan-400">${esc(s.name)}</span>${version}${desc}${symlink}${size}
-        </button>`;
+        return `<div class="flex items-center rounded hover:bg-gray-800 group">
+            <button class="flex-1 text-left px-3 py-2 text-gray-200 cursor-pointer skill-item"
+                data-name="${esc(s.name)}" data-folder="${esc(s.folder)}">
+                <span class="text-cyan-400">${esc(s.name)}</span>${version}${desc}${symlink}${size}
+            </button>
+            <button class="text-xs text-red-600 hover:text-red-400 px-2 py-1 cursor-pointer hidden group-hover:inline skill-delete-btn"
+                data-name="${esc(s.name)}" data-folder="${esc(s.folder)}">${i.t('skill.delete')}</button>
+        </div>`;
     }
 
     toggleFolder(folder) {
@@ -917,7 +1148,7 @@ class App {
                 : detail.total_size < 1048576 ? `${(detail.total_size / 1024).toFixed(1)} KB`
                 : `${(detail.total_size / 1048576).toFixed(1)} MB`;
             const symlink = detail.is_symlink
-                ? `<div class="text-cyan-400">🔗 ${i.tWith('skill.symlink_to', { target: detail.symlink_target || '?' })}</div>` : '';
+                ? `<div class="text-cyan-400 flex items-center gap-1">${Icons.symlink} ${i.tWith('skill.symlink_to', { target: detail.symlink_target || '?' })}</div>` : '';
             const filesList = detail.files.map(f =>
                 `<div class="text-cyan-400 hover:text-cyan-300 text-sm pl-4 cursor-pointer file-item" data-file="${esc(f)}">${esc(f)}</div>`
             ).join('');

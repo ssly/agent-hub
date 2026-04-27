@@ -22,7 +22,11 @@
     "symlink_to": "Symlink to {target}",
     "size": "Size",
     "no_description": "(No description)",
-    "total_files": "{count} files"
+    "total_files": "{count} files",
+    "delete": "Delete",
+    "confirm_delete": "Confirm Delete",
+    "deleted": "Deleted.",
+    "delete_failed": "Delete failed: {error}"
   },
   "action": {
     "sync": "Sync",
@@ -76,7 +80,9 @@
     "config": "Configuration",
     "format_json": "JSON",
     "format_toml": "TOML",
-    "confirm_delete": "Delete MCP server '{name}'?",
+    "confirm_delete": "Confirm Delete",
+    "deleted": "Deleted.",
+    "delete_failed": "Delete failed: {error}",
     "saved": "Saved.",
     "deleted": "Deleted.",
     "import_hint": "Paste JSON or TOML config...",
@@ -90,6 +96,22 @@
     "sync_done": "Sync completed.",
     "sync_failed": "Sync failed: {error}",
     "conflict_warning": "Target already has this server!"
+  },
+  "trash": {
+    "title": "Recycle Bin",
+    "empty": "Recycle bin is empty",
+    "item_count": "{count} item(s)",
+    "restore": "Restore",
+    "delete_forever": "Delete Forever",
+    "empty_trash": "Empty Trash",
+    "confirm_empty": "Permanently delete all items in trash?",
+    "confirm_delete_forever": "Permanently delete this item?",
+    "days_left": "{n} day(s) left",
+    "expired": "Expired",
+    "type_skill": "Skill",
+    "type_mcp": "MCP Server",
+    "restored": "Restored.",
+    "restore_failed": "Restore failed: {error}"
   },
   "update": {
     "badge": "New version available",

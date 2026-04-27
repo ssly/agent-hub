@@ -22,7 +22,11 @@
     "symlink_to": "软链接 → {target}",
     "size": "大小",
     "no_description": "（无描述）",
-    "total_files": "{count} 个文件"
+    "total_files": "{count} 个文件",
+    "delete": "删除",
+    "confirm_delete": "确认删除",
+    "deleted": "已删除。",
+    "delete_failed": "删除失败：{error}"
   },
   "action": {
     "sync": "同步",
@@ -76,7 +80,9 @@
     "config": "配置",
     "format_json": "JSON",
     "format_toml": "TOML",
-    "confirm_delete": "确认删除 MCP 服务器 '{name}'？",
+    "confirm_delete": "确认删除",
+    "deleted": "已删除。",
+    "delete_failed": "删除失败：{error}",
     "saved": "已保存。",
     "deleted": "已删除。",
     "import_hint": "粘贴 JSON 或 TOML 配置...",
@@ -90,6 +96,22 @@
     "sync_done": "同步完成。",
     "sync_failed": "同步失败：{error}",
     "conflict_warning": "目标平台已有该服务器！"
+  },
+  "trash": {
+    "title": "回收站",
+    "empty": "回收站为空",
+    "item_count": "{count} 项",
+    "restore": "恢复",
+    "delete_forever": "永久删除",
+    "empty_trash": "清空回收站",
+    "confirm_empty": "确认清空回收站中的所有内容？",
+    "confirm_delete_forever": "确认永久删除此项？",
+    "days_left": "剩余 {n} 天",
+    "expired": "已过期",
+    "type_skill": "技能",
+    "type_mcp": "MCP 服务器",
+    "restored": "已恢复。",
+    "restore_failed": "恢复失败：{error}"
   },
   "update": {
     "badge": "发现新版本",
