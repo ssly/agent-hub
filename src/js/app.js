@@ -19,6 +19,8 @@ class App {
         // MCP state
         this.mcpPlatforms = [];
         this.mcpServers = [];
+        this.mcpServerDetails = {};  // name -> { config_text, format, editing }
+        this.expandedMcpServer = null;  // name of currently expanded server
         this.selectedMcpPlatform = null;
     }
 
@@ -160,37 +162,10 @@ class App {
 
     async selectMcpPlatform(id) {
         this.selectedMcpPlatform = id;
+        this.expandedMcpServer = null;
+        this.mcpServerDetails = {};
         this.mcpServers = await Api.getMcpServers(id);
         this.render();
-    }
-
-    async showMcpEditor(name) {
-        const i = this.i18n;
-        try {
-            const detail = await Api.getMcpServer(this.selectedMcpPlatform, name);
-            let html = `<div class="p-5">
-                <h2 class="text-lg font-bold text-yellow-400 mb-3">${esc(name)}</h2>
-                <div class="text-xs text-gray-500 mb-2">${detail.format === 'toml' ? 'TOML' : 'JSON'}</div>
-                <textarea id="mcp-edit-area" class="w-full h-48 bg-gray-900 text-sm text-gray-200 font-mono rounded p-3 border border-gray-600 focus:border-cyan-500 outline-none resize-y">${esc(detail.config_text)}</textarea>
-                <div class="flex gap-3 justify-end mt-3">
-                    <button class="px-4 py-2 bg-cyan-700 hover:bg-cyan-600 rounded text-sm cursor-pointer mcp-save" data-name="${esc(name)}">${i.t('mcp.save')}</button>
-                    <button class="px-4 py-2 text-gray-400 hover:text-white text-sm cursor-pointer modal-cancel">${i.t('action.cancel')}</button>
-                </div></div>`;
-            this.openModal(html);
-            this.modalEl().querySelector('.mcp-save').addEventListener('click', async () => {
-                const text = document.getElementById('mcp-edit-area').value;
-                try {
-                    await Api.importMcpServer(this.selectedMcpPlatform, name, text);
-                    this.closeModal();
-                    await this.selectMcpPlatform(this.selectedMcpPlatform);
-                } catch (e) {
-                    alert(i.tWith('mcp.parse_error', { error: e.SyncError || e }));
-                }
-            });
-            this.modalEl().querySelector('.modal-cancel').addEventListener('click', () => this.closeModal());
-        } catch (e) {
-            alert('Error: ' + e);
-        }
     }
 
     async showMcpAdd() {
@@ -545,19 +520,29 @@ class App {
         </div>
         <div class="space-y-1">`;
         for (const s of this.mcpServers) {
-            html += `<div class="flex items-center gap-2 px-3 py-2 rounded hover:bg-gray-800 group">
-                <button class="flex-1 text-left cursor-pointer mcp-server-item" data-name="${esc(s.name)}">
-                    <div class="text-cyan-400 font-medium">${esc(s.name)}</div>
-                    <div class="text-gray-500 text-sm">${esc(s.summary)}</div>
-                </button>
-                <button class="text-xs text-red-600 hover:text-red-400 px-2 py-1 cursor-pointer hidden group-hover:inline mcp-delete-btn" data-name="${esc(s.name)}">${i.t('mcp.delete')}</button>
+            const expanded = this.expandedMcpServer === s.name;
+            const detail = this.mcpServerDetails[s.name];
+            html += `<div class="rounded ${expanded ? 'bg-gray-800' : 'hover:bg-gray-800/50'}">
+                <div class="flex items-center gap-2 px-3 py-2 group">
+                    <button class="flex-1 text-left cursor-pointer mcp-server-item flex items-center gap-2" data-name="${esc(s.name)}">
+                        <span class="text-xs transition ${expanded ? 'rotate-90' : ''} inline-block text-gray-500">&#9654;</span>
+                        <div class="flex-1">
+                            <div class="text-cyan-400 font-medium">${esc(s.name)}</div>
+                            <div class="text-gray-500 text-sm">${esc(s.summary)}</div>
+                        </div>
+                    </button>
+                    <button class="text-xs text-red-600 hover:text-red-400 px-2 py-1 cursor-pointer hidden group-hover:inline mcp-delete-btn" data-name="${esc(s.name)}">${i.t('mcp.delete')}</button>
+                </div>
+                <div class="mcp-expand-area ${expanded ? '' : 'hidden'}" data-server="${esc(s.name)}">
+                    ${detail ? this.renderMcpAccordionContent(s.name, detail) : '<div class="px-3 pb-2 text-gray-500 text-sm">Loading...</div>'}
+                </div>
             </div>`;
         }
         html += '</div>';
         el.innerHTML = html;
         el.querySelector('.mcp-add-btn').addEventListener('click', () => this.showMcpAdd());
         el.querySelectorAll('.mcp-server-item').forEach(btn => {
-            btn.addEventListener('click', () => this.showMcpEditor(btn.dataset.name));
+            btn.addEventListener('click', () => this.toggleMcpServer(btn.dataset.name));
         });
         el.querySelectorAll('.mcp-delete-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -565,6 +550,92 @@ class App {
                 this.deleteMcpServer(btn.dataset.name);
             });
         });
+        // Bind blur auto-save on textareas
+        el.querySelectorAll('textarea[data-edit-name]').forEach(ta => {
+            const name = ta.dataset.editName;
+            const detail = this.mcpServerDetails[name];
+            const i = this.i18n;
+            // Store original wrapped text for revert
+            const originalText = ta.value;
+            ta.addEventListener('blur', async () => {
+                const text = ta.value.trim();
+                if (text === originalText.trim()) return;
+                // Validate and unwrap
+                let saveText;
+                if (detail.format === 'toml') {
+                    saveText = text;
+                } else {
+                    try {
+                        const parsed = JSON.parse(text);
+                        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.keys(parsed).length === 1 && parsed[name]) {
+                            saveText = JSON.stringify(parsed[name], null, 2);
+                        } else {
+                            saveText = JSON.stringify(parsed, null, 2);
+                        }
+                    } catch {
+                        alert(i.t('mcp.parse_error').includes('{error}') ? 'Invalid JSON format' : i.tWith('mcp.parse_error', { error: 'Invalid JSON' }));
+                        ta.value = originalText;
+                        return;
+                    }
+                }
+                try {
+                    await Api.importMcpServer(this.selectedMcpPlatform, name, saveText);
+                    // Update cache with new detail
+                    const newDetail = await Api.getMcpServer(this.selectedMcpPlatform, name);
+                    this.mcpServerDetails[name] = { config_text: newDetail.config_text, format: newDetail.format };
+                    this.renderMcpServerList();
+                } catch (e) {
+                    alert(i.tWith('mcp.parse_error', { error: e.SyncError || e }));
+                    ta.value = originalText;
+                }
+            });
+        });
+    }
+
+    renderMcpAccordionContent(name, detail) {
+        const i = this.i18n;
+        const isToml = detail.format === 'toml';
+        // Wrap config inside { "serverName": { ...config } }
+        let wrapped;
+        if (isToml) {
+            // For TOML, display as [mcp_servers.name] section style
+            wrapped = detail.config_text;
+        } else {
+            // Wrap JSON in outer object with server name as key
+            try {
+                const configObj = JSON.parse(detail.config_text);
+                const wrappedObj = {};
+                wrappedObj[name] = configObj;
+                wrapped = JSON.stringify(wrappedObj, null, 2);
+            } catch {
+                wrapped = detail.config_text;
+            }
+        }
+        return `<div class="px-3 pb-3 space-y-2">
+            <div class="text-xs text-gray-500">${isToml ? 'TOML' : 'JSON'}</div>
+            <textarea data-edit-name="${esc(name)}" style="height:20rem" class="w-full bg-gray-900 text-sm text-gray-200 font-mono rounded p-3 border border-gray-600 focus:border-cyan-500 outline-none resize-y">${esc(wrapped)}</textarea>
+        </div>`;
+    }
+
+    async toggleMcpServer(name) {
+        if (this.expandedMcpServer === name) {
+            this.expandedMcpServer = null;
+            this.renderMcpServerList();
+            return;
+        }
+        this.expandedMcpServer = name;
+        // Fetch detail if not cached
+        if (!this.mcpServerDetails[name]) {
+            try {
+                const detail = await Api.getMcpServer(this.selectedMcpPlatform, name);
+                this.mcpServerDetails[name] = { config_text: detail.config_text, format: detail.format };
+            } catch (e) {
+                alert('Error: ' + e);
+                this.expandedMcpServer = null;
+                return;
+            }
+        }
+        this.renderMcpServerList();
     }
 
     renderSkillList() {
