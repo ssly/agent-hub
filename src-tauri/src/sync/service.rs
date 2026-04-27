@@ -56,8 +56,9 @@ pub fn sync_overwrite(source: &Skill, target_platform: &Platform) -> Result<(), 
 fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), SyncError> {
     let resolved_source = std::path::Path::canonicalize(source)
         .map_err(|e| SyncError::IoError(format!("Failed to resolve path: {}", e)))?;
+    let parent = target.parent().ok_or_else(|| SyncError::IoError("Invalid target path".into()))?;
     let options = fs_extra::dir::CopyOptions::new().content_only(false).copy_inside(false);
-    fs_extra::dir::copy(&resolved_source, target.parent().unwrap(), &options)
+    fs_extra::dir::copy(&resolved_source, parent, &options)
         .map_err(|e| SyncError::IoError(e.to_string()))?;
     Ok(())
 }
