@@ -3,7 +3,8 @@
   "private": true,
   "scripts": {
     "dev:css": "npx @tailwindcss/cli -i ./src/input.css -o ./src/styles.css --watch",
-    "build:css": "npx @tailwindcss/cli -i ./src/input.css -o ./src/styles.css --minify"
+    "build:css": "npx @tailwindcss/cli -i ./src/input.css -o ./src/styles.css --minify",
+    "version": "node scripts/sync-version.js"
   },
   "devDependencies": {
     "@tailwindcss/cli": "^4",

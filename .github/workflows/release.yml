@@ -27,6 +27,7 @@ jobs:
           node-version: 20
 
       - run: npm install
+      - run: npm run version -- ${{ github.ref_name }}
       - run: npm run build:css
 
       - uses: dtolnay/rust-toolchain@stable
