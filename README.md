@@ -10,6 +10,7 @@
 - **一键同步** — 将 Skill 从平台 A 同步到平台 B，二次确认防止误操作，目标已存在时展示差异供你决定覆盖或保留
 - **文件夹支持** — 支持嵌套在子文件夹中的 Skill，按层级分组展示，可整文件夹批量同步
 - **符号链接** — 自动识别符号链接 Skill，同步时复制实际源文件内容
+- **MCP Server 管理** — 管理 Claude Code、Cursor、Gemini、Kiro、Codex CLI 等平台的 MCP Server 配置，手风琴式展开编辑，支持 JSON/TOML 格式自动转换
 - **全局搜索** — 跨平台搜索 Skill 名称和描述
 - **中英双语** — 自动检测系统语言，支持即时切换
 
@@ -125,6 +126,8 @@ skill_dir = "~/.my-agent/skills"
 
 ## 支持的平台
 
+### Skill 管理
+
 | 平台 | Skill 目录 |
 |------|-----------|
 | Claude Code | `~/.claude/skills/` |
@@ -136,6 +139,16 @@ skill_dir = "~/.my-agent/skills"
 | Trae | `~/.trae/skills/` |
 | Kiro | `~/.kiro/skills/` |
 | Shared Pool | `~/.agents/skills/` |
+
+### MCP Server 管理
+
+| 平台 | 配置路径 | 格式 |
+|------|---------|------|
+| Claude Code | `~/.claude.json` | JSON |
+| Cursor | `~/.cursor/mcp.json` | JSON |
+| Gemini | `~/.gemini/settings.json` | JSON |
+| Kiro | `~/.kiro/settings/mcp.json` | JSON |
+| Codex CLI | `~/.codex/config.toml` | TOML |
 
 ## License
 
