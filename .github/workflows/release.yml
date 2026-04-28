@@ -35,6 +35,7 @@ jobs:
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - uses: tauri-apps/tauri-action@v0
+        id: tauri
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -44,3 +45,17 @@ jobs:
           releaseName: "Agent Hub ${{ github.ref_name }}"
           releaseBody: "See the assets to download and install this version."
           args: ${{ matrix.args }}
+
+      - name: Verify updater manifests
+        shell: bash
+        run: |
+          echo "Checking for updater manifests..."
+          TARGET=$(echo "${{ matrix.platform == 'macos-latest' && matrix.args || 'windows-latest' }}" | grep -oE 'aarch64-apple-darwin|x86_64-apple-darwin|x86_64-pc-windows-msvc' || echo "${{ matrix.platform == 'windows-latest' && 'x86_64-pc-windows-msvc' || '' }}")
+          echo "Resolved target: $TARGET"
+          if [ -f "src-tauri/target/release/bundle/$TARGET.json" ]; then
+            echo "✅ Updater manifest found: $TARGET.json"
+          else
+            echo "⚠️  WARNING: No updater manifest generated for $TARGET"
+            echo "   Make sure TAURI_SIGNING_PRIVATE_KEY is set in GitHub Secrets."
+            echo "   Generate keys with: npx @tauri-apps/cli signer generate -w ~/.tauri/myapp.key"
+          fi
