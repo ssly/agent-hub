@@ -79,11 +79,35 @@ class App {
         }
     }
 
+    _reconcilePlatformSelection() {
+        if (this.platforms.length === 0) {
+            this.selectedPlatformId = null;
+            this.selectedSkillName = null;
+            this.selectedFolder = '';
+            this.currentView = 'skills';
+            return;
+        }
+        const stillExists = this.platforms.some(p => p.id === this.selectedPlatformId);
+        if (!stillExists) {
+            this.selectedPlatformId = this.platforms[0].id;
+            this.selectedSkillName = null;
+            this.selectedFolder = '';
+            this.currentView = 'skills';
+        }
+    }
+
+    async reloadPlatforms() {
+        this.platforms = await Api.listPlatforms();
+        this._reconcilePlatformSelection();
+        if (this.selectedPlatformId) {
+            await this.loadSkills();
+        }
+        this.renderSidebar();
+    }
+
     async refreshPlatforms() {
         this.platforms = await Api.refreshPlatforms();
-        if (this.platforms.length > 0 && !this.selectedPlatformId) {
-            this.selectedPlatformId = this.platforms[0].id;
-        }
+        this._reconcilePlatformSelection();
         if (this.selectedPlatformId) {
             await this.loadSkills();
         }
@@ -128,7 +152,7 @@ class App {
         try {
             await Api.syncSkill(this.selectedPlatformId, targetPlatformId, this.selectedSkillName, this.selectedFolder, overwrite);
             this.closeModal();
-            await this.refreshPlatforms();
+            await this.reloadPlatforms();
             this.currentView = 'skills';
             this.selectedSkillName = null;
             this.selectedFolder = '';
@@ -142,7 +166,7 @@ class App {
         try {
             const result = await Api.syncFolder(this.selectedPlatformId, targetPlatformId, folder);
             this.closeModal();
-            await this.refreshPlatforms();
+            await this.reloadPlatforms();
             this.currentView = 'skills';
             this.render();
             const i = this.i18n;
@@ -163,7 +187,7 @@ class App {
                     this.selectedFolder = '';
                     this.currentView = 'skills';
                 }
-                await this.refreshPlatforms();
+                await this.reloadPlatforms();
                 await this.refreshTrashCount();
                 this.render();
             } catch (e) {
@@ -488,7 +512,7 @@ class App {
         try {
             await Api.restoreTrashItem(id);
             this.closeModal();
-            await this.refreshPlatforms();
+            await this.reloadPlatforms();
             await this.refreshMcpPlatforms();
             await this.refreshTrashCount();
             // If MCP tab and was viewing a platform, re-select it
