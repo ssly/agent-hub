@@ -1012,11 +1012,13 @@ class App {
         const isToml = detail.format === 'toml';
         // Wrap config for display
         let wrapped;
+        let parsedConfig = null;
         if (isToml) {
             wrapped = `[mcp_servers.${name}]\n${detail.config_text}`;
         } else {
             try {
                 const configObj = JSON.parse(detail.config_text);
+                parsedConfig = configObj;
                 const wrappedObj = {};
                 wrappedObj[name] = configObj;
                 wrapped = JSON.stringify(wrappedObj, null, 2);
@@ -1024,9 +1026,42 @@ class App {
                 wrapped = detail.config_text;
             }
         }
+
+        // Build structured config summary
+        let summaryHtml = '';
+        if (parsedConfig) {
+            summaryHtml += '<div class="space-y-1.5 mb-3">';
+            // Command
+            if (parsedConfig.command) {
+                summaryHtml += `<div class="flex items-start gap-2 text-sm">
+                    <span class="text-gray-500 w-16 flex-shrink-0 text-xs font-medium uppercase tracking-wide">Command</span>
+                    <code class="text-cyan-400 font-mono text-xs break-all">${esc(parsedConfig.command)}</code>
+                </div>`;
+            }
+            // Args
+            if (parsedConfig.args && Array.isArray(parsedConfig.args) && parsedConfig.args.length > 0) {
+                summaryHtml += `<div class="flex items-start gap-2 text-sm">
+                    <span class="text-gray-500 w-16 flex-shrink-0 text-xs font-medium uppercase tracking-wide">Args</span>
+                    <code class="text-gray-300 font-mono text-xs">${esc(parsedConfig.args.join(' '))}</code>
+                </div>`;
+            }
+            // Env
+            if (parsedConfig.env && typeof parsedConfig.env === 'object' && Object.keys(parsedConfig.env).length > 0) {
+                summaryHtml += '<div class="flex items-start gap-2 text-sm">';
+                summaryHtml += '<span class="text-gray-500 w-16 flex-shrink-0 text-xs font-medium uppercase tracking-wide">Env</span>';
+                summaryHtml += '<div class="space-y-0.5">';
+                for (const [k, v] of Object.entries(parsedConfig.env)) {
+                    summaryHtml += `<div class="text-xs font-mono"><span class="text-purple-400">${esc(k)}</span><span class="text-gray-600">=</span><span class="text-green-400">${esc(String(v))}</span></div>`;
+                }
+                summaryHtml += '</div></div>';
+            }
+            summaryHtml += '</div>';
+        }
+
         return `<div class="px-3 pb-3 space-y-2">
+            ${summaryHtml}
             <div class="text-xs text-gray-500">${isToml ? 'TOML' : 'JSON'}</div>
-            <textarea data-edit-name="${esc(name)}" style="height:20rem" class="w-full bg-gray-900 text-sm text-gray-200 font-mono rounded p-3 border border-gray-600 focus:border-cyan-500 outline-none resize-y">${esc(wrapped)}</textarea>
+            <textarea data-edit-name="${esc(name)}" style="height:16rem" class="w-full bg-gray-900 text-sm text-gray-200 font-mono rounded p-3 border border-gray-600 focus:border-cyan-500 outline-none resize-y">${esc(wrapped)}</textarea>
         </div>`;
     }
 
@@ -1296,9 +1331,8 @@ function truncate(str, len) {
     return str && str.length > len ? str.substring(0, len) + '...' : str;
 }
 
-// Convert unified diff lines to side-by-side pairs
-// Input: [{ tag: 'context'|'removed'|'added', content }] or [{ Context, Added, Removed, FileHeader }]
-// Output: [{ left: {text, type}, right: {text, type} }]
+// Convert unified diff lines to side-by-side pairs with line numbers
+// Output: [{ left: {text, type, num}, right: {text, type, num}, isChanged }]
 function toSideBySide(lines) {
     const pairs = [];
     const normalized = lines.map(l => {
@@ -1310,35 +1344,40 @@ function toSideBySide(lines) {
         return { tag: 'context', content: '' };
     });
 
+    let leftNum = 1, rightNum = 1;
     let i = 0;
     while (i < normalized.length) {
         const line = normalized[i];
         if (line.tag === 'context') {
-            pairs.push({ left: { text: line.content, type: 'context' }, right: { text: line.content, type: 'context' } });
+            pairs.push({
+                left: { text: line.content, type: 'context', num: leftNum++ },
+                right: { text: line.content, type: 'context', num: rightNum++ },
+                isChanged: false
+            });
             i++;
         } else if (line.tag === 'removed') {
-            // Collect consecutive removed
             const removed = [];
             while (i < normalized.length && normalized[i].tag === 'removed') {
                 removed.push(normalized[i].content);
                 i++;
             }
-            // Collect consecutive added
             const added = [];
             while (i < normalized.length && normalized[i].tag === 'added') {
                 added.push(normalized[i].content);
                 i++;
             }
-            // Pair them up
             const max = Math.max(removed.length, added.length);
             for (let j = 0; j < max; j++) {
-                pairs.push({
-                    left: j < removed.length ? { text: removed[j], type: 'removed' } : { text: '', type: 'empty' },
-                    right: j < added.length ? { text: added[j], type: 'added' } : { text: '', type: 'empty' },
-                });
+                const l = j < removed.length ? { text: removed[j], type: 'removed', num: leftNum++ } : { text: '', type: 'empty', num: null };
+                const r = j < added.length ? { text: added[j], type: 'added', num: rightNum++ } : { text: '', type: 'empty', num: null };
+                pairs.push({ left: l, right: r, isChanged: true });
             }
         } else if (line.tag === 'added') {
-            pairs.push({ left: { text: '', type: 'empty' }, right: { text: line.content, type: 'added' } });
+            pairs.push({
+                left: { text: '', type: 'empty', num: null },
+                right: { text: line.content, type: 'added', num: rightNum++ },
+                isChanged: true
+            });
             i++;
         } else {
             i++;
@@ -1348,16 +1387,47 @@ function toSideBySide(lines) {
 }
 
 function renderSideBySide(pairs) {
+    const CTX = 3; // context lines before/after changes
+
+    // Find which indices to show
+    const show = new Set();
+    for (let i = 0; i < pairs.length; i++) {
+        if (pairs[i].isChanged) {
+            for (let j = Math.max(0, i - CTX); j <= Math.min(pairs.length - 1, i + CTX); j++) {
+                show.add(j);
+            }
+        }
+    }
+    // If no changes, show all
+    if (show.size === 0) {
+        for (let i = 0; i < pairs.length; i++) show.add(i);
+    }
+
+    const lineNumStyle = 'color:#475569;min-width:2.5rem;text-align:right;padding-right:0.5rem;user-select:none;flex-shrink:0';
     let html = `<div style="display:grid;grid-template-columns:1fr 1fr;font-size:0.8125rem;line-height:1.6;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;background:#0a0a0f;border-radius:0.5rem;overflow-x:auto;border:1px solid #1e293b">`;
     html += `<div style="background:#1e293b;color:#94a3b8;font-size:0.7rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;text-align:center;padding:0.4rem 0;border-right:1px solid #334155">Before</div>`;
     html += `<div style="background:#1e293b;color:#94a3b8;font-size:0.7rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;text-align:center;padding:0.4rem 0">After</div>`;
-    for (const p of pairs) {
-        const lBg = p.left.type === 'removed' ? 'background:rgba(153,27,27,0.25);color:#fca5a5' : p.left.type === 'empty' ? 'background:rgba(10,10,15,0.6)' : 'color:#64748b';
-        const rBg = p.right.type === 'added' ? 'background:rgba(22,101,52,0.25);color:#86efac' : p.right.type === 'empty' ? 'background:rgba(10,10,15,0.6)' : 'color:#64748b';
-        const leftPre = p.left.type === 'removed' ? '<span style="color:#ef4444;font-weight:600">-</span> ' : '<span style="color:#334155"> </span> ';
-        const rightPre = p.right.type === 'added' ? '<span style="color:#22c55e;font-weight:600">+</span> ' : '<span style="color:#334155"> </span> ';
-        html += `<div style="${lBg};padding:0 0.75rem;white-space:pre;overflow:hidden;border-right:1px solid #1e293b;min-height:1.6em">${leftPre}${esc(p.left.text)}</div>`;
-        html += `<div style="${rBg};padding:0 0.75rem;white-space:pre;overflow:hidden;min-height:1.6em">${rightPre}${esc(p.right.text)}</div>`;
+
+    let lastShown = -1;
+    for (let i = 0; i < pairs.length; i++) {
+        if (!show.has(i)) {
+            if (lastShown === i - 1 && i + 1 < pairs.length && show.has(i + 1)) {
+                // Show ellipsis
+                html += `<div style="color:#475569;text-align:center;padding:0.2rem 0;border-right:1px solid #1e293b;font-size:0.75rem">···</div>`;
+                html += `<div style="color:#475569;text-align:center;padding:0.2rem 0;font-size:0.75rem">···</div>`;
+            }
+            continue;
+        }
+        lastShown = i;
+        const p = pairs[i];
+        const lBg = p.left.type === 'removed' ? 'background:rgba(153,27,27,0.25);color:#fca5a5' : p.left.type === 'empty' ? 'background:rgba(10,10,15,0.6)' : 'color:#94a3b8';
+        const rBg = p.right.type === 'added' ? 'background:rgba(22,101,52,0.25);color:#86efac' : p.right.type === 'empty' ? 'background:rgba(10,10,15,0.6)' : 'color:#94a3b8';
+        const leftPre = p.left.type === 'removed' ? '<span style="color:#ef4444;font-weight:600">-</span> ' : p.left.type === 'empty' ? ' ' : ' ';
+        const rightPre = p.right.type === 'added' ? '<span style="color:#22c55e;font-weight:600">+</span> ' : p.right.type === 'empty' ? ' ' : ' ';
+        const leftNum = p.left.num != null ? `<span style="${lineNumStyle}">${p.left.num}</span>` : `<span style="${lineNumStyle}"></span>`;
+        const rightNum = p.right.num != null ? `<span style="${lineNumStyle}">${p.right.num}</span>` : `<span style="${lineNumStyle}"></span>`;
+        html += `<div style="${lBg};padding:0 0.6rem;white-space:pre;overflow:hidden;border-right:1px solid #1e293b;min-height:1.6em;display:flex;align-items:baseline">${leftNum}${leftPre}${esc(p.left.text)}</div>`;
+        html += `<div style="${rBg};padding:0 0.6rem;white-space:pre;overflow:hidden;min-height:1.6em;display:flex;align-items:baseline">${rightNum}${rightPre}${esc(p.right.text)}</div>`;
     }
     html += `</div>`;
     return html;
