@@ -1,5 +1,7 @@
 import { I18n } from './i18n.js';
 import * as Api from './api.js';
+import { check } from '@tauri-apps/plugin-updater';
+import { relaunch } from '@tauri-apps/plugin-process';
 
 // SVG Icons (replacing emoji)
 const Icons = {
@@ -18,17 +20,6 @@ const Icons = {
     globe: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>',
     download: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
 };
-
-// Updater / Process plugins via global Tauri API (no bundler)
-const tauriInvoke = window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);
-async function checkUpdate() {
-    try {
-        return await tauriInvoke('plugin:updater|check');
-    } catch { return null; }
-}
-function relaunch() {
-    return tauriInvoke('plugin:process|restart');
-}
 
 class App {
     constructor() {
@@ -55,7 +46,7 @@ class App {
         // Trash state
         this.trashCount = 0;
         // Update state
-        this.updateInfo = null; // { version, body, date } when update available
+        this.update = null; // Update object when available
         this.appVersion = '...';
     }
 
@@ -227,9 +218,9 @@ class App {
     // --- Update ---
     async checkForUpdate() {
         try {
-            const update = await checkUpdate();
+            const update = await check();
             if (update) {
-                this.updateInfo = { version: update.version, body: update.body, date: update.date, currentVersion: update.currentVersion, rid: update.rid };
+                this.update = update;
                 this.renderUpdateBadge();
             }
         } catch {}
@@ -241,23 +232,23 @@ class App {
     }
 
     renderUpdateBadge() {
-        if (!this.updateInfo) return;
+        if (!this.update) return;
         const el = document.getElementById('update-badge');
         const i = this.i18n;
         el.className = 'p-2 border-t border-gray-700 cursor-pointer hover:bg-gray-700/50';
         el.innerHTML = `<div class="flex items-center gap-1.5 px-1">
             <span class="text-green-400 flex-shrink-0">${Icons.dot}</span>
             <span class="text-xs text-gray-400">${i.t('update.badge')}</span>
-            <span class="text-xs text-gray-500">v${esc(this.updateInfo.version)}</span>
+            <span class="text-xs text-gray-500">v${esc(this.update.version)}</span>
         </div>`;
         el.onclick = () => this.showUpdateModal();
     }
 
     showUpdateModal() {
         const i = this.i18n;
-        const info = this.updateInfo;
-        const transition = i.tWith('update.transition', { current: info.currentVersion, latest: info.version });
-        const bodyHtml = info.body ? `<div class="text-sm text-gray-400 mb-4 max-h-32 overflow-y-auto whitespace-pre-wrap">${esc(info.body)}</div>` : '';
+        const update = this.update;
+        const transition = i.tWith('update.transition', { current: update.currentVersion, latest: update.version });
+        const bodyHtml = update.body ? `<div class="text-sm text-gray-400 mb-4 max-h-32 overflow-y-auto whitespace-pre-wrap">${esc(update.body)}</div>` : '';
         const html = `<div class="p-5">
             <h2 class="text-lg font-bold text-yellow-400 mb-3">${i.t('update.title')}</h2>
             <p class="text-sm text-green-400 font-mono mb-3">${transition}</p>
@@ -283,9 +274,13 @@ class App {
             confirmBtn.classList.add('opacity-50');
             cancelBtn.classList.add('hidden');
             statusEl.textContent = i.t('update.downloading');
-            await tauriInvoke('plugin:updater|download', { rid: this.updateInfo.rid });
+            await this.update.download((event) => {
+                if (event.event === 'Progress') {
+                    statusEl.textContent = i.t('update.downloading');
+                }
+            });
             statusEl.textContent = i.t('update.installing');
-            await tauriInvoke('plugin:updater|install', { rid: this.updateInfo.rid });
+            await this.update.install();
             await relaunch();
         } catch (e) {
             statusEl.textContent = i.tWith('update.error', { error: e.message || e });
