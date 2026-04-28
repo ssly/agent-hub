@@ -96,6 +96,10 @@ export async function syncMcpServer(sourcePlatformId, targetPlatformId, serverNa
     return invoke('sync_mcp_server_cmd', { sourcePlatformId, targetPlatformId, serverName });
 }
 
+export async function getAppVersion() {
+    return invoke('get_app_version');
+}
+
 // Trash
 export async function listTrash() {
     return invoke('list_trash_cmd');

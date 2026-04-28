@@ -442,6 +442,13 @@ pub fn import_mcp_server_cmd(platform_id: String, name: String, config_text: Str
     Ok("ok".to_string())
 }
 
+// --- App Info ---
+
+#[tauri::command]
+pub fn get_app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
 // --- MCP Sync Commands ---
 
 #[derive(Debug, Clone, serde::Serialize)]

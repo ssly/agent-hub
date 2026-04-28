@@ -56,6 +56,7 @@ class App {
         this.trashCount = 0;
         // Update state
         this.updateInfo = null; // { version, body, date } when update available
+        this.appVersion = '...';
     }
 
     async init() {
@@ -64,9 +65,18 @@ class App {
         await this.refreshPlatforms();
         await this.refreshMcpPlatforms();
         await this.refreshTrashCount();
+        await this.loadAppVersion();
         this.bindEvents();
         this.render();
         this.checkForUpdate();
+    }
+
+    async loadAppVersion() {
+        try {
+            this.appVersion = await Api.getAppVersion();
+        } catch {
+            this.appVersion = '0.0.0';
+        }
     }
 
     async refreshPlatforms() {
@@ -199,6 +209,11 @@ class App {
                 this.renderUpdateBadge();
             }
         } catch {}
+    }
+
+    renderVersion() {
+        const el = document.getElementById('version-label');
+        if (el) el.textContent = `v${this.appVersion}`;
     }
 
     renderUpdateBadge() {
@@ -766,6 +781,7 @@ class App {
         this.renderTrashBadge();
         this.renderToolbar();
         this.renderView();
+        this.renderVersion();
         const langLabel = document.getElementById('btn-lang-label');
         if (langLabel) langLabel.textContent = this.i18n.locale === 'en' ? 'EN' : '中文';
     }
