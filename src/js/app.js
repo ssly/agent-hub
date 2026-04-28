@@ -205,7 +205,7 @@ class App {
         try {
             const update = await checkUpdate();
             if (update) {
-                this.updateInfo = { version: update.version, body: update.body, date: update.date, currentVersion: update.currentVersion };
+                this.updateInfo = { version: update.version, body: update.body, date: update.date, currentVersion: update.currentVersion, rid: update.rid };
                 this.renderUpdateBadge();
             }
         } catch {}
@@ -259,9 +259,9 @@ class App {
             confirmBtn.classList.add('opacity-50');
             cancelBtn.classList.add('hidden');
             statusEl.textContent = i.t('update.downloading');
-            await tauriInvoke('plugin:updater|download');
+            await tauriInvoke('plugin:updater|download', { rid: this.updateInfo.rid });
             statusEl.textContent = i.t('update.installing');
-            await tauriInvoke('plugin:updater|install');
+            await tauriInvoke('plugin:updater|install', { rid: this.updateInfo.rid });
             await relaunch();
         } catch (e) {
             statusEl.textContent = i.tWith('update.error', { error: e.message || e });
