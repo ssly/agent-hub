@@ -1348,7 +1348,7 @@ function toSideBySide(lines) {
 }
 
 function renderSideBySide(pairs) {
-    let html = `<div style="display:grid;grid-template-columns:1fr 1fr;font-size:0.8125rem;line-height:1.6;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;background:#0a0a0f;border-radius:0.5rem;overflow:hidden;border:1px solid #1e293b">`;
+    let html = `<div style="display:grid;grid-template-columns:1fr 1fr;font-size:0.8125rem;line-height:1.6;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;background:#0a0a0f;border-radius:0.5rem;overflow-x:auto;border:1px solid #1e293b">`;
     html += `<div style="background:#1e293b;color:#94a3b8;font-size:0.7rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;text-align:center;padding:0.4rem 0;border-right:1px solid #334155">Before</div>`;
     html += `<div style="background:#1e293b;color:#94a3b8;font-size:0.7rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;text-align:center;padding:0.4rem 0">After</div>`;
     for (const p of pairs) {
@@ -1356,8 +1356,8 @@ function renderSideBySide(pairs) {
         const rBg = p.right.type === 'added' ? 'background:rgba(22,101,52,0.25);color:#86efac' : p.right.type === 'empty' ? 'background:rgba(10,10,15,0.6)' : 'color:#64748b';
         const leftPre = p.left.type === 'removed' ? '<span style="color:#ef4444;font-weight:600">-</span> ' : '<span style="color:#334155"> </span> ';
         const rightPre = p.right.type === 'added' ? '<span style="color:#22c55e;font-weight:600">+</span> ' : '<span style="color:#334155"> </span> ';
-        html += `<div style="${lBg};padding:0 0.75rem;white-space:pre;overflow-x:auto;border-right:1px solid #1e293b;min-height:1.6em">${leftPre}${esc(p.left.text)}</div>`;
-        html += `<div style="${rBg};padding:0 0.75rem;white-space:pre;overflow-x:auto;min-height:1.6em">${rightPre}${esc(p.right.text)}</div>`;
+        html += `<div style="${lBg};padding:0 0.75rem;white-space:pre;overflow:hidden;border-right:1px solid #1e293b;min-height:1.6em">${leftPre}${esc(p.left.text)}</div>`;
+        html += `<div style="${rBg};padding:0 0.75rem;white-space:pre;overflow:hidden;min-height:1.6em">${rightPre}${esc(p.right.text)}</div>`;
     }
     html += `</div>`;
     return html;

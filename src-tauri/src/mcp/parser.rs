@@ -181,21 +181,30 @@ pub fn preview_mcp_sync(
 
 pub(crate) fn apply_json_server(before: &str, mcp_key: &str, name: &str, config: &Value) -> Result<String, String> {
     let new_config_str = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
-    // Indent the new config to match the expected nesting level inside the mcp_key object
-    let indented_config = new_config_str.lines()
-        .map(|line| format!("      {}", line)) // 6 spaces for 3 indent levels
-        .collect::<Vec<_>>()
-        .join("\n");
-    // Remove leading spaces from first line to align key properly
-    let indented_config = indented_config.strip_prefix("      ").unwrap_or(&indented_config);
+    // Build indented config body. Prettified output:
+    //   {
+    //     "key": "value"
+    //   }
+    // We need: content at level 3 (6 spaces), closing } at level 2 (4 spaces).
+    let lines: Vec<&str> = new_config_str.lines().collect();
+    let mut inner_body = String::new();
+    for line in &lines[1..lines.len() - 1] {
+        // Add 4 spaces to existing 2-space indent → 6 spaces (level 3)
+        inner_body.push_str("    ");
+        inner_body.push_str(line);
+        inner_body.push('\n');
+    }
+    // Closing brace at level 2 (4 spaces)
+    inner_body.push_str("    }");
 
     if before.trim().is_empty() || before.trim() == "{}" {
-        return Ok(format!("{{\n  \"{}\": {{\n    \"{}\": {}\n  }}\n}}", mcp_key, name, indented_config));
+        return Ok(format!(
+            "{{\n  \"{mcp_key}\": {{\n    \"{name}\": {{\n{inner_body}\n  }}\n}}",
+        ));
     }
 
     // If the file doesn't contain the mcp_key at all, treat as fresh
     if !before.contains(&format!("\"{}\"", mcp_key)) {
-        // Parse existing JSON, add mcp_key, and reformat
         let mut doc: Value = serde_json::from_str(before).map_err(|e| e.to_string())?;
         let obj = doc.as_object_mut().ok_or("Not a JSON object")?;
         let mut servers_map = serde_json::Map::new();
@@ -206,33 +215,22 @@ pub(crate) fn apply_json_server(before: &str, mcp_key: &str, name: &str, config:
 
     let server_key = format!("\"{}\"", name);
 
-    // Find the server key inside the original text — look for "name": { ... }
+    // Update existing server — find "name": { ... } and replace the block
     if let Some(key_pos) = before.find(&server_key) {
-        // Check that this is actually a key (followed by `:` after whitespace)
         let after_key = &before[key_pos + server_key.len()..];
         let after_key_trimmed = after_key.trim_start();
         if after_key_trimmed.starts_with(':') {
             let colon_pos = key_pos + server_key.len() + (after_key.len() - after_key_trimmed.len());
             let after_colon = before[colon_pos + 1..].trim_start();
             if after_colon.starts_with('{') {
-                // Find the matching closing brace
                 let brace_start = colon_pos + 1 + (before[colon_pos + 1..].len() - after_colon.len());
                 let end_pos = find_matching_brace(before, brace_start)?;
-                // Remove trailing comma if present after the closing brace
                 let after_end = before[end_pos + 1..].trim_start();
                 let has_comma = after_end.starts_with(',');
                 let delete_end = if has_comma { end_pos + 1 + after_end[1..].find(',').unwrap_or(0) + 1 } else { end_pos };
-                let mut result = String::with_capacity(before.len());
+                let mut result = String::with_capacity(before.len() + inner_body.len());
                 result.push_str(&before[..brace_start]);
-                let inner = if indented_config.starts_with('{') {
-                    indented_config.to_owned()
-                } else {
-                    format!("{{\n{}", indented_config)
-                };
-                result.push_str(&inner);
-                if !indented_config.ends_with('}') {
-                    result.push_str("\n    }");
-                }
+                result.push_str(&inner_body);
                 if has_comma { result.push(','); }
                 result.push_str(&before[delete_end + 1..]);
                 return Ok(result);
@@ -240,20 +238,18 @@ pub(crate) fn apply_json_server(before: &str, mcp_key: &str, name: &str, config:
         }
     }
 
-    // Server not found — append to the mcp_key object
-    // Find the closing brace of the mcp_key object
+    // Append new server to the mcp_key object
     if let Some(mcp_pos) = before.find(&format!("\"{}\"", mcp_key)) {
         if let Some(obj_start) = before[mcp_pos..].find('{') {
             let abs_start = mcp_pos + obj_start;
             if let Ok(obj_end) = find_matching_brace(before, abs_start) {
-                let insert_text = if before[obj_end - 1..obj_end].trim().is_empty() {
-                    format!("\n    \"{}\": {}", name, indented_config)
-                } else {
-                    format!(",\n    \"{}\": {}", name, indented_config)
-                };
-                let mut result = String::with_capacity(before.len() + insert_text.len());
-                result.push_str(&before[..obj_end]);
-                result.push_str(&insert_text);
+                let inner_content = before[abs_start + 1..obj_end].trim();
+                let comma = if inner_content.is_empty() { "" } else { "," };
+                let insert = format!("{comma}\n    \"{name}\": {{\n{inner_body}");
+                let mut result = String::with_capacity(before.len() + insert.len());
+                result.push_str(before[..obj_end].trim_end());
+                result.push_str(&insert);
+                result.push('\n');
                 result.push_str(&before[obj_end..]);
                 return Ok(result);
             }
@@ -364,6 +360,20 @@ mod tests {
         assert!(result.contains("\"new-server\""));
         assert!(result.contains("\"echo\""));
         assert!(result.contains("\"test\""));
+        // Verify JSON is valid
+        let _: Value = serde_json::from_str(&result).expect("Result should be valid JSON");
+    }
+
+    #[test]
+    fn test_apply_json_targeted_edit_new_server_empty_object() {
+        let before = r#"{
+  "mcpServers": {}
+}"#;
+        let new_config = serde_json::json!({"command": "npx"});
+        let result = apply_json_server(before, "mcpServers", "first-server", &new_config).unwrap();
+        assert!(result.contains("\"first-server\""));
+        assert!(result.contains("\"npx\""));
+        let _: Value = serde_json::from_str(&result).expect("Result should be valid JSON");
     }
 
     #[test]
@@ -372,6 +382,7 @@ mod tests {
         let result = apply_json_server("{}", "mcpServers", "test-srv", &config).unwrap();
         assert!(result.contains("\"test-srv\""));
         assert!(result.contains("\"npx\""));
+        let _: Value = serde_json::from_str(&result).expect("Result should be valid JSON");
     }
 
     #[test]
