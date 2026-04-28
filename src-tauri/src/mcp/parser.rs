@@ -179,19 +179,108 @@ pub fn preview_mcp_sync(
     })
 }
 
-fn apply_json_server(before: &str, mcp_key: &str, name: &str, config: &Value) -> Result<String, String> {
-    let mut doc: Value = if before.trim().is_empty() {
-        serde_json::json!({})
-    } else {
-        serde_json::from_str(before).map_err(|e| e.to_string())?
-    };
-    let obj = doc.as_object_mut().ok_or("Not a JSON object")?;
-    let mut servers_map = obj.get(mcp_key)
-        .and_then(|v| v.as_object().cloned())
-        .unwrap_or_default();
-    servers_map.insert(name.to_string(), config.clone());
-    obj.insert(mcp_key.to_string(), Value::Object(servers_map));
-    serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())
+pub(crate) fn apply_json_server(before: &str, mcp_key: &str, name: &str, config: &Value) -> Result<String, String> {
+    let new_config_str = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
+    // Indent the new config to match the expected nesting level inside the mcp_key object
+    let indented_config = new_config_str.lines()
+        .map(|line| format!("      {}", line)) // 6 spaces for 3 indent levels
+        .collect::<Vec<_>>()
+        .join("\n");
+    // Remove leading spaces from first line to align key properly
+    let indented_config = indented_config.strip_prefix("      ").unwrap_or(&indented_config);
+
+    if before.trim().is_empty() || before.trim() == "{}" {
+        return Ok(format!("{{\n  \"{}\": {{\n    \"{}\": {}\n  }}\n}}", mcp_key, name, indented_config));
+    }
+
+    // If the file doesn't contain the mcp_key at all, treat as fresh
+    if !before.contains(&format!("\"{}\"", mcp_key)) {
+        // Parse existing JSON, add mcp_key, and reformat
+        let mut doc: Value = serde_json::from_str(before).map_err(|e| e.to_string())?;
+        let obj = doc.as_object_mut().ok_or("Not a JSON object")?;
+        let mut servers_map = serde_json::Map::new();
+        servers_map.insert(name.to_string(), config.clone());
+        obj.insert(mcp_key.to_string(), Value::Object(servers_map));
+        return serde_json::to_string_pretty(&doc).map_err(|e| e.to_string());
+    }
+
+    let server_key = format!("\"{}\"", name);
+
+    // Find the server key inside the original text — look for "name": { ... }
+    if let Some(key_pos) = before.find(&server_key) {
+        // Check that this is actually a key (followed by `:` after whitespace)
+        let after_key = &before[key_pos + server_key.len()..];
+        let after_key_trimmed = after_key.trim_start();
+        if after_key_trimmed.starts_with(':') {
+            let colon_pos = key_pos + server_key.len() + (after_key.len() - after_key_trimmed.len());
+            let after_colon = before[colon_pos + 1..].trim_start();
+            if after_colon.starts_with('{') {
+                // Find the matching closing brace
+                let brace_start = colon_pos + 1 + (before[colon_pos + 1..].len() - after_colon.len());
+                let end_pos = find_matching_brace(before, brace_start)?;
+                // Remove trailing comma if present after the closing brace
+                let after_end = before[end_pos + 1..].trim_start();
+                let has_comma = after_end.starts_with(',');
+                let delete_end = if has_comma { end_pos + 1 + after_end[1..].find(',').unwrap_or(0) + 1 } else { end_pos };
+                let mut result = String::with_capacity(before.len());
+                result.push_str(&before[..brace_start]);
+                let inner = if indented_config.starts_with('{') {
+                    indented_config.to_owned()
+                } else {
+                    format!("{{\n{}", indented_config)
+                };
+                result.push_str(&inner);
+                if !indented_config.ends_with('}') {
+                    result.push_str("\n    }");
+                }
+                if has_comma { result.push(','); }
+                result.push_str(&before[delete_end + 1..]);
+                return Ok(result);
+            }
+        }
+    }
+
+    // Server not found — append to the mcp_key object
+    // Find the closing brace of the mcp_key object
+    if let Some(mcp_pos) = before.find(&format!("\"{}\"", mcp_key)) {
+        if let Some(obj_start) = before[mcp_pos..].find('{') {
+            let abs_start = mcp_pos + obj_start;
+            if let Ok(obj_end) = find_matching_brace(before, abs_start) {
+                let insert_text = if before[obj_end - 1..obj_end].trim().is_empty() {
+                    format!("\n    \"{}\": {}", name, indented_config)
+                } else {
+                    format!(",\n    \"{}\": {}", name, indented_config)
+                };
+                let mut result = String::with_capacity(before.len() + insert_text.len());
+                result.push_str(&before[..obj_end]);
+                result.push_str(&insert_text);
+                result.push_str(&before[obj_end..]);
+                return Ok(result);
+            }
+        }
+    }
+
+    Err("Could not locate MCP key in JSON for targeted edit".into())
+}
+
+/// Find the matching `}` for a `{` at `open_pos` in `text`
+pub(crate) fn find_matching_brace(text: &str, open_pos: usize) -> Result<usize, String> {
+    let chars: Vec<char> = text[open_pos..].chars().collect();
+    let mut depth = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (i, &ch) in chars.iter().enumerate() {
+        if escaped { escaped = false; continue; }
+        if ch == '\\' && in_string { escaped = true; continue; }
+        if ch == '"' { in_string = !in_string; continue; }
+        if in_string { continue; }
+        if ch == '{' { depth += 1; }
+        if ch == '}' {
+            depth -= 1;
+            if depth == 0 { return Ok(open_pos + i); }
+        }
+    }
+    Err("Unmatched brace".into())
 }
 
 fn apply_toml_server(before: &str, mcp_key: &str, name: &str, config: &Value) -> Result<String, String> {
@@ -221,6 +310,77 @@ fn apply_toml_server(before: &str, mcp_key: &str, name: &str, config: &Value) ->
         // Append new section at end
         let trimmed = before.trim_end();
         Ok(format!("{}\n\n{}\n", trimmed, new_section))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_apply_json_targeted_edit_existing_server() {
+        let before = r#"{
+  "mcpServers": {
+    "server-a": {
+      "command": "npx",
+      "args": ["-y", "old-pkg"]
+    },
+    "context7": {
+      "command": "old-cmd"
+    },
+    "server-z": {
+      "command": "echo"
+    }
+  }
+}"#;
+        let new_config = serde_json::json!({
+            "command": "npx",
+            "args": ["-y", "@anthropic-ai/context7"]
+        });
+        let result = apply_json_server(before, "mcpServers", "context7", &new_config).unwrap();
+        // Should only change the context7 block, not touch server-a or server-z
+        assert!(result.contains("\"server-a\""));
+        assert!(result.contains("\"server-z\""));
+        assert!(result.contains("\"echo\""));
+        assert!(result.contains("@anthropic-ai/context7"));
+        assert!(!result.contains("old-cmd"));
+        // server-a formatting should remain untouched
+        assert!(result.contains("\"npx\","));
+        assert!(result.contains("\"old-pkg\""));
+    }
+
+    #[test]
+    fn test_apply_json_targeted_edit_new_server() {
+        let before = r#"{
+  "mcpServers": {
+    "existing": {
+      "command": "echo"
+    }
+  }
+}"#;
+        let new_config = serde_json::json!({"command": "npx", "args": ["test"]});
+        let result = apply_json_server(before, "mcpServers", "new-server", &new_config).unwrap();
+        assert!(result.contains("\"existing\""));
+        assert!(result.contains("\"new-server\""));
+        assert!(result.contains("\"echo\""));
+        assert!(result.contains("\"test\""));
+    }
+
+    #[test]
+    fn test_apply_json_targeted_edit_empty_file() {
+        let config = serde_json::json!({"command": "npx"});
+        let result = apply_json_server("{}", "mcpServers", "test-srv", &config).unwrap();
+        assert!(result.contains("\"test-srv\""));
+        assert!(result.contains("\"npx\""));
+    }
+
+    #[test]
+    fn test_find_matching_brace() {
+        let text = r#"{"a": {"b": [1, 2, 3]}, "c": "x"}"#;
+        let pos = find_matching_brace(text, 4).unwrap(); // opening { after {"a":
+        // Should find the matching } after [1, 2, 3]
+        let inner = &text[4..=pos];
+        assert!(inner.contains("[1, 2, 3]"));
     }
 }
 
