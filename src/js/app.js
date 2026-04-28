@@ -80,7 +80,7 @@ class App {
     }
 
     async refreshPlatforms() {
-        this.platforms = await Api.listPlatforms();
+        this.platforms = await Api.refreshPlatforms();
         if (this.platforms.length > 0 && !this.selectedPlatformId) {
             this.selectedPlatformId = this.platforms[0].id;
         }
@@ -508,7 +508,8 @@ class App {
             await this.refreshTrashCount();
             if (this.trashCount > 0) this.showTrashModal();
         } catch (e) {
-            alert('Error: ' + (e.SyncError || e));
+            console.error('Delete forever error:', e);
+            alert('Error: ' + (e.message || e.SyncError || (typeof e === 'object' ? JSON.stringify(e) : e)));
         }
     }
 
@@ -518,7 +519,8 @@ class App {
             this.closeModal();
             await this.refreshTrashCount();
         } catch (e) {
-            alert('Error: ' + (e.SyncError || e));
+            console.error('Empty trash error:', e);
+            alert('Error: ' + (e.message || e.SyncError || (typeof e === 'object' ? JSON.stringify(e) : e)));
         }
     }
 

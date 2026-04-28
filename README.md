@@ -15,6 +15,27 @@
 - **全局搜索** — 跨平台搜索 Skill 名称和描述
 - **中英双语** — 自动检测系统语言，支持即时切换
 
+## 安装
+
+### macOS
+
+下载 `.dmg` 后打开，将应用拖入 Applications 文件夹：
+
+- **有管理员权限**：拖到 `/Applications`
+- **无管理员权限**：拖到 `~/Applications`（用户级，如不存在可先在 Finder 中创建）
+
+首次打开可能被 macOS Gatekeeper 拦截（未签名应用），在终端执行以下命令移除隔离标记：
+
+```bash
+xattr -cr /Applications/"Agent Hub.app"
+# 或用户级安装：
+# xattr -cr ~/Applications/"Agent Hub.app"
+```
+
+### Windows
+
+下载 `.exe` 安装包运行即可。如遇到 Windows SmartScreen 拦截，点击"更多信息" → "仍要运行"。
+
 ## 技术栈
 
 - **后端**: Rust + Tauri 2.x
@@ -38,27 +59,6 @@ cargo tauri dev
 - 修改 `src/js/*.js` 或 `src/index.html` 会自动刷新窗口
 - 修改 `src-tauri/src/*.rs` 会自动重编译
 - 另开终端运行 `npm run dev:css` 可监听 CSS 变更
-
-## 安装
-
-### macOS
-
-下载 `.dmg` 后打开，将应用拖入 Applications 文件夹：
-
-- **有管理员权限**：拖到 `/Applications`
-- **无管理员权限**：拖到 `~/Applications`（用户级，如不存在可先在 Finder 中创建）
-
-首次打开可能被 macOS Gatekeeper 拦截（未签名应用），在终端执行以下命令移除隔离标记：
-
-```bash
-xattr -cr /Applications/"Agent Hub.app"
-# 或用户级安装：
-# xattr -cr ~/Applications/"Agent Hub.app"
-```
-
-### Windows
-
-下载 `.exe` 安装包运行即可。如遇到 Windows SmartScreen 拦截，点击"更多信息" → "仍要运行"。
 
 ## 打包
 
