@@ -311,6 +311,7 @@ class App {
         document.getElementById('btn-back').addEventListener('click', () => this.backToList());
         document.getElementById('btn-diff').addEventListener('click', () => this.showDiffModal());
         document.getElementById('btn-sync').addEventListener('click', () => this.showSyncModal());
+        document.getElementById('btn-scan-invalid').addEventListener('click', () => this.scanInvalidSkills());
 
         let debounce;
         document.getElementById('search-input').addEventListener('input', (e) => {
@@ -332,6 +333,81 @@ class App {
         this.render();
     }
 
+    // --- Invalid Skill Scanner ---
+    async scanInvalidSkills() {
+        const i = this.i18n;
+        const btn = document.getElementById('btn-scan-invalid');
+        const originalText = btn.innerHTML;
+        btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="animate-spin"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>`;
+        btn.disabled = true;
+        try {
+            const invalid = await Api.scanInvalidSkills();
+            this.showInvalidSkillsModal(invalid);
+        } catch (e) {
+            console.error('Scan invalid skills error:', e);
+            alert(i.tWith('scan_invalid.error', { error: e.message || e.SyncError || e }));
+        } finally {
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+        }
+    }
+
+    showInvalidSkillsModal(invalid) {
+        const i = this.i18n;
+        if (invalid.length === 0) {
+            alert(i.t('scan_invalid.all_good'));
+            return;
+        }
+        const fixPrompt = this.buildFixPrompt(invalid);
+        let html = `<div class="p-5">
+            <h2 class="text-lg font-bold text-yellow-400 mb-1">${i.tWith('scan_invalid.title', { count: invalid.length })}</h2>
+            <p class="text-xs text-gray-500 mb-4">${i.t('scan_invalid.subtitle')}</p>
+            <div class="space-y-1 mb-4 max-h-[40vh] overflow-y-auto">`;
+        for (const item of invalid) {
+            html += `<div class="flex items-start gap-2 px-3 py-2 rounded bg-gray-900/50">
+                <span class="text-yellow-500 flex-shrink-0 mt-0.5">${Icons.warning}</span>
+                <div class="flex-1 min-w-0">
+                    <div class="text-sm text-gray-200 truncate" title="${esc(item.path)}">${esc(item.path)}</div>
+                    <div class="text-xs text-gray-500">${esc(item.platform_name)} · <span class="text-red-400">${esc(item.reason)}</span></div>
+                </div>
+            </div>`;
+        }
+        html += `</div>
+            <div class="border-t border-gray-700 pt-4">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-xs text-gray-400">${i.t('scan_invalid.fix_prompt_label')}</span>
+                    <button class="text-xs text-cyan-400 hover:text-cyan-300 cursor-pointer flex items-center gap-1 scan-invalid-copy-btn">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                        ${i.t('action.copy')}
+                    </button>
+                </div>
+                <textarea id="scan-invalid-prompt" readonly class="w-full h-32 bg-gray-900 text-sm text-gray-300 font-mono rounded p-3 border border-gray-600 resize-none cursor-text select-all">${esc(fixPrompt)}</textarea>
+                <p class="text-xs text-gray-500 mt-2">${i.t('scan_invalid.copy_hint')}</p>
+            </div>
+            <div class="flex justify-end mt-4">
+                <button class="px-4 py-2 text-gray-400 hover:text-white text-sm cursor-pointer modal-cancel">${i.t('action.close')}</button>
+            </div>
+        </div>`;
+        this.openModal(html);
+        this.modalEl().querySelector('.modal-cancel').addEventListener('click', () => this.closeModal());
+        this.modalEl().querySelector('.scan-invalid-copy-btn').addEventListener('click', () => {
+            const ta = document.getElementById('scan-invalid-prompt');
+            ta.select();
+            navigator.clipboard.writeText(ta.value).then(() => {
+                const copyBtn = this.modalEl().querySelector('.scan-invalid-copy-btn');
+                const original = copyBtn.innerHTML;
+                copyBtn.innerHTML = `<span class="text-green-400">${i.t('action.copied')}</span>`;
+                setTimeout(() => copyBtn.innerHTML = original, 1500);
+            });
+        });
+    }
+
+    buildFixPrompt(invalid) {
+        const i = this.i18n;
+        let paths = invalid.map(item => item.path).join('\n');
+        return i.tWith('scan_invalid.fix_prompt', { paths });
+    }
+
     // --- MCP ---
     async refreshMcpPlatforms() {
         this.mcpPlatforms = await Api.listMcpPlatforms();
@@ -351,15 +427,31 @@ class App {
 
     async showMcpAdd() {
         const i = this.i18n;
+        const placeholderDemo = `# Codex / TOML style:
+[model]
+provider = "openai"
+
+[mcp.servers.mcp-server-time]
+command = "uvx"
+args = ["mcp-server-time"]
+
+# Other Agent / JSON style:
+{
+  "mcpServers": {
+    "mcp-server-time": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-time"]
+    }
+  }
+}`;
         let html = `<div class="p-5">
-            <h2 class="text-lg font-bold text-yellow-400 mb-3">${i.t('mcp.add')}</h2>
-            <div class="mb-2">
+            <div class="mb-3">
                 <label class="text-xs text-gray-400">${i.t('mcp.server_name')}</label>
                 <input id="mcp-add-name" class="w-full bg-gray-900 text-sm text-gray-200 rounded px-3 py-1.5 border border-gray-600 focus:border-cyan-500 outline-none" />
             </div>
             <div class="mb-2">
                 <label class="text-xs text-gray-400">${i.t('mcp.config')} (${i.t('mcp.format_json')} / ${i.t('mcp.format_toml')})</label>
-                <textarea id="mcp-add-area" class="w-full h-48 bg-gray-900 text-sm text-gray-200 font-mono rounded p-3 border border-gray-600 focus:border-cyan-500 outline-none resize-y" placeholder="${i.t('mcp.import_hint')}"></textarea>
+                <textarea id="mcp-add-area" class="w-full h-56 bg-gray-900 text-sm text-gray-200 font-mono rounded p-3 border border-gray-600 focus:border-cyan-500 outline-none resize-y" placeholder="${esc(placeholderDemo)}"></textarea>
             </div>
             <div class="flex gap-3 justify-end mt-3">
                 <button class="px-4 py-2 bg-cyan-700 hover:bg-cyan-600 rounded text-sm cursor-pointer mcp-add-save">${i.t('mcp.save')}</button>

@@ -116,3 +116,7 @@ export async function permanentlyDeleteTrashItem(id) {
 export async function emptyTrash() {
     return invoke('empty_trash_cmd');
 }
+
+export async function scanInvalidSkills() {
+    return invoke('scan_invalid_skills_cmd');
+}

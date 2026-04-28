@@ -37,6 +37,9 @@
     "confirm": "Confirm",
     "overwrite": "Overwrite with source",
     "keep_target": "Keep target unchanged",
+    "close": "Close",
+    "copy": "Copy",
+    "copied": "Copied",
     "lang": "EN"
   },
   "sync": {
@@ -122,5 +125,14 @@
     "progress": "{percent}%",
     "error": "Update failed: {error}",
     "installing": "Installing..."
+  },
+  "scan_invalid": {
+    "title": "Found {count} invalid skill(s)",
+    "subtitle": "The following skill directories have issues and need fixing",
+    "all_good": "All skills are valid",
+    "error": "Scan failed: {error}",
+    "fix_prompt_label": "Fix prompt (send to your Agent)",
+    "copy_hint": "Click the copy button, or select and copy the content manually",
+    "fix_prompt": "Please help me fix the following invalid skill directories. Each directory needs a valid SKILL.md file with proper frontmatter (including a name field) and body content.\n\nInvalid skill paths:\n{paths}"
   }
 }

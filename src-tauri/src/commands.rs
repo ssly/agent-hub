@@ -321,9 +321,39 @@ impl From<&crate::trash::TrashItem> for TrashItemView {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct InvalidSkillView {
+    pub path: String,
+    pub platform_id: String,
+    pub platform_name: String,
+    pub reason: String,
+}
+
+impl From<&crate::skill::InvalidSkill> for InvalidSkillView {
+    fn from(s: &crate::skill::InvalidSkill) -> Self {
+        Self {
+            path: s.path.clone(),
+            platform_id: s.platform_id.clone(),
+            platform_name: s.platform_name.clone(),
+            reason: s.reason.clone(),
+        }
+    }
+}
+
 #[tauri::command]
 pub fn list_trash_cmd() -> Vec<TrashItemView> {
     crate::trash::list_trash().iter().map(TrashItemView::from).collect()
+}
+
+#[tauri::command]
+pub fn scan_invalid_skills_cmd(state: tauri::State<'_, SafeState>) -> Vec<InvalidSkillView> {
+    let s = state.lock().unwrap();
+    let mut invalid: Vec<InvalidSkillView> = Vec::new();
+    for platform in &s.platforms {
+        let items = crate::skill::scan_invalid_skills(&platform.skill_dir, &platform.id, &platform.display_name);
+        invalid.extend(items.iter().map(InvalidSkillView::from));
+    }
+    invalid
 }
 
 #[tauri::command]

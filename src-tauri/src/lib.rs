@@ -50,6 +50,7 @@ pub fn run() {
             commands::restore_trash_item_cmd,
             commands::permanently_delete_trash_item_cmd,
             commands::empty_trash_cmd,
+            commands::scan_invalid_skills_cmd,
             commands::get_app_version,
         ])
         .run(tauri::generate_context!())
