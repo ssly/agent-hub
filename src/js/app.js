@@ -615,7 +615,7 @@ args = ["mcp-server-time"]
         const now = Math.floor(Date.now() / 1000);
         let html = `<div class="p-5">
             <h2 class="text-lg font-bold text-yellow-400 mb-4">${i.t('trash.title')} (${items.length})</h2>
-            <div class="space-y-1 mb-4 max-h-[60vh] overflow-y-auto">`;
+            <div class="space-y-1 mb-3 max-h-[60vh] overflow-y-auto">`;
         for (const item of items) {
             const secondsLeft = (item.deleted_at + 7 * 24 * 3600) - now;
             const daysLeft = Math.max(0, Math.ceil(secondsLeft / 86400));
@@ -627,22 +627,40 @@ args = ["mcp-server-time"]
                     <div><span class="${typeColor} text-xs font-bold">[${typeLabel}]</span> <span class="text-gray-200">${esc(item.name)}</span></div>
                     <div class="text-xs text-gray-500">${esc(item.platform_id)}${item.folder ? ' / ' + esc(item.folder) : ''} · ${daysStr}</div>
                 </div>
-                <button class="text-xs text-green-600 hover:text-green-400 px-2 py-1 cursor-pointer hidden group-hover:inline trash-restore-btn">${i.t('trash.restore')}</button>
-                <button class="text-xs text-red-600 hover:text-red-400 px-2 py-1 cursor-pointer hidden group-hover:inline trash-delete-btn">${i.t('trash.delete_forever')}</button>
+                <button class="text-xs text-green-600 hover:text-green-400 px-2 py-1 cursor-pointer trash-restore-btn">${i.t('trash.restore')}</button>
+                <button class="text-xs text-red-600 hover:text-red-400 px-2 py-1 cursor-pointer trash-delete-btn" data-confirming="false">${i.t('trash.delete_forever')}</button>
             </div>`;
         }
         html += `</div>
+            <div id="trash-status" class="text-sm text-gray-500 mb-3"></div>
             <div class="flex gap-3 justify-between">
-                <button class="px-4 py-2 bg-red-800 hover:bg-red-700 rounded text-sm cursor-pointer trash-empty-btn">${i.t('trash.empty_trash')}</button>
+                <button class="px-4 py-2 bg-red-800 hover:bg-red-700 rounded text-sm cursor-pointer trash-empty-btn" data-confirming="false">${i.t('trash.empty_trash')}</button>
                 <button class="px-4 py-2 text-gray-400 hover:text-white cursor-pointer modal-cancel">${i.t('action.cancel')}</button>
             </div></div>`;
         this.openModal(html);
+
+        const setTrashStatus = (message, isError = false) => {
+            const statusEl = this.modalEl().querySelector('#trash-status');
+            if (!statusEl) return;
+            statusEl.textContent = message || '';
+            statusEl.classList.toggle('text-red-400', isError);
+            statusEl.classList.toggle('text-gray-500', !isError);
+        };
+        const resetDeleteButton = (btn) => {
+            if (!btn) return;
+            btn.dataset.confirming = 'false';
+            btn.textContent = i.t('trash.delete_forever');
+            btn.classList.remove('bg-red-900', 'text-white', 'rounded');
+            btn.classList.add('text-red-600', 'hover:text-red-400');
+        };
 
         // Restore buttons
         this.modalEl().querySelectorAll('.trash-restore-btn').forEach(btn => {
             btn.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 const row = btn.closest('[data-trash-id]');
+                if (!row || !row.dataset.trashId) return;
+                setTrashStatus('');
                 await this.restoreTrashItem(row.dataset.trashId);
             });
         });
@@ -651,15 +669,52 @@ args = ["mcp-server-time"]
         this.modalEl().querySelectorAll('.trash-delete-btn').forEach(btn => {
             btn.addEventListener('click', async (e) => {
                 e.stopPropagation();
-                if (!confirm(i.t('trash.confirm_delete_forever'))) return;
                 const row = btn.closest('[data-trash-id]');
+                if (!row || !row.dataset.trashId) return;
+                if (btn.dataset.confirming !== 'true') {
+                    this.modalEl().querySelectorAll('.trash-delete-btn').forEach(other => resetDeleteButton(other));
+                    btn.dataset.confirming = 'true';
+                    btn.textContent = i.t('action.confirm');
+                    btn.classList.add('bg-red-900', 'text-white', 'rounded');
+                    btn.classList.remove('text-red-600', 'hover:text-red-400');
+                    setTrashStatus(i.t('trash.confirm_delete_forever'));
+                    setTimeout(() => {
+                        if (document.body.contains(btn) && btn.dataset.confirming === 'true') {
+                            resetDeleteButton(btn);
+                            setTrashStatus('');
+                        }
+                    }, 4000);
+                    return;
+                }
+                resetDeleteButton(btn);
+                setTrashStatus('');
                 await this.permanentlyDeleteTrashItem(row.dataset.trashId);
             });
         });
 
         // Empty trash button
-        this.modalEl().querySelector('.trash-empty-btn').addEventListener('click', async () => {
-            if (!confirm(i.t('trash.confirm_empty'))) return;
+        this.modalEl().querySelector('.trash-empty-btn').addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const btn = e.currentTarget;
+            if (btn.dataset.confirming !== 'true') {
+                btn.dataset.confirming = 'true';
+                btn.textContent = i.t('action.confirm');
+                btn.classList.add('bg-red-900');
+                setTrashStatus(i.t('trash.confirm_empty'));
+                setTimeout(() => {
+                    if (document.body.contains(btn) && btn.dataset.confirming === 'true') {
+                        btn.dataset.confirming = 'false';
+                        btn.textContent = i.t('trash.empty_trash');
+                        btn.classList.remove('bg-red-900');
+                        setTrashStatus('');
+                    }
+                }, 4000);
+                return;
+            }
+            btn.dataset.confirming = 'false';
+            btn.textContent = i.t('trash.empty_trash');
+            btn.classList.remove('bg-red-900');
+            setTrashStatus('');
             await this.emptyTrash();
         });
 

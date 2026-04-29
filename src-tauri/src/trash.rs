@@ -27,6 +27,15 @@ fn now_secs() -> u64 {
         .as_secs()
 }
 
+fn remove_path_any(path: &std::path::Path) -> Result<(), String> {
+    let meta = fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+    if meta.is_dir() {
+        fs::remove_dir_all(path).map_err(|e| e.to_string())
+    } else {
+        fs::remove_file(path).map_err(|e| e.to_string())
+    }
+}
+
 fn make_id() -> String {
     use std::time::SystemTime;
     let t = SystemTime::now()
@@ -77,7 +86,10 @@ fn read_index() -> Vec<TrashItem> {
         items.into_iter().partition(|item| item.deleted_at > cutoff);
     for item in &expired {
         if matches!(item.item_type, TrashItemType::Skill) {
-            let _ = fs::remove_dir_all(skills_dir().join(&item.id));
+            let skill_path = skills_dir().join(&item.id);
+            if skill_path.exists() {
+                let _ = remove_path_any(&skill_path);
+            }
         }
     }
     if !expired.is_empty() {
@@ -239,13 +251,23 @@ pub fn restore_item(id: &str) -> Result<TrashItem, String> {
 // --- Permanent delete ---
 
 pub fn permanently_delete_item(id: &str) -> Result<(), String> {
-    let item = remove_item(id)?;
+    let mut items = read_index();
+    let pos = items
+        .iter()
+        .position(|i| i.id == id)
+        .ok_or_else(|| format!("Item {} not found in trash", id))?;
+    let item = items[pos].clone();
+
     if matches!(item.item_type, TrashItemType::Skill) {
-        let trash_skill_dir = skills_dir().join(&item.id);
-        if trash_skill_dir.exists() {
-            fs::remove_dir_all(&trash_skill_dir).map_err(|e| e.to_string())?;
+        let trash_skill_path = skills_dir().join(&item.id);
+        if trash_skill_path.exists() {
+            remove_path_any(&trash_skill_path)
+                .map_err(|e| format!("remove trash path {}: {}", trash_skill_path.display(), e))?;
         }
     }
+
+    items.remove(pos);
+    save_index(&items)?;
     Ok(())
 }
 
@@ -254,7 +276,7 @@ pub fn permanently_delete_item(id: &str) -> Result<(), String> {
 pub fn empty_trash() -> Result<(), String> {
     let trash = trash_dir();
     if trash.exists() {
-        fs::remove_dir_all(&trash).map_err(|e| e.to_string())?;
+        remove_path_any(&trash)?;
     }
     Ok(())
 }
@@ -368,5 +390,32 @@ mod tests {
 
         // Verify item is gone
         assert_eq!(list_trash().len(), 0);
+    }
+
+    #[test]
+    fn test_permanently_delete_skill_item_when_trash_path_is_file() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        let _dir = setup_test_trash();
+
+        let item = TrashItem {
+            id: "test-id-4".to_string(),
+            item_type: TrashItemType::Skill,
+            name: "broken-skill".to_string(),
+            platform_id: "test-platform".to_string(),
+            folder: None,
+            original_path: Some("/tmp/test".to_string()),
+            original_config: None,
+            deleted_at: now_secs(),
+        };
+        add_item(item).unwrap();
+
+        // A skill trash path can also be a file (not just a directory).
+        fs::create_dir_all(skills_dir()).unwrap();
+        let skill_path = skills_dir().join("test-id-4");
+        fs::write(&skill_path, "not a directory").unwrap();
+
+        permanently_delete_item("test-id-4").unwrap();
+        assert_eq!(list_trash().len(), 0);
+        assert!(!skill_path.exists());
     }
 }
