@@ -1,7 +1,36 @@
 import { I18n } from './i18n.js';
 import * as Api from './api.js';
-import { check } from '@tauri-apps/plugin-updater';
-import { relaunch } from '@tauri-apps/plugin-process';
+
+// --- Tauri Updater helpers (no bundler) ---
+const tauriInvoke = window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);
+
+function createTauriChannel(onMessage) {
+    const id = window.__TAURI_INTERNALS__.transformCallback((msg) => {
+        onMessage?.(msg);
+    });
+    return {
+        __TAURI_TO_IPC_KEY__: () => `__CHANNEL__:${id}`
+    };
+}
+
+async function checkUpdate() {
+    try {
+        return await tauriInvoke('plugin:updater|check');
+    } catch { return null; }
+}
+
+async function downloadUpdate(rid, onProgress) {
+    const channel = createTauriChannel(onProgress);
+    await tauriInvoke('plugin:updater|download', { rid, onEvent: channel });
+}
+
+async function installUpdate(rid) {
+    await tauriInvoke('plugin:updater|install', { rid });
+}
+
+function relaunchApp() {
+    return tauriInvoke('plugin:process|restart');
+}
 
 // SVG Icons (replacing emoji)
 const Icons = {
@@ -218,7 +247,7 @@ class App {
     // --- Update ---
     async checkForUpdate() {
         try {
-            const update = await check();
+            const update = await checkUpdate();
             if (update) {
                 this.update = update;
                 this.renderUpdateBadge();
@@ -274,14 +303,14 @@ class App {
             confirmBtn.classList.add('opacity-50');
             cancelBtn.classList.add('hidden');
             statusEl.textContent = i.t('update.downloading');
-            await this.update.download((event) => {
+            await downloadUpdate(this.update.rid, (event) => {
                 if (event.event === 'Progress') {
                     statusEl.textContent = i.t('update.downloading');
                 }
             });
             statusEl.textContent = i.t('update.installing');
-            await this.update.install();
-            await relaunch();
+            await installUpdate(this.update.rid);
+            await relaunchApp();
         } catch (e) {
             statusEl.textContent = i.tWith('update.error', { error: e.message || e });
             confirmBtn.disabled = false;
