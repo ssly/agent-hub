@@ -21,11 +21,35 @@ async function checkUpdate() {
 
 async function downloadUpdate(rid, onProgress) {
     const channel = createTauriChannel(onProgress);
-    await tauriInvoke('plugin:updater|download', { rid, onEvent: channel });
+    return tauriInvoke('plugin:updater|download', { rid, onEvent: channel });
 }
 
-async function installUpdate(rid) {
-    await tauriInvoke('plugin:updater|install', { rid });
+async function installUpdate(rid, bytesRid) {
+    await tauriInvoke('plugin:updater|install', { updateRid: rid, bytesRid });
+}
+
+async function downloadAndInstallUpdate(rid, onProgress) {
+    const channel = createTauriChannel(onProgress);
+    await tauriInvoke('plugin:updater|download_and_install', { rid, onEvent: channel });
+}
+
+function getErrorMessage(error) {
+    if (!error) return 'Unknown error';
+    return error.message || String(error);
+}
+
+function isInstallArgsError(error) {
+    const msg = getErrorMessage(error);
+    return msg.includes('missing required key updateRid')
+        || msg.includes('missing required key bytesRid')
+        || msg.includes('unknown field `updateRid`')
+        || msg.includes('unknown field `bytesRid`');
+}
+
+function resolveBytesRid(downloadResult) {
+    if (typeof downloadResult === 'number') return downloadResult;
+    if (downloadResult && typeof downloadResult.bytesRid === 'number') return downloadResult.bytesRid;
+    return null;
 }
 
 function relaunchApp() {
@@ -299,20 +323,39 @@ class App {
         const confirmBtn = this.modalEl().querySelector('.update-confirm-btn');
         const cancelBtn = this.modalEl().querySelector('.modal-cancel');
         try {
+            const updateRid = this.update?.rid;
+            if (typeof updateRid !== 'number') {
+                throw new Error('Missing update rid from updater check result');
+            }
             confirmBtn.disabled = true;
             confirmBtn.classList.add('opacity-50');
             cancelBtn.classList.add('hidden');
-            statusEl.textContent = i.t('update.downloading');
-            await downloadUpdate(this.update.rid, (event) => {
-                if (event.event === 'Progress') {
+            const onProgress = (event) => {
+                if (event.event === 'Progress' || event.event === 'Started') {
                     statusEl.textContent = i.t('update.downloading');
+                } else if (event.event === 'Finished') {
+                    statusEl.textContent = i.t('update.installing');
                 }
-            });
-            statusEl.textContent = i.t('update.installing');
-            await installUpdate(this.update.rid);
+            };
+            statusEl.textContent = i.t('update.downloading');
+            const downloadResult = await downloadUpdate(updateRid, onProgress);
+            const bytesRid = resolveBytesRid(downloadResult);
+            if (bytesRid !== null) {
+                statusEl.textContent = i.t('update.installing');
+                try {
+                    await installUpdate(updateRid, bytesRid);
+                } catch (installErr) {
+                    if (!isInstallArgsError(installErr)) throw installErr;
+                    statusEl.textContent = i.t('update.downloading');
+                    await downloadAndInstallUpdate(updateRid, onProgress);
+                }
+            } else {
+                // Compatibility fallback for updater implementations that don't return bytes rid.
+                await downloadAndInstallUpdate(updateRid, onProgress);
+            }
             await relaunchApp();
         } catch (e) {
-            statusEl.textContent = i.tWith('update.error', { error: e.message || e });
+            statusEl.textContent = i.tWith('update.error', { error: getErrorMessage(e) });
             confirmBtn.disabled = false;
             confirmBtn.classList.remove('opacity-50');
             cancelBtn.classList.remove('hidden');
