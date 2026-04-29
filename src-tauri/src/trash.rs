@@ -264,3 +264,109 @@ pub fn empty_trash() -> Result<(), String> {
 pub fn list_trash() -> Vec<TrashItem> {
     read_index()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::sync::Mutex;
+
+    // Tests modify HOME env var which is not thread-safe; serialize them
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn setup_test_trash() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("HOME", dir.path());
+        dir
+    }
+
+    #[test]
+    fn test_empty_trash() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        let _dir = setup_test_trash();
+        // Add a skill item
+        let item = TrashItem {
+            id: "test-id-1".to_string(),
+            item_type: TrashItemType::Skill,
+            name: "test-skill".to_string(),
+            platform_id: "test-platform".to_string(),
+            folder: None,
+            original_path: Some("/tmp/test".to_string()),
+            original_config: None,
+            deleted_at: now_secs(),
+        };
+        add_item(item).unwrap();
+
+        // Verify item exists
+        assert_eq!(list_trash().len(), 1);
+
+        // Empty trash
+        empty_trash().unwrap();
+
+        // Verify trash is empty
+        assert_eq!(list_trash().len(), 0);
+        assert!(!trash_dir().exists());
+    }
+
+    #[test]
+    fn test_permanently_delete_item() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        let _dir = setup_test_trash();
+        // Add a skill item
+        let item = TrashItem {
+            id: "test-id-2".to_string(),
+            item_type: TrashItemType::Skill,
+            name: "test-skill".to_string(),
+            platform_id: "test-platform".to_string(),
+            folder: None,
+            original_path: Some("/tmp/test".to_string()),
+            original_config: None,
+            deleted_at: now_secs(),
+        };
+        add_item(item).unwrap();
+
+        // Create a fake skill directory
+        let skill_dir = skills_dir().join("test-id-2");
+        fs::create_dir_all(&skill_dir).unwrap();
+        let mut file = fs::File::create(skill_dir.join("SKILL.md")).unwrap();
+        file.write_all(b"test content").unwrap();
+
+        // Verify item and directory exist
+        assert_eq!(list_trash().len(), 1);
+        assert!(skill_dir.exists());
+
+        // Permanently delete
+        permanently_delete_item("test-id-2").unwrap();
+
+        // Verify item and directory are gone
+        assert_eq!(list_trash().len(), 0);
+        assert!(!skill_dir.exists());
+    }
+
+    #[test]
+    fn test_permanently_delete_mcp_item() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        let _dir = setup_test_trash();
+        // Add an MCP item
+        let item = TrashItem {
+            id: "test-id-3".to_string(),
+            item_type: TrashItemType::Mcp,
+            name: "test-mcp".to_string(),
+            platform_id: "test-platform".to_string(),
+            folder: None,
+            original_path: None,
+            original_config: Some(serde_json::json!({"key": "value"})),
+            deleted_at: now_secs(),
+        };
+        add_item(item).unwrap();
+
+        // Verify item exists
+        assert_eq!(list_trash().len(), 1);
+
+        // Permanently delete
+        permanently_delete_item("test-id-3").unwrap();
+
+        // Verify item is gone
+        assert_eq!(list_trash().len(), 0);
+    }
+}
