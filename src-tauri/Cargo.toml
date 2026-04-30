@@ -18,6 +18,8 @@ toml = "0.8"
 walkdir = "2"
 fs_extra = "1"
 sys-locale = "0.3"
+chrono = "0.4"
+rusqlite = { version = "0.37", features = ["bundled"] }
 
 [target."cfg(not(any(target_os = \"android\", target_os = \"ios\")))".dependencies]
 tauri-plugin-updater = "2"
