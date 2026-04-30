@@ -20,6 +20,11 @@ fs_extra = "1"
 sys-locale = "0.3"
 chrono = "0.4"
 rusqlite = { version = "0.37", features = ["bundled"] }
+base64 = "0.22"
+futures-util = "0.3"
+http = "1"
+minisign-verify = "0.2"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 
 [target."cfg(not(any(target_os = \"android\", target_os = \"ios\")))".dependencies]
 tauri-plugin-updater = "2"

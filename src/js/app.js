@@ -19,18 +19,9 @@ async function checkUpdate() {
     } catch { return null; }
 }
 
-async function downloadUpdate(rid, onProgress) {
+async function downloadAndInstallUpdateResumable(rid, onProgress) {
     const channel = createTauriChannel(onProgress);
-    return tauriInvoke('plugin:updater|download', { rid, onEvent: channel });
-}
-
-async function installUpdate(rid, bytesRid) {
-    await tauriInvoke('plugin:updater|install', { updateRid: rid, bytesRid });
-}
-
-async function downloadAndInstallUpdate(rid, onProgress) {
-    const channel = createTauriChannel(onProgress);
-    await tauriInvoke('plugin:updater|download_and_install', { rid, onEvent: channel });
+    await tauriInvoke('download_and_install_update_resumable', { rid, onEvent: channel });
 }
 
 function getErrorMessage(error) {
@@ -38,23 +29,14 @@ function getErrorMessage(error) {
     return error.message || String(error);
 }
 
-function isInstallArgsError(error) {
-    const msg = getErrorMessage(error);
-    return msg.includes('missing required key updateRid')
-        || msg.includes('missing required key bytesRid')
-        || msg.includes('unknown field `updateRid`')
-        || msg.includes('unknown field `bytesRid`');
-}
-
-function resolveBytesRid(downloadResult) {
-    if (typeof downloadResult === 'number') return downloadResult;
-    if (downloadResult && typeof downloadResult.bytesRid === 'number') return downloadResult.bytesRid;
-    return null;
-}
-
 function parseNonNegativeNumber(value) {
     const n = Number(value);
     return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+function parseOptionalBoolean(value) {
+    if (typeof value === 'boolean') return value;
+    return null;
 }
 
 function formatBytes(bytes) {
@@ -71,16 +53,40 @@ function formatInt(value) {
     return Math.round(n).toLocaleString();
 }
 
+function formatDuration(seconds) {
+    if (!Number.isFinite(seconds) || seconds < 0) return '--';
+    const total = Math.round(seconds);
+    if (total < 60) return `${total}s`;
+    const minutes = Math.floor(total / 60);
+    const secs = total % 60;
+    if (minutes < 60) return `${minutes}m ${secs}s`;
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    return `${hours}h ${mins}m`;
+}
+
 function parseDownloadProgressEvent(event) {
     if (!event || typeof event !== 'object') {
-        return { kind: '', chunkLength: null, contentLength: null };
+        return {
+            kind: '',
+            chunkLength: null,
+            contentLength: null,
+            total: null,
+            downloaded: null,
+            resumedFrom: null,
+            usedResume: null,
+        };
     }
     const kind = typeof event.event === 'string' ? event.event : '';
     const payload = event.data && typeof event.data === 'object' ? event.data : event;
     return {
         kind,
         chunkLength: parseNonNegativeNumber(payload.chunkLength ?? payload.chunk_length),
-        contentLength: parseNonNegativeNumber(payload.contentLength ?? payload.content_length)
+        contentLength: parseNonNegativeNumber(payload.contentLength ?? payload.content_length),
+        total: parseNonNegativeNumber(payload.total),
+        downloaded: parseNonNegativeNumber(payload.downloaded),
+        resumedFrom: parseNonNegativeNumber(payload.resumedFrom ?? payload.resumed_from),
+        usedResume: parseOptionalBoolean(payload.usedResume ?? payload.used_resume),
     };
 }
 
@@ -356,7 +362,7 @@ class App {
             <div id="update-status" class="text-sm text-gray-500 mb-3"></div>
             <div id="update-progress-wrap" class="mb-3 hidden">
                 <div style="height:6px;background:#111827;border-radius:9999px;overflow:hidden;border:1px solid #374151;">
-                    <div id="update-progress-bar" style="height:100%;width:0%;background:#10b981;transition:width .2s ease;"></div>
+                    <div id="update-progress-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#34d399,#10b981);transition:width .2s ease;"></div>
                 </div>
                 <div id="update-progress-text" class="text-xs text-gray-500 mt-1"></div>
             </div>
@@ -381,7 +387,38 @@ class App {
         const progress = {
             downloadedBytes: 0,
             totalBytes: null,
-            percent: 0
+            percent: 0,
+            speedBps: 0,
+            lastProgressAt: 0,
+            lastDownloadedBytes: 0,
+            attempt: 1,
+            resumedFrom: 0,
+        };
+        const maxAttempts = 4;
+        const indeterminate = {
+            timer: null,
+            step: 0,
+        };
+        const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+        const stopIndeterminate = () => {
+            if (indeterminate.timer) {
+                clearInterval(indeterminate.timer);
+                indeterminate.timer = null;
+            }
+            if (progressBarEl) progressBarEl.style.opacity = '1';
+        };
+
+        const startIndeterminate = () => {
+            if (!progressBarEl || indeterminate.timer) return;
+            indeterminate.step = 0;
+            progressBarEl.style.opacity = '0.85';
+            indeterminate.timer = setInterval(() => {
+                indeterminate.step = (indeterminate.step + 1) % 20;
+                const phase = indeterminate.step < 10 ? indeterminate.step / 10 : (20 - indeterminate.step) / 10;
+                const width = 25 + phase * 60;
+                progressBarEl.style.width = `${width.toFixed(1)}%`;
+            }, 160);
         };
 
         const setProgressPercent = (percent) => {
@@ -393,21 +430,46 @@ class App {
         const renderProgress = () => {
             const hasTotal = Number.isFinite(progress.totalBytes) && progress.totalBytes > 0;
             if (hasTotal) {
+                stopIndeterminate();
                 const raw = (progress.downloadedBytes / progress.totalBytes) * 100;
                 setProgressPercent(raw);
+                const remainingBytes = Math.max(progress.totalBytes - progress.downloadedBytes, 0);
+                const etaSeconds = progress.speedBps > 0 ? remainingBytes / progress.speedBps : null;
                 if (progressTextEl) {
-                    progressTextEl.textContent = i.tWith('update.progress_detail', {
-                        percent: progress.percent.toFixed(1),
-                        downloaded: formatBytes(progress.downloadedBytes),
-                        total: formatBytes(progress.totalBytes)
-                    });
+                    if (progress.speedBps > 0 && etaSeconds !== null) {
+                        progressTextEl.textContent = i.tWith('update.progress_detail_with_speed', {
+                            percent: progress.percent.toFixed(1),
+                            downloaded: formatBytes(progress.downloadedBytes),
+                            total: formatBytes(progress.totalBytes),
+                            speed: formatBytes(progress.speedBps),
+                            eta: formatDuration(etaSeconds),
+                        });
+                    } else {
+                        progressTextEl.textContent = i.tWith('update.progress_detail', {
+                            percent: progress.percent.toFixed(1),
+                            downloaded: formatBytes(progress.downloadedBytes),
+                            total: formatBytes(progress.totalBytes)
+                        });
+                    }
                 }
             } else {
-                setProgressPercent(0);
+                if (progress.downloadedBytes > 0) {
+                    startIndeterminate();
+                } else {
+                    stopIndeterminate();
+                    setProgressPercent(0);
+                }
                 if (progressTextEl) {
-                    progressTextEl.textContent = i.tWith('update.progress_detail_unknown', {
-                        downloaded: formatBytes(progress.downloadedBytes)
-                    });
+                    if (progress.speedBps > 0) {
+                        progressTextEl.textContent = i.tWith('update.progress_detail_unknown_with_speed', {
+                            downloaded: formatBytes(progress.downloadedBytes),
+                            speed: formatBytes(progress.speedBps),
+                        });
+                    } else {
+                        progressTextEl.textContent = i.tWith('update.progress_detail_unknown', {
+                            downloaded: formatBytes(progress.downloadedBytes)
+                        });
+                    }
                 }
             }
         };
@@ -415,6 +477,11 @@ class App {
         const resetProgress = () => {
             progress.downloadedBytes = 0;
             progress.totalBytes = null;
+            progress.speedBps = 0;
+            progress.lastProgressAt = 0;
+            progress.lastDownloadedBytes = 0;
+            progress.resumedFrom = 0;
+            stopIndeterminate();
             setProgressPercent(0);
             renderProgress();
         };
@@ -428,23 +495,69 @@ class App {
             confirmBtn.classList.add('opacity-50');
             cancelBtn.classList.add('hidden');
             progressWrapEl?.classList.remove('hidden');
-            resetProgress();
 
             const onProgress = (event) => {
                 const parsed = parseDownloadProgressEvent(event);
+                const now = Date.now();
                 if (parsed.kind === 'Started') {
-                    progress.downloadedBytes = 0;
-                    progress.totalBytes = parsed.contentLength;
+                    progress.totalBytes = parsed.total ?? parsed.contentLength;
+                    progress.downloadedBytes = parsed.downloaded ?? parsed.resumedFrom ?? 0;
+                    progress.resumedFrom = parsed.resumedFrom ?? 0;
+                    progress.speedBps = 0;
+                    progress.lastProgressAt = now;
+                    progress.lastDownloadedBytes = progress.downloadedBytes;
                     renderProgress();
-                    statusEl.textContent = i.t('update.downloading');
+                    statusEl.textContent = progress.resumedFrom > 0
+                        ? i.tWith('update.resuming_attempt', {
+                            current: progress.attempt,
+                            total: maxAttempts,
+                            resumed: formatBytes(progress.resumedFrom),
+                        })
+                        : i.tWith('update.downloading_attempt', {
+                            current: progress.attempt,
+                            total: maxAttempts,
+                        });
                 } else if (parsed.kind === 'Progress') {
-                    if (parsed.chunkLength !== null) progress.downloadedBytes += parsed.chunkLength;
+                    if (parsed.total !== null) progress.totalBytes = parsed.total;
+                    if (parsed.downloaded !== null) {
+                        progress.downloadedBytes = parsed.downloaded;
+                    } else if (parsed.chunkLength !== null) {
+                        progress.downloadedBytes += parsed.chunkLength;
+                    }
                     if (Number.isFinite(progress.totalBytes) && progress.downloadedBytes > progress.totalBytes) {
                         progress.downloadedBytes = progress.totalBytes;
                     }
+                    if (progress.lastProgressAt > 0 && now > progress.lastProgressAt) {
+                        const dt = (now - progress.lastProgressAt) / 1000;
+                        const db = progress.downloadedBytes - progress.lastDownloadedBytes;
+                        if (dt > 0 && db >= 0) {
+                            const instant = db / dt;
+                            progress.speedBps = progress.speedBps > 0
+                                ? (progress.speedBps * 0.75 + instant * 0.25)
+                                : instant;
+                        }
+                    }
+                    progress.lastProgressAt = now;
+                    progress.lastDownloadedBytes = progress.downloadedBytes;
                     renderProgress();
-                    statusEl.textContent = i.t('update.downloading');
+                    statusEl.textContent = progress.resumedFrom > 0
+                        ? i.tWith('update.resuming_attempt', {
+                            current: progress.attempt,
+                            total: maxAttempts,
+                            resumed: formatBytes(progress.resumedFrom),
+                        })
+                        : i.tWith('update.downloading_attempt', {
+                            current: progress.attempt,
+                            total: maxAttempts,
+                        });
                 } else if (parsed.kind === 'Finished') {
+                    stopIndeterminate();
+                    if (parsed.total !== null) {
+                        progress.totalBytes = parsed.total;
+                    }
+                    if (parsed.downloaded !== null) {
+                        progress.downloadedBytes = parsed.downloaded;
+                    }
                     if (Number.isFinite(progress.totalBytes)) {
                         progress.downloadedBytes = Math.max(progress.downloadedBytes, progress.totalBytes);
                         setProgressPercent(100);
@@ -453,31 +566,48 @@ class App {
                     statusEl.textContent = i.t('update.installing');
                 }
             };
-            statusEl.textContent = i.t('update.downloading');
-            const downloadResult = await downloadUpdate(updateRid, onProgress);
-            const bytesRid = resolveBytesRid(downloadResult);
-            if (bytesRid !== null) {
-                if (Number.isFinite(progress.totalBytes)) {
-                    progress.downloadedBytes = progress.totalBytes;
-                    setProgressPercent(100);
-                    renderProgress();
-                }
-                statusEl.textContent = i.t('update.installing');
-                try {
-                    await installUpdate(updateRid, bytesRid);
-                } catch (installErr) {
-                    if (!isInstallArgsError(installErr)) throw installErr;
-                    statusEl.textContent = i.t('update.downloading');
-                    resetProgress();
-                    await downloadAndInstallUpdate(updateRid, onProgress);
-                }
-            } else {
-                // Compatibility fallback for updater implementations that don't return bytes rid.
+
+            let installed = false;
+            let lastError = null;
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+                progress.attempt = attempt;
                 resetProgress();
-                await downloadAndInstallUpdate(updateRid, onProgress);
+                if (attempt > 1) {
+                    statusEl.textContent = i.tWith('update.retrying', {
+                        current: attempt,
+                        total: maxAttempts,
+                    });
+                    await sleep(800 * (attempt - 1));
+                } else {
+                    statusEl.textContent = i.tWith('update.downloading_attempt', {
+                        current: attempt,
+                        total: maxAttempts,
+                    });
+                }
+                startIndeterminate();
+                try {
+                    await downloadAndInstallUpdateResumable(updateRid, onProgress);
+                    installed = true;
+                    break;
+                } catch (err) {
+                    lastError = err;
+                }
             }
+
+            if (!installed) {
+                throw lastError || new Error('Update failed after retries');
+            }
+
+            stopIndeterminate();
+            if (Number.isFinite(progress.totalBytes)) {
+                progress.downloadedBytes = progress.totalBytes;
+                setProgressPercent(100);
+                renderProgress();
+            }
+            statusEl.textContent = i.t('update.installing');
             await relaunchApp();
         } catch (e) {
+            stopIndeterminate();
             statusEl.textContent = i.tWith('update.error', { error: getErrorMessage(e) });
             confirmBtn.disabled = false;
             confirmBtn.classList.remove('opacity-50');

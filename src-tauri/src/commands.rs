@@ -2,6 +2,25 @@ use crate::platform::Platform;
 use crate::session;
 use crate::skill::Skill;
 use crate::state::SafeState;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use base64::Engine as _;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use futures_util::StreamExt;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use http::header::{HeaderValue, ACCEPT, CONTENT_LENGTH, CONTENT_RANGE, RANGE};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use minisign_verify::{PublicKey, Signature};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use reqwest::{ClientBuilder, StatusCode};
+use std::collections::hash_map::DefaultHasher;
+use std::fs::{self, OpenOptions};
+use std::hash::{Hash, Hasher};
+use std::io::Write;
+use std::path::PathBuf;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use tauri::{ipc::Channel, Manager, ResourceId, Runtime, Webview};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use tauri_plugin_updater::Update;
 
 // --- View types ---
 
@@ -504,9 +523,262 @@ pub fn import_mcp_server_cmd(platform_id: String, name: String, config_text: Str
 
 // --- App Info ---
 
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "event", content = "data")]
+pub enum ResumableDownloadEvent {
+    #[serde(rename_all = "camelCase")]
+    Started {
+        content_length: Option<u64>,
+        total: Option<u64>,
+        resumed_from: u64,
+        downloaded: u64,
+    },
+    #[serde(rename_all = "camelCase")]
+    Progress {
+        chunk_length: usize,
+        total: Option<u64>,
+        downloaded: u64,
+    },
+    #[serde(rename_all = "camelCase")]
+    Finished {
+        total: Option<u64>,
+        downloaded: u64,
+        used_resume: bool,
+    },
+}
+
 #[tauri::command]
 pub fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[tauri::command(async)]
+pub async fn download_and_install_update_resumable<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    webview: Webview<R>,
+    rid: ResourceId,
+    on_event: Channel<ResumableDownloadEvent>,
+) -> Result<(), CommandError> {
+    let update = webview
+        .resources_table()
+        .get::<Update>(rid)
+        .map_err(|err| CommandError::SyncError(err.to_string()))?;
+    let update = (*update).clone();
+
+    let pubkey = updater_pubkey(&app)?;
+    let cache_dir = update_cache_dir(&app)?;
+    fs::create_dir_all(&cache_dir).map_err(|err| CommandError::SyncError(err.to_string()))?;
+
+    let cache_key = update_cache_key(&update);
+    let partial_path = cache_dir.join(format!("{}-{}.part", update.version, cache_key));
+    let mut resumed_from = fs::metadata(&partial_path).map(|meta| meta.len()).unwrap_or(0);
+
+    let mut headers = update.headers.clone();
+    if !headers.contains_key(ACCEPT) {
+        headers.insert(ACCEPT, HeaderValue::from_static("application/octet-stream"));
+    }
+
+    let mut request = build_resumable_update_request(&update)?
+        .get(update.download_url.clone())
+        .headers(headers.clone());
+
+    if resumed_from > 0 {
+        request = request.header(RANGE, format!("bytes={}-", resumed_from));
+    }
+
+    let mut response = request
+        .send()
+        .await
+        .map_err(|err| CommandError::SyncError(err.to_string()))?;
+
+    if resumed_from > 0 {
+        match response.status() {
+            StatusCode::PARTIAL_CONTENT => {}
+            StatusCode::OK | StatusCode::RANGE_NOT_SATISFIABLE => {
+                resumed_from = 0;
+                let _ = fs::remove_file(&partial_path);
+                response = build_resumable_update_request(&update)?
+                    .get(update.download_url.clone())
+                    .headers(headers.clone())
+                    .send()
+                    .await
+                    .map_err(|err| CommandError::SyncError(err.to_string()))?;
+            }
+            status if !status.is_success() => {
+                return Err(CommandError::SyncError(format!(
+                    "Download request failed with status: {}",
+                    status
+                )));
+            }
+            _ => {}
+        }
+    }
+
+    if !response.status().is_success() {
+        return Err(CommandError::SyncError(format!(
+            "Download request failed with status: {}",
+            response.status()
+        )));
+    }
+
+    let content_length = response
+        .headers()
+        .get(CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+    let total = parse_total_from_content_range(response.headers().get(CONTENT_RANGE))
+        .or_else(|| content_length.map(|len| len.saturating_add(resumed_from)));
+
+    let mut file = if resumed_from > 0 && response.status() == StatusCode::PARTIAL_CONTENT {
+        OpenOptions::new()
+            .append(true)
+            .open(&partial_path)
+            .map_err(|err| CommandError::SyncError(err.to_string()))?
+    } else {
+        resumed_from = 0;
+        OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&partial_path)
+            .map_err(|err| CommandError::SyncError(err.to_string()))?
+    };
+
+    let mut downloaded = resumed_from;
+    let _ = on_event.send(ResumableDownloadEvent::Started {
+        content_length,
+        total,
+        resumed_from,
+        downloaded,
+    });
+
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|err| CommandError::SyncError(err.to_string()))?;
+        file.write_all(&chunk)
+            .map_err(|err| CommandError::SyncError(err.to_string()))?;
+        downloaded = downloaded.saturating_add(chunk.len() as u64);
+        let _ = on_event.send(ResumableDownloadEvent::Progress {
+            chunk_length: chunk.len(),
+            total,
+            downloaded,
+        });
+    }
+    file.flush()
+        .map_err(|err| CommandError::SyncError(err.to_string()))?;
+
+    let bytes = fs::read(&partial_path).map_err(|err| CommandError::SyncError(err.to_string()))?;
+    verify_update_signature(&bytes, &update.signature, &pubkey)?;
+    let _ = on_event.send(ResumableDownloadEvent::Finished {
+        total,
+        downloaded,
+        used_resume: resumed_from > 0,
+    });
+    update
+        .install(&bytes)
+        .map_err(|err| CommandError::SyncError(err.to_string()))?;
+    let _ = fs::remove_file(&partial_path);
+    Ok(())
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+#[tauri::command(async)]
+pub async fn download_and_install_update_resumable(
+    rid: u32,
+    on_event: serde_json::Value,
+) -> Result<(), CommandError> {
+    let _ = (rid, on_event);
+    Err(CommandError::SyncError(
+        "Resumable updater is not available on this platform.".to_string(),
+    ))
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn updater_pubkey<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<String, CommandError> {
+    app.config()
+        .plugins
+        .0
+        .get("updater")
+        .and_then(|updater| updater.get("pubkey"))
+        .and_then(|pubkey| pubkey.as_str())
+        .map(|value| value.to_string())
+        .ok_or_else(|| CommandError::SyncError("Updater pubkey is missing from config.".to_string()))
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn update_cache_dir<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, CommandError> {
+    let base = app
+        .path()
+        .app_cache_dir()
+        .ok()
+        .or_else(|| dirs::cache_dir().map(|path| path.join("agent-hub")))
+        .ok_or_else(|| CommandError::SyncError("Unable to resolve cache directory.".to_string()))?;
+    Ok(base.join("updater"))
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn update_cache_key(update: &Update) -> String {
+    let mut hasher = DefaultHasher::new();
+    update.download_url.as_str().hash(&mut hasher);
+    update.signature.hash(&mut hasher);
+    update.version.hash(&mut hasher);
+    update.target.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn build_resumable_update_request(update: &Update) -> Result<reqwest::Client, CommandError> {
+    let mut builder = ClientBuilder::new().user_agent("agent-hub-resumable-updater");
+    if let Some(timeout) = update.timeout {
+        builder = builder.timeout(timeout);
+    }
+    if update.no_proxy {
+        builder = builder.no_proxy();
+    } else if let Some(proxy) = update.proxy.clone() {
+        builder = builder.proxy(
+            reqwest::Proxy::all(proxy.as_str())
+                .map_err(|err| CommandError::SyncError(err.to_string()))?,
+        );
+    }
+    builder
+        .build()
+        .map_err(|err| CommandError::SyncError(err.to_string()))
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn parse_total_from_content_range(value: Option<&http::HeaderValue>) -> Option<u64> {
+    let value = value?.to_str().ok()?;
+    let slash = value.rsplit('/').next()?;
+    slash.parse::<u64>().ok()
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn verify_update_signature(
+    data: &[u8],
+    release_signature: &str,
+    pub_key: &str,
+) -> Result<(), CommandError> {
+    let pub_key_decoded = base64_to_string(pub_key)?;
+    let public_key =
+        PublicKey::decode(&pub_key_decoded).map_err(|err| CommandError::SyncError(err.to_string()))?;
+    let signature_decoded = base64_to_string(release_signature)?;
+    let signature =
+        Signature::decode(&signature_decoded).map_err(|err| CommandError::SyncError(err.to_string()))?;
+    public_key
+        .verify(data, &signature, true)
+        .map_err(|err| CommandError::SyncError(err.to_string()))?;
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn base64_to_string(value: &str) -> Result<String, CommandError> {
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(value)
+        .map_err(|err| CommandError::SyncError(err.to_string()))?;
+    std::str::from_utf8(&decoded)
+        .map(|s| s.to_string())
+        .map_err(|err| CommandError::SyncError(err.to_string()))
 }
 
 // --- MCP Sync Commands ---

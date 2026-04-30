@@ -53,6 +53,7 @@ pub fn run() {
             commands::empty_trash_cmd,
             commands::scan_invalid_skills_cmd,
             commands::get_app_version,
+            commands::download_and_install_update_resumable,
             commands::list_session_platforms,
             commands::list_sessions,
             commands::list_session_terminals,
