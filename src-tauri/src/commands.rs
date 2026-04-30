@@ -1,4 +1,5 @@
 use crate::platform::Platform;
+use crate::session;
 use crate::skill::Skill;
 use crate::state::SafeState;
 
@@ -291,6 +292,35 @@ pub fn read_skill_file(state: tauri::State<'_, SafeState>, platform_id: String, 
         return Err(CommandError::NotFound("Path traversal not allowed".into()));
     }
     std::fs::read_to_string(&full_path).map_err(|e| CommandError::NotFound(e.to_string()))
+}
+
+// --- Session Commands ---
+
+#[tauri::command(async)]
+pub fn list_session_platforms() -> Result<Vec<session::SessionPlatform>, CommandError> {
+    session::list_session_platforms().map_err(CommandError::SyncError)
+}
+
+#[tauri::command(async)]
+pub fn list_sessions(platform_id: String, offset: u32, limit: u32) -> Result<session::SessionListPage, CommandError> {
+    session::list_sessions(&platform_id, offset as usize, limit as usize).map_err(CommandError::SyncError)
+}
+
+#[tauri::command(async)]
+pub fn list_session_terminals() -> Vec<session::SessionTerminalOption> {
+    session::list_session_terminals()
+}
+
+#[tauri::command(async)]
+pub fn resume_session(platform_id: String, session_id: String, project_path: String, terminal_id: String) -> Result<String, CommandError> {
+    session::resume_session(&platform_id, &session_id, &project_path, &terminal_id)
+        .map_err(CommandError::SyncError)
+}
+
+#[tauri::command(async)]
+pub fn get_session_messages(platform_id: String, session_id: String, offset: u32, limit: u32) -> Result<Vec<session::SessionMessage>, CommandError> {
+    session::get_session_messages(&platform_id, &session_id, offset as usize, limit as usize)
+        .map_err(CommandError::SyncError)
 }
 
 // --- Trash Commands ---

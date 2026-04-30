@@ -35,15 +35,6 @@ fn ensure_parent(path: &std::path::Path) -> Result<(), String> {
 
 // --- JSON ---
 
-fn read_or_create_json_doc(path: &std::path::Path) -> Result<Value, String> {
-    if path.exists() {
-        let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
-        serde_json::from_str(&content).map_err(|e| e.to_string())
-    } else {
-        Ok(Value::Object(serde_json::Map::new()))
-    }
-}
-
 fn save_json_server(def: &super::registry::McpPlatformDef, name: &str, config: Value) -> Result<(), String> {
     ensure_parent(&def.config_path)?;
     // For new files or files without the mcp_key, use clean serialization
@@ -134,15 +125,6 @@ fn delete_json_server(def: &super::registry::McpPlatformDef, name: &str) -> Resu
 
 // --- TOML ---
 
-fn read_or_create_toml_doc(path: &std::path::Path) -> Result<toml::Value, String> {
-    if path.exists() {
-        let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
-        toml::from_str(&content).map_err(|e| e.to_string())
-    } else {
-        Ok(toml::Value::Table(toml::map::Map::new()))
-    }
-}
-
 fn save_toml_server(def: &super::registry::McpPlatformDef, name: &str, config: Value) -> Result<(), String> {
     ensure_parent(&def.config_path)?;
     let before = if def.config_path.exists() {
@@ -194,7 +176,6 @@ fn delete_toml_server(def: &super::registry::McpPlatformDef, name: &str) -> Resu
         // Remove leading newlines before the section header if needed
         let prefix = &content[..pos];
         let prefix_trimmed = prefix.trim_end();
-        let trim_len = prefix.len() - prefix_trimmed.len();
         let result = format!("{}{}", prefix_trimmed, &content[section_end..]);
         return fs::write(&def.config_path, result.trim_end().to_string() + "\n").map_err(|e| e.to_string());
     }

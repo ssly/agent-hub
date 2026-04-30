@@ -52,6 +52,38 @@ function resolveBytesRid(downloadResult) {
     return null;
 }
 
+function parseNonNegativeNumber(value) {
+    const n = Number(value);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+function formatBytes(bytes) {
+    if (!Number.isFinite(bytes) || bytes < 0) return '--';
+    if (bytes < 1024) return `${Math.round(bytes)} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+function formatInt(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return '--';
+    return Math.round(n).toLocaleString();
+}
+
+function parseDownloadProgressEvent(event) {
+    if (!event || typeof event !== 'object') {
+        return { kind: '', chunkLength: null, contentLength: null };
+    }
+    const kind = typeof event.event === 'string' ? event.event : '';
+    const payload = event.data && typeof event.data === 'object' ? event.data : event;
+    return {
+        kind,
+        chunkLength: parseNonNegativeNumber(payload.chunkLength ?? payload.chunk_length),
+        contentLength: parseNonNegativeNumber(payload.contentLength ?? payload.content_length)
+    };
+}
+
 function relaunchApp() {
     return tauriInvoke('plugin:process|restart');
 }
@@ -82,7 +114,7 @@ class App {
         this.selectedSkillName = null;
         this.selectedFolder = '';
         this.currentView = 'skills';
-        this.currentTab = 'skills'; // 'skills' | 'mcp'
+        this.currentTab = 'skills'; // 'skills' | 'mcp' | 'sessions'
         this.diffResult = null;
         this.searchResults = [];
         this.fileViewing = null;
@@ -96,6 +128,21 @@ class App {
         this.mcpServerDetails = {};  // name -> { config_text, format, editing }
         this.expandedMcpServer = null;  // name of currently expanded server
         this.selectedMcpPlatform = null;
+        // Session state
+        this.sessionPlatforms = [];
+        this.selectedSessionPlatform = null;
+        this.sessions = [];
+        this.sessionTotal = 0;
+        this.sessionOffset = 0;
+        this.sessionHasMore = false;
+        this.sessionLoadingMore = false;
+        this.isSessionsLoading = false;
+        this.sessionsLoadError = '';
+        this.sessionPageSize = 30;
+        this.sessionMessagePageSize = 50;
+        this.sessionTerminals = [];
+        this.selectedSessionTerminal = 'terminal-default';
+        this.resumingSessionId = null;
         // Trash state
         this.trashCount = 0;
         // Update state
@@ -307,6 +354,12 @@ class App {
             <p class="text-sm text-green-400 font-mono mb-3">${transition}</p>
             ${bodyHtml}
             <div id="update-status" class="text-sm text-gray-500 mb-3"></div>
+            <div id="update-progress-wrap" class="mb-3 hidden">
+                <div style="height:6px;background:#111827;border-radius:9999px;overflow:hidden;border:1px solid #374151;">
+                    <div id="update-progress-bar" style="height:100%;width:0%;background:#10b981;transition:width .2s ease;"></div>
+                </div>
+                <div id="update-progress-text" class="text-xs text-gray-500 mt-1"></div>
+            </div>
             <div class="flex gap-3 justify-end">
                 <button class="px-4 py-2 bg-green-700 hover:bg-green-600 rounded text-sm cursor-pointer update-confirm-btn">${i.t('update.confirm')}</button>
                 <button class="px-4 py-2 text-gray-400 hover:text-white text-sm cursor-pointer modal-cancel">${i.t('action.cancel')}</button>
@@ -320,8 +373,52 @@ class App {
     async doUpdate() {
         const i = this.i18n;
         const statusEl = document.getElementById('update-status');
+        const progressWrapEl = document.getElementById('update-progress-wrap');
+        const progressBarEl = document.getElementById('update-progress-bar');
+        const progressTextEl = document.getElementById('update-progress-text');
         const confirmBtn = this.modalEl().querySelector('.update-confirm-btn');
         const cancelBtn = this.modalEl().querySelector('.modal-cancel');
+        const progress = {
+            downloadedBytes: 0,
+            totalBytes: null,
+            percent: 0
+        };
+
+        const setProgressPercent = (percent) => {
+            const normalized = Math.max(0, Math.min(100, Number(percent) || 0));
+            progress.percent = normalized;
+            if (progressBarEl) progressBarEl.style.width = `${normalized.toFixed(1)}%`;
+        };
+
+        const renderProgress = () => {
+            const hasTotal = Number.isFinite(progress.totalBytes) && progress.totalBytes > 0;
+            if (hasTotal) {
+                const raw = (progress.downloadedBytes / progress.totalBytes) * 100;
+                setProgressPercent(raw);
+                if (progressTextEl) {
+                    progressTextEl.textContent = i.tWith('update.progress_detail', {
+                        percent: progress.percent.toFixed(1),
+                        downloaded: formatBytes(progress.downloadedBytes),
+                        total: formatBytes(progress.totalBytes)
+                    });
+                }
+            } else {
+                setProgressPercent(0);
+                if (progressTextEl) {
+                    progressTextEl.textContent = i.tWith('update.progress_detail_unknown', {
+                        downloaded: formatBytes(progress.downloadedBytes)
+                    });
+                }
+            }
+        };
+
+        const resetProgress = () => {
+            progress.downloadedBytes = 0;
+            progress.totalBytes = null;
+            setProgressPercent(0);
+            renderProgress();
+        };
+
         try {
             const updateRid = this.update?.rid;
             if (typeof updateRid !== 'number') {
@@ -330,10 +427,29 @@ class App {
             confirmBtn.disabled = true;
             confirmBtn.classList.add('opacity-50');
             cancelBtn.classList.add('hidden');
+            progressWrapEl?.classList.remove('hidden');
+            resetProgress();
+
             const onProgress = (event) => {
-                if (event.event === 'Progress' || event.event === 'Started') {
+                const parsed = parseDownloadProgressEvent(event);
+                if (parsed.kind === 'Started') {
+                    progress.downloadedBytes = 0;
+                    progress.totalBytes = parsed.contentLength;
+                    renderProgress();
                     statusEl.textContent = i.t('update.downloading');
-                } else if (event.event === 'Finished') {
+                } else if (parsed.kind === 'Progress') {
+                    if (parsed.chunkLength !== null) progress.downloadedBytes += parsed.chunkLength;
+                    if (Number.isFinite(progress.totalBytes) && progress.downloadedBytes > progress.totalBytes) {
+                        progress.downloadedBytes = progress.totalBytes;
+                    }
+                    renderProgress();
+                    statusEl.textContent = i.t('update.downloading');
+                } else if (parsed.kind === 'Finished') {
+                    if (Number.isFinite(progress.totalBytes)) {
+                        progress.downloadedBytes = Math.max(progress.downloadedBytes, progress.totalBytes);
+                        setProgressPercent(100);
+                        renderProgress();
+                    }
                     statusEl.textContent = i.t('update.installing');
                 }
             };
@@ -341,16 +457,23 @@ class App {
             const downloadResult = await downloadUpdate(updateRid, onProgress);
             const bytesRid = resolveBytesRid(downloadResult);
             if (bytesRid !== null) {
+                if (Number.isFinite(progress.totalBytes)) {
+                    progress.downloadedBytes = progress.totalBytes;
+                    setProgressPercent(100);
+                    renderProgress();
+                }
                 statusEl.textContent = i.t('update.installing');
                 try {
                     await installUpdate(updateRid, bytesRid);
                 } catch (installErr) {
                     if (!isInstallArgsError(installErr)) throw installErr;
                     statusEl.textContent = i.t('update.downloading');
+                    resetProgress();
                     await downloadAndInstallUpdate(updateRid, onProgress);
                 }
             } else {
                 // Compatibility fallback for updater implementations that don't return bytes rid.
+                resetProgress();
                 await downloadAndInstallUpdate(updateRid, onProgress);
             }
             await relaunchApp();
@@ -372,6 +495,17 @@ class App {
     bindEvents() {
         document.getElementById('btn-refresh').addEventListener('click', () => {
             if (this.currentTab === 'mcp') { this.refreshMcpPlatforms().then(() => this.render()); }
+            else if (this.currentTab === 'sessions') {
+                this.isSessionsLoading = true;
+                this.render();
+                Promise.all([
+                    this.refreshSessionPlatforms(),
+                    this.refreshSessionTerminals(),
+                ]).finally(() => {
+                    this.isSessionsLoading = false;
+                    this.render();
+                });
+            }
             else { this.refreshPlatforms().then(() => this.render()); }
         });
         document.getElementById('btn-lang').addEventListener('click', () => this.switchLang());
@@ -389,14 +523,35 @@ class App {
         document.getElementById('modal-overlay').addEventListener('click', (e) => {
             if (e.target.id === 'modal-overlay') this.closeModal();
         });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') this.closeModal();
+        });
 
         // Tab switching
         document.getElementById('tab-skills').addEventListener('click', () => this.switchTab('skills'));
         document.getElementById('tab-mcp').addEventListener('click', () => this.switchTab('mcp'));
+        document.getElementById('tab-sessions').addEventListener('click', () => this.switchTab('sessions'));
     }
 
     switchTab(tab) {
         this.currentTab = tab;
+        if (tab === 'mcp') {
+            this.refreshMcpPlatforms().then(() => this.render());
+            return;
+        }
+        if (tab === 'sessions') {
+            this.isSessionsLoading = true;
+            this.render();
+            Promise.all([
+                this.refreshSessionPlatforms(),
+                this.refreshSessionTerminals(),
+            ]).finally(() => {
+                this.isSessionsLoading = false;
+                this.render();
+            });
+            return;
+        }
+        this.currentView = 'skills';
         this.render();
     }
 
@@ -473,6 +628,212 @@ class App {
         const i = this.i18n;
         let paths = invalid.map(item => item.path).join('\n');
         return i.tWith('scan_invalid.fix_prompt', { paths });
+    }
+
+    // --- Sessions ---
+    async refreshSessionPlatforms() {
+        this.sessionsLoadError = '';
+        try {
+            this.sessionPlatforms = await Api.listSessionPlatforms();
+        } catch (e) {
+            this.sessionPlatforms = [];
+            this.sessionsLoadError = e?.SyncError || e?.message || String(e);
+        }
+
+        if (this.sessionPlatforms.length === 0) {
+            this.selectedSessionPlatform = null;
+            this.sessions = [];
+            this.sessionOffset = 0;
+            this.sessionTotal = 0;
+            this.sessionHasMore = false;
+            return;
+        }
+
+        const exists = this.sessionPlatforms.some(p => p.id === this.selectedSessionPlatform);
+        if (!exists) {
+            this.selectedSessionPlatform = this.sessionPlatforms[0].id;
+        }
+        await this.loadSessionsForPlatform(this.selectedSessionPlatform, { append: false });
+    }
+
+    async refreshSessionTerminals() {
+        try {
+            const terminals = await Api.listSessionTerminals();
+            this.sessionTerminals = Array.isArray(terminals) ? terminals : [];
+        } catch {
+            this.sessionTerminals = [];
+        }
+        if (this.sessionTerminals.length === 0) {
+            this.selectedSessionTerminal = 'terminal-default';
+            return;
+        }
+        const active = this.sessionTerminals.find(item => item.id === this.selectedSessionTerminal && item.available);
+        if (active) return;
+        const firstAvailable = this.sessionTerminals.find(item => item.available);
+        this.selectedSessionTerminal = firstAvailable ? firstAvailable.id : this.sessionTerminals[0].id;
+    }
+
+    async loadSessionsForPlatform(platformId, options = {}) {
+        const append = options.append === true;
+        if (!platformId) {
+            this.sessions = [];
+            this.sessionOffset = 0;
+            this.sessionTotal = 0;
+            this.sessionHasMore = false;
+            return;
+        }
+        const offset = append ? this.sessionOffset : 0;
+        try {
+            const page = await Api.listSessions(platformId, offset, this.sessionPageSize);
+            const pageSessions = Array.isArray(page?.sessions) ? page.sessions : [];
+            if (append) {
+                this.sessions = [...this.sessions, ...pageSessions];
+            } else {
+                this.sessions = pageSessions;
+            }
+            this.sessionTotal = Number(page?.total) || this.sessions.length;
+            this.sessionOffset = Number(page?.offset ?? offset) + pageSessions.length;
+            this.sessionHasMore = Boolean(page?.has_more) && this.sessionOffset < this.sessionTotal;
+            this.sessionsLoadError = '';
+        } catch (e) {
+            const errorText = e?.SyncError || e?.message || String(e);
+            if (!append) {
+                this.sessions = [];
+                this.sessionOffset = 0;
+                this.sessionTotal = 0;
+                this.sessionHasMore = false;
+                this.sessionsLoadError = errorText;
+            } else {
+                this.sessionsLoadError = '';
+                alert(this.i18n.tWith('session.load_failed', { error: errorText }));
+            }
+        }
+    }
+
+    async selectSessionPlatform(id) {
+        this.selectedSessionPlatform = id;
+        this.isSessionsLoading = true;
+        this.render();
+        try {
+            await this.loadSessionsForPlatform(id, { append: false });
+        } finally {
+            this.isSessionsLoading = false;
+            this.render();
+        }
+    }
+
+    async loadMoreSessions() {
+        if (this.sessionLoadingMore || !this.sessionHasMore || !this.selectedSessionPlatform) {
+            return;
+        }
+        this.sessionLoadingMore = true;
+        this.render();
+        try {
+            await this.loadSessionsForPlatform(this.selectedSessionPlatform, { append: true });
+        } finally {
+            this.sessionLoadingMore = false;
+            this.render();
+        }
+    }
+
+    async resumeSessionInTerminal(session) {
+        const i = this.i18n;
+        const terminalId = this.selectedSessionTerminal || 'terminal-default';
+        this.resumingSessionId = session.id;
+        this.render();
+        try {
+            const launched = await Api.resumeSession(
+                session.platform_id || this.selectedSessionPlatform,
+                session.id,
+                session.project_path || '',
+                terminalId
+            );
+            alert(i.tWith('session.resume_started', { command: launched }));
+        } catch (e) {
+            alert(i.tWith('session.resume_failed', { error: e.SyncError || e.message || e }));
+        } finally {
+            this.resumingSessionId = null;
+            this.render();
+        }
+    }
+
+    async showSessionMessagesModal(session) {
+        const i = this.i18n;
+        const summary = [
+            session.project_path ? `<span class="text-gray-500">${esc(session.project_path)}</span>` : '',
+            session.model ? `<span class="text-cyan-400">${esc(session.model)}</span>` : '',
+            session.tokens_used != null ? `<span class="text-yellow-500">${i.tWith('session.tokens_value', { count: formatInt(session.tokens_used) })}</span>` : '',
+        ].filter(Boolean).join(' · ');
+
+        const html = `<div class="p-5">
+            <div class="flex items-start justify-between gap-3 mb-3">
+                <div>
+                    <h2 class="text-lg font-bold text-green-400">${esc(session.title || i.t('session.untitled'))}</h2>
+                    <div class="text-xs text-gray-500 mt-1">${summary || i.t('session.no_metadata')}</div>
+                    <div class="text-xs text-gray-600 mt-0.5">${i.tWith('session.started_at', { time: this.formatSessionTime(session.started_at) })}</div>
+                </div>
+                <button class="text-gray-400 hover:text-white text-sm cursor-pointer modal-cancel">${i.t('action.close')}</button>
+            </div>
+            <div data-session-messages class="bg-gray-900 rounded-lg border border-gray-700 h-[60vh] overflow-y-auto p-3 space-y-3"></div>
+            <div data-session-loading class="text-xs text-gray-500 mt-2">${i.t('session.loading_messages')}</div>
+        </div>`;
+        this.openModal(html);
+        this.modalEl().querySelector('.modal-cancel').addEventListener('click', () => this.closeModal());
+
+        const listEl = this.modalEl().querySelector('[data-session-messages]');
+        const loadingEl = this.modalEl().querySelector('[data-session-loading]');
+        let offset = 0;
+        let loading = false;
+        let hasMore = true;
+
+        const appendMessages = (messages) => {
+            if (messages.length === 0 && offset === 0) {
+                listEl.innerHTML = `<p class="text-sm text-gray-500">${i.t('session.no_messages')}</p>`;
+                return;
+            }
+            for (const msg of messages) {
+                const isUser = msg.role === 'user';
+                const roleLabel = isUser ? i.t('session.role_user') : i.t('session.role_assistant');
+                const roleClass = isUser ? 'text-cyan-400' : 'text-green-400';
+                const bubbleClass = isUser ? 'border-cyan-800/40 bg-cyan-900/10' : 'border-green-800/40 bg-green-900/10';
+                const timeLabel = msg.timestamp ? this.formatSessionTime(msg.timestamp) : '-';
+                const node = document.createElement('div');
+                node.className = `rounded border ${bubbleClass} p-3`;
+                node.innerHTML = `<div class="flex items-center justify-between mb-2">
+                    <span class="text-xs font-semibold ${roleClass}">${roleLabel}</span>
+                    <span class="text-[11px] text-gray-600">${esc(timeLabel)}</span>
+                </div>
+                <pre class="text-sm text-gray-200 whitespace-pre-wrap break-words font-sans">${esc(msg.content || '')}</pre>`;
+                listEl.appendChild(node);
+            }
+        };
+
+        const loadMore = async () => {
+            if (loading || !hasMore) return;
+            loading = true;
+            loadingEl.textContent = i.t('session.loading_messages');
+            try {
+                const platformId = session.platform_id || this.selectedSessionPlatform;
+                const page = await Api.getSessionMessages(platformId, session.id, offset, this.sessionMessagePageSize || 50);
+                appendMessages(page);
+                offset += page.length;
+                hasMore = page.length === (this.sessionMessagePageSize || 50);
+                loadingEl.textContent = hasMore ? i.t('session.scroll_for_more') : i.t('session.no_more_messages');
+            } catch (e) {
+                loadingEl.textContent = i.tWith('session.load_failed', { error: e.SyncError || e.message || e });
+                hasMore = false;
+            } finally {
+                loading = false;
+            }
+        };
+
+        listEl.addEventListener('scroll', () => {
+            if (listEl.scrollTop + listEl.clientHeight >= listEl.scrollHeight - 100) {
+                loadMore();
+            }
+        });
+
+        await loadMore();
     }
 
     // --- MCP ---
@@ -1027,10 +1388,16 @@ args = ["mcp-server-time"]
     }
 
     renderTabBar() {
+        const i = this.i18n;
         const skillsTab = document.getElementById('tab-skills');
         const mcpTab = document.getElementById('tab-mcp');
+        const sessionsTab = document.getElementById('tab-sessions');
+        skillsTab.textContent = i.t('ui.skills_tab');
+        mcpTab.textContent = i.t('ui.mcp_tab');
+        sessionsTab.textContent = i.t('ui.sessions_tab');
         skillsTab.className = `flex-1 py-2 text-sm text-center cursor-pointer border-b-2 ${this.currentTab === 'skills' ? 'text-gray-300 border-cyan-500' : 'text-gray-500 hover:text-white border-transparent'}`;
         mcpTab.className = `flex-1 py-2 text-sm text-center cursor-pointer border-b-2 ${this.currentTab === 'mcp' ? 'text-gray-300 border-cyan-500' : 'text-gray-500 hover:text-white border-transparent'}`;
+        sessionsTab.className = `flex-1 py-2 text-sm text-center cursor-pointer border-b-2 ${this.currentTab === 'sessions' ? 'text-gray-300 border-cyan-500' : 'text-gray-500 hover:text-white border-transparent'}`;
     }
 
     renderSidebar() {
@@ -1057,6 +1424,28 @@ args = ["mcp-server-time"]
             }).join('');
             el.querySelectorAll('button[data-mcp-platform]').forEach(btn => {
                 btn.addEventListener('click', () => this.selectMcpPlatform(btn.dataset.mcpPlatform));
+            });
+            return;
+        }
+
+        if (this.currentTab === 'sessions') {
+            searchEl.classList.add('hidden');
+            if (this.sessionPlatforms.length === 0) {
+                el.innerHTML = `<p class="text-gray-500 text-sm p-3">${i.t('session.no_platforms')}</p>`;
+                return;
+            }
+            el.innerHTML = this.sessionPlatforms.map(p => {
+                const active = p.id === this.selectedSessionPlatform;
+                return `<button class="w-full text-left px-3 py-2 rounded cursor-pointer ${active ? 'bg-gray-700 text-green-400 font-bold' : 'text-gray-300 hover:bg-gray-700/50'}"
+                    data-session-platform="${p.id}">
+                    <div class="flex items-center justify-between">
+                        <span class="text-sm">${esc(p.display_name)}</span>
+                        <span class="text-xs text-gray-500">${p.session_count}</span>
+                    </div>
+                </button>`;
+            }).join('');
+            el.querySelectorAll('button[data-session-platform]').forEach(btn => {
+                btn.addEventListener('click', () => this.selectSessionPlatform(btn.dataset.sessionPlatform));
             });
             return;
         }
@@ -1091,17 +1480,31 @@ args = ["mcp-server-time"]
         const diff = document.getElementById('btn-diff');
         const sync = document.getElementById('btn-sync');
         const breadcrumb = document.getElementById('breadcrumb');
+        const scanInvalid = document.getElementById('btn-scan-invalid');
 
         if (this.currentTab === 'mcp') {
             back.classList.add('hidden');
             diff.classList.add('hidden');
             sync.classList.add('hidden');
+            scanInvalid.classList.add('hidden');
             breadcrumb.textContent = this.selectedMcpPlatform
                 ? (this.mcpPlatforms.find(p => p.id === this.selectedMcpPlatform)?.display_name || '')
                 : i.t('mcp.title');
             return;
         }
 
+        if (this.currentTab === 'sessions') {
+            back.classList.add('hidden');
+            diff.classList.add('hidden');
+            sync.classList.add('hidden');
+            scanInvalid.classList.add('hidden');
+            breadcrumb.textContent = this.selectedSessionPlatform
+                ? (this.sessionPlatforms.find(p => p.id === this.selectedSessionPlatform)?.display_name || '')
+                : i.t('session.title');
+            return;
+        }
+
+        scanInvalid.classList.remove('hidden');
         back.classList.toggle('hidden', this.currentView === 'skills');
         const showAction = this.currentView === 'detail' || this.currentView === 'diff';
         diff.classList.toggle('hidden', !showAction);
@@ -1123,13 +1526,21 @@ args = ["mcp-server-time"]
 
     renderView() {
         const skillViews = ['skills', 'detail', 'diff', 'search'];
-        const allViews = ['skills', 'detail', 'diff', 'search', 'mcp-servers'];
+        const allViews = ['skills', 'detail', 'diff', 'search', 'mcp-servers', 'sessions'];
 
         if (this.currentTab === 'mcp') {
             for (const v of allViews) {
                 document.getElementById(`view-${v}`).classList.toggle('hidden', v !== 'mcp-servers');
             }
             this.renderMcpServerList();
+            return;
+        }
+
+        if (this.currentTab === 'sessions') {
+            for (const v of allViews) {
+                document.getElementById(`view-${v}`).classList.toggle('hidden', v !== 'sessions');
+            }
+            this.renderSessionsView();
             return;
         }
 
@@ -1140,6 +1551,119 @@ args = ["mcp-server-time"]
         if (this.currentView === 'detail') this.renderSkillDetail();
         if (this.currentView === 'diff') this.renderDiffView();
         if (this.currentView === 'search') this.renderSearchResults();
+    }
+
+    renderSessionsView() {
+        const el = document.getElementById('view-sessions');
+        const i = this.i18n;
+        if (this.isSessionsLoading) {
+            el.innerHTML = `<p class="text-gray-500">${i.t('session.loading_messages')}</p>`;
+            return;
+        }
+        if (this.sessionsLoadError) {
+            el.innerHTML = `<p class="text-red-400">${esc(i.tWith('session.load_failed', { error: this.sessionsLoadError }))}</p>`;
+            return;
+        }
+        if (!this.selectedSessionPlatform) {
+            el.innerHTML = `<p class="text-gray-500">${i.t('session.select_platform')}</p>`;
+            return;
+        }
+        const terminalSource = (this.sessionTerminals && this.sessionTerminals.length > 0)
+            ? this.sessionTerminals
+            : [{ id: 'terminal-default', display_name: 'Terminal (Default)', available: true }];
+        const terminalOptions = terminalSource.map(item => {
+            const selected = item.id === this.selectedSessionTerminal ? 'selected' : '';
+            const disabled = item.available ? '' : 'disabled';
+            const label = item.available ? item.display_name : `${item.display_name} (${i.t('session.unavailable')})`;
+            return `<option value="${esc(item.id)}" ${selected} ${disabled}>${esc(label)}</option>`;
+        }).join('');
+
+        let html = `<div class="rounded-lg border border-gray-700 bg-gray-900/50 p-3 mb-3">
+            <div class="flex items-center justify-between gap-2">
+                <div class="text-xs text-gray-400">${i.tWith('session.loaded_summary', { loaded: formatInt(this.sessions.length), total: formatInt(this.sessionTotal || 0) })}</div>
+                <div class="flex items-center gap-2">
+                    <span class="text-xs text-gray-500">${i.t('session.resume_terminal')}</span>
+                    <select id="session-terminal-select" class="text-xs bg-gray-800 border border-gray-700 rounded px-2 py-1 cursor-pointer">
+                        ${terminalOptions}
+                    </select>
+                </div>
+            </div>
+        </div>`;
+
+        if (this.sessions.length === 0) {
+            html += `<p class="text-gray-500">${i.t('session.no_sessions')}</p>`;
+            el.innerHTML = html;
+            const terminalSelect = el.querySelector('#session-terminal-select');
+            if (terminalSelect) {
+                terminalSelect.addEventListener('change', (e) => {
+                    this.selectedSessionTerminal = e.target.value;
+                });
+            }
+            return;
+        }
+
+        html += `<div class="space-y-2">`;
+        for (const session of this.sessions) {
+            const modelTag = session.model ? `<span class="text-cyan-400">${esc(session.model)}</span>` : '';
+            const tokensTag = session.tokens_used != null ? `<span class="text-yellow-500">${i.tWith('session.tokens_value', { count: formatInt(session.tokens_used) })}</span>` : '';
+            const messagesTag = session.message_count != null ? `<span class="text-purple-400">${i.tWith('session.messages_value', { count: formatInt(session.message_count) })}</span>` : '';
+            const meta = [modelTag, tokensTag, messagesTag].filter(Boolean).join(' · ');
+            const isResuming = this.resumingSessionId === session.id;
+
+            html += `<div class="rounded-lg border border-gray-700 hover:border-cyan-700 hover:bg-gray-800/50 p-3">
+                <div class="flex items-center justify-between gap-3">
+                    <h3 class="text-sm font-semibold text-gray-100 truncate">${esc(session.title || i.t('session.untitled'))}</h3>
+                    <span class="text-xs text-gray-500 whitespace-nowrap">${esc(this.formatSessionTime(session.updated_at))}</span>
+                </div>
+                <div class="text-xs text-gray-500 truncate mt-1" title="${esc(session.project_path || '')}">${esc(session.project_path || i.t('session.no_project'))}</div>
+                ${meta ? `<div class="text-xs mt-2">${meta}</div>` : ''}
+                <div class="mt-2 flex items-center justify-between gap-2">
+                    <span class="text-xs text-gray-600">${i.tWith('session.started_at', { time: this.formatSessionTime(session.started_at) })}</span>
+                    <div class="flex items-center gap-2">
+                        <button class="px-2 py-1 text-xs border border-gray-600 rounded hover:bg-gray-700 cursor-pointer session-open-btn" data-session-id="${esc(session.id)}">${i.t('session.view_messages')}</button>
+                        <button class="px-2 py-1 text-xs bg-green-700 hover:bg-green-600 rounded cursor-pointer session-resume-btn ${isResuming ? 'opacity-50' : ''}" data-session-id="${esc(session.id)}" ${isResuming ? 'disabled' : ''}>${isResuming ? i.t('session.resuming') : i.t('session.resume')}</button>
+                    </div>
+                </div>
+            </div>`;
+        }
+        html += `</div>`;
+
+        html += `<div class="mt-3 flex items-center justify-between">
+            <span class="text-xs text-gray-500">${this.sessionHasMore ? i.t('session.more_available') : i.t('session.no_more_sessions')}</span>
+            ${this.sessionHasMore ? `<button id="session-load-more-btn" class="px-3 py-1 text-xs bg-cyan-700 hover:bg-cyan-600 rounded cursor-pointer ${this.sessionLoadingMore ? 'opacity-50' : ''}" ${this.sessionLoadingMore ? 'disabled' : ''}>${this.sessionLoadingMore ? i.t('session.loading_more') : i.t('session.load_more')}</button>` : ''}
+        </div>`;
+
+        el.innerHTML = html;
+        const terminalSelect = el.querySelector('#session-terminal-select');
+        if (terminalSelect) {
+            terminalSelect.addEventListener('change', (e) => {
+                this.selectedSessionTerminal = e.target.value;
+            });
+        }
+        el.querySelectorAll('.session-open-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const session = this.sessions.find(item => item.id === btn.dataset.sessionId);
+                if (session) this.showSessionMessagesModal(session);
+            });
+        });
+        el.querySelectorAll('.session-resume-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const session = this.sessions.find(item => item.id === btn.dataset.sessionId);
+                if (session) this.resumeSessionInTerminal(session);
+            });
+        });
+        const loadMoreBtn = el.querySelector('#session-load-more-btn');
+        if (loadMoreBtn) {
+            loadMoreBtn.addEventListener('click', () => this.loadMoreSessions());
+        }
+    }
+
+    formatSessionTime(timestamp) {
+        const n = Number(timestamp);
+        if (!Number.isFinite(n) || n <= 0) return '-';
+        const ms = n < 1e12 ? n * 1000 : n;
+        const locale = this.i18n.locale === 'zh-CN' ? 'zh-CN' : 'en-US';
+        return new Date(ms).toLocaleString(locale);
     }
 
     renderMcpServerList() {

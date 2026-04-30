@@ -96,6 +96,27 @@ export async function syncMcpServer(sourcePlatformId, targetPlatformId, serverNa
     return invoke('sync_mcp_server_cmd', { sourcePlatformId, targetPlatformId, serverName });
 }
 
+// Sessions
+export async function listSessionPlatforms() {
+    return invoke('list_session_platforms');
+}
+
+export async function listSessions(platformId, offset, limit) {
+    return invoke('list_sessions', { platformId, offset, limit });
+}
+
+export async function listSessionTerminals() {
+    return invoke('list_session_terminals');
+}
+
+export async function resumeSession(platformId, sessionId, projectPath, terminalId) {
+    return invoke('resume_session', { platformId, sessionId, projectPath, terminalId });
+}
+
+export async function getSessionMessages(platformId, sessionId, offset, limit) {
+    return invoke('get_session_messages', { platformId, sessionId, offset, limit });
+}
+
 export async function getAppVersion() {
     return invoke('get_app_version');
 }

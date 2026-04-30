@@ -4,6 +4,7 @@ mod diff;
 mod i18n;
 mod mcp;
 mod platform;
+mod session;
 mod skill;
 mod state;
 mod sync;
@@ -52,6 +53,11 @@ pub fn run() {
             commands::empty_trash_cmd,
             commands::scan_invalid_skills_cmd,
             commands::get_app_version,
+            commands::list_session_platforms,
+            commands::list_sessions,
+            commands::list_session_terminals,
+            commands::resume_session,
+            commands::get_session_messages,
         ])
         .run(tauri::generate_context!())
         .expect("error while running agent-hub");
