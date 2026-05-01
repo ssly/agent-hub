@@ -18,13 +18,20 @@ struct ClaudeSessionCandidate {
     updated_at: i64,
 }
 
-pub fn list_claude_sessions(offset: usize, limit: usize) -> Result<(usize, Vec<SessionSummary>), String> {
+pub fn list_claude_sessions(
+    offset: usize,
+    limit: usize,
+) -> Result<(usize, Vec<SessionSummary>), String> {
     let candidates = collect_claude_session_candidates()?;
     let total = candidates.len();
     let page_limit = limit.max(1);
     let mut sessions = Vec::new();
     for candidate in candidates.into_iter().skip(offset).take(page_limit) {
-        if let Ok(session) = extract_session_summary(&candidate.path, &candidate.project_path, Some(candidate.updated_at)) {
+        if let Ok(session) = extract_session_summary(
+            &candidate.path,
+            &candidate.project_path,
+            Some(candidate.updated_at),
+        ) {
             sessions.push(session);
         }
     }
@@ -39,13 +46,21 @@ pub fn count_claude_sessions() -> Result<usize, String> {
     Ok(count)
 }
 
-pub fn get_claude_messages(session_id: &str, offset: usize, limit: usize) -> Result<Vec<SessionMessage>, String> {
+pub fn get_claude_messages(
+    session_id: &str,
+    offset: usize,
+    limit: usize,
+) -> Result<Vec<SessionMessage>, String> {
     let path = find_session_file(session_id)
         .ok_or_else(|| format!("Claude session not found: {}", session_id))?;
     read_claude_messages_from_file(&path, offset, limit)
 }
 
-fn extract_session_summary(path: &Path, project_path: &str, known_updated_at: Option<i64>) -> Result<SessionSummary, String> {
+fn extract_session_summary(
+    path: &Path,
+    project_path: &str,
+    known_updated_at: Option<i64>,
+) -> Result<SessionSummary, String> {
     let session_id = path
         .file_stem()
         .and_then(|stem| stem.to_str())
@@ -118,7 +133,11 @@ fn extract_session_summary(path: &Path, project_path: &str, known_updated_at: Op
     });
     let started_at = started_at.unwrap_or(updated_at);
     let title = title
-        .or_else(|| first_user_message.clone().map(|value| truncate_chars(value, 80)))
+        .or_else(|| {
+            first_user_message
+                .clone()
+                .map(|value| truncate_chars(value, 80))
+        })
         .unwrap_or_else(|| session_id.clone());
     let final_project_path = project_path_from_record.unwrap_or_else(|| project_path.to_string());
 
@@ -135,7 +154,11 @@ fn extract_session_summary(path: &Path, project_path: &str, known_updated_at: Op
     })
 }
 
-fn read_claude_messages_from_file(path: &Path, offset: usize, limit: usize) -> Result<Vec<SessionMessage>, String> {
+fn read_claude_messages_from_file(
+    path: &Path,
+    offset: usize,
+    limit: usize,
+) -> Result<Vec<SessionMessage>, String> {
     let file = fs::File::open(path).map_err(|err| err.to_string())?;
     let reader = BufReader::new(file);
     let mut messages = Vec::new();
@@ -160,7 +183,8 @@ fn read_claude_messages_from_file(path: &Path, offset: usize, limit: usize) -> R
         let Some(content) = data
             .get("message")
             .and_then(|message| message.get("content"))
-            .and_then(extract_text_content) else {
+            .and_then(extract_text_content)
+        else {
             continue;
         };
 
@@ -223,6 +247,7 @@ where
     F: FnMut(&Path, String),
 {
     let projects_dir = claude_projects_dir()?;
+    let ignored_project_prefixes = claude_ignored_project_prefixes()?;
     if !projects_dir.exists() {
         return Ok(());
     }
@@ -242,6 +267,9 @@ where
         }
 
         let project_path = project_entry.file_name().to_string_lossy().to_string();
+        if is_ignored_project_dir(&project_path, &ignored_project_prefixes) {
+            continue;
+        }
         let session_entries = match fs::read_dir(project_entry.path()) {
             Ok(entries) => entries,
             Err(_) => continue,
@@ -267,6 +295,29 @@ where
         }
     }
     Ok(())
+}
+
+fn claude_ignored_project_prefixes() -> Result<Vec<String>, String> {
+    let home = dirs::home_dir().ok_or_else(|| "Unable to resolve HOME directory".to_string())?;
+    let claude_mem = home.join(".claude-mem");
+    Ok(vec![encode_claude_project_dir_name(
+        claude_mem.to_string_lossy().as_ref(),
+    )])
+}
+
+fn encode_claude_project_dir_name(path: &str) -> String {
+    path.chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect()
+}
+
+fn is_ignored_project_dir(project_dir: &str, ignored_prefixes: &[String]) -> bool {
+    ignored_prefixes.iter().any(|prefix| {
+        project_dir == prefix
+            || project_dir
+                .strip_prefix(prefix)
+                .is_some_and(|rest| rest.starts_with('-'))
+    })
 }
 
 fn parse_rfc3339_to_ms(value: &str) -> Option<i64> {
@@ -329,5 +380,32 @@ fn truncate_chars(value: String, max_chars: usize) -> String {
         format!("{}...", result)
     } else {
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encode_claude_project_dir_name_replaces_non_alphanumeric() {
+        let encoded = encode_claude_project_dir_name("/Users/alice/.claude-mem/observer-sessions");
+        assert_eq!(encoded, "-Users-alice--claude-mem-observer-sessions");
+    }
+
+    #[test]
+    fn ignored_project_dir_matches_prefix_and_subpaths() {
+        let prefix = encode_claude_project_dir_name("/Users/alice/.claude-mem");
+        let ignored = vec![prefix.clone()];
+
+        assert!(is_ignored_project_dir(&prefix, &ignored));
+        assert!(is_ignored_project_dir(
+            &format!("{}-observer-sessions", prefix),
+            &ignored
+        ));
+        assert!(!is_ignored_project_dir(
+            "-Users-alice-Documents-code-agent-hub",
+            &ignored
+        ));
     }
 }
