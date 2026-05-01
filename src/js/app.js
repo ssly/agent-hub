@@ -144,7 +144,7 @@ class App {
         this.sessionLoadingMore = false;
         this.isSessionsLoading = false;
         this.sessionsLoadError = '';
-        this.sessionPageSize = 30;
+        this.sessionPageSize = 50;
         this.sessionMessagePageSize = 50;
         this.sessionTerminals = [];
         this.selectedSessionTerminal = 'terminal-default';
@@ -623,21 +623,7 @@ class App {
 
     // --- Events ---
     bindEvents() {
-        document.getElementById('btn-refresh').addEventListener('click', () => {
-            if (this.currentTab === 'mcp') { this.refreshMcpPlatforms().then(() => this.render()); }
-            else if (this.currentTab === 'sessions') {
-                this.isSessionsLoading = true;
-                this.render();
-                Promise.all([
-                    this.refreshSessionPlatforms(),
-                    this.refreshSessionTerminals(),
-                ]).finally(() => {
-                    this.isSessionsLoading = false;
-                    this.render();
-                });
-            }
-            else { this.refreshPlatforms().then(() => this.render()); }
-        });
+        document.getElementById('btn-refresh').addEventListener('click', () => this.handleRefreshClick());
         document.getElementById('btn-lang').addEventListener('click', () => this.switchLang());
         document.getElementById('btn-back').addEventListener('click', () => this.backToList());
         document.getElementById('btn-diff').addEventListener('click', () => this.showDiffModal());
@@ -661,6 +647,38 @@ class App {
         document.getElementById('tab-skills').addEventListener('click', () => this.switchTab('skills'));
         document.getElementById('tab-mcp').addEventListener('click', () => this.switchTab('mcp'));
         document.getElementById('tab-sessions').addEventListener('click', () => this.switchTab('sessions'));
+    }
+
+    async handleRefreshClick() {
+        const btn = document.getElementById('btn-refresh');
+        const icon = btn?.querySelector('svg');
+        if (!btn || !icon || btn.disabled) return;
+
+        btn.disabled = true;
+        icon.classList.add('animate-spin');
+
+        try {
+            if (this.currentTab === 'mcp') {
+                await this.refreshMcpPlatforms();
+                this.render();
+            } else if (this.currentTab === 'sessions') {
+                this.isSessionsLoading = true;
+                this.render();
+                await Promise.all([
+                    this.refreshSessionPlatforms(),
+                    this.refreshSessionTerminals(),
+                ]);
+                this.isSessionsLoading = false;
+                this.render();
+            } else {
+                await this.refreshPlatforms();
+                this.render();
+            }
+        } finally {
+            this.isSessionsLoading = false;
+            icon.classList.remove('animate-spin');
+            btn.disabled = false;
+        }
     }
 
     switchTab(tab) {

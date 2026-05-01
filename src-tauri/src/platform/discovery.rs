@@ -8,14 +8,25 @@ pub fn discover_platforms(config: &Config) -> Vec<Platform> {
 
     for custom in &config.platforms {
         let expanded = shellexpand_home(&custom.skill_dir);
-        defs.push(PlatformDef { id: custom.id.clone(), display_name: custom.display_name.clone(), description: String::new(), skill_dir: expanded });
+        let presence_path = expanded.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| expanded.clone());
+        defs.push(PlatformDef {
+            id: custom.id.clone(),
+            display_name: custom.display_name.clone(),
+            description: String::new(),
+            presence_path,
+            skill_dir: expanded,
+        });
     }
 
     let mut platforms: Vec<Platform> = defs
         .into_iter()
-        .filter(|d| d.skill_dir.exists())
+        .filter(|d| d.presence_path.exists())
         .map(|d| {
-            let skills = scan_skills(&d.skill_dir, &d.id);
+            let skills = if d.skill_dir.exists() {
+                scan_skills(&d.skill_dir, &d.id)
+            } else {
+                Vec::new()
+            };
             Platform { id: d.id, display_name: d.display_name, description: d.description, skill_dir: d.skill_dir, installed: true, skills }
         })
         .collect();

@@ -460,16 +460,20 @@ fn server_summary(config: &serde_json::Value) -> String {
 
 #[tauri::command]
 pub fn list_mcp_platforms() -> Vec<McpPlatformView> {
-    crate::mcp::builtin_mcp_platforms().into_iter().map(|def| {
-        let servers = crate::mcp::read_mcp_servers(&def.id).unwrap_or_default();
-        McpPlatformView {
-            id: def.id,
-            display_name: def.display_name,
-            config_path: def.config_path.display().to_string(),
-            format: match def.format { crate::mcp::McpFormat::Json => "json", crate::mcp::McpFormat::Toml => "toml" }.to_string(),
-            server_count: servers.len(),
-        }
-    }).collect()
+    crate::mcp::builtin_mcp_platforms()
+        .into_iter()
+        .filter(|def| def.presence_path.exists())
+        .map(|def| {
+            let servers = crate::mcp::read_mcp_servers(&def.id).unwrap_or_default();
+            McpPlatformView {
+                id: def.id,
+                display_name: def.display_name,
+                config_path: def.config_path.display().to_string(),
+                format: match def.format { crate::mcp::McpFormat::Json => "json", crate::mcp::McpFormat::Toml => "toml" }.to_string(),
+                server_count: servers.len(),
+            }
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -794,6 +798,7 @@ pub struct McpSyncTarget {
 #[tauri::command]
 pub fn get_mcp_sync_targets(platform_id: String, server_name: String) -> Vec<McpSyncTarget> {
     crate::mcp::builtin_mcp_platforms().into_iter()
+        .filter(|def| def.presence_path.exists())
         .filter(|def| def.id != platform_id)
         .map(|def| {
             let has_server = crate::mcp::read_mcp_server(&def.id, &server_name).is_ok();
