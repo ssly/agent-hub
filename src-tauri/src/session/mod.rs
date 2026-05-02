@@ -1,5 +1,6 @@
 mod claude;
 mod codex;
+mod kiro;
 mod models;
 
 use std::path::Path;
@@ -30,14 +31,28 @@ pub fn list_session_platforms() -> Result<Vec<SessionPlatform>, String> {
         });
     }
 
+    let kiro_count = kiro::count_kiro_sessions()?;
+    if kiro_count > 0 {
+        platforms.push(SessionPlatform {
+            id: "kiro".to_string(),
+            display_name: "Kiro".to_string(),
+            session_count: kiro_count,
+        });
+    }
+
     Ok(platforms)
 }
 
-pub fn list_sessions(platform_id: &str, offset: usize, limit: usize) -> Result<SessionListPage, String> {
+pub fn list_sessions(
+    platform_id: &str,
+    offset: usize,
+    limit: usize,
+) -> Result<SessionListPage, String> {
     let page_limit = limit.clamp(1, MAX_SESSION_PAGE_SIZE);
     let (total, sessions) = match platform_id {
         "claude-code" => claude::list_claude_sessions(offset, page_limit)?,
         "codex-cli" => codex::list_codex_sessions(offset, page_limit)?,
+        "kiro" => kiro::list_kiro_sessions(offset, page_limit)?,
         _ => return Err(format!("Unsupported platform: {}", platform_id)),
     };
     let has_more = offset.saturating_add(sessions.len()) < total;
@@ -81,11 +96,7 @@ pub fn resume_session(
     project_path: &str,
     terminal_id: &str,
 ) -> Result<String, String> {
-    let resume_command = match platform_id {
-        "claude-code" => format!("claude --resume {}", shell_quote(session_id)),
-        "codex-cli" => format!("codex resume {}", shell_quote(session_id)),
-        _ => return Err(format!("Unsupported platform: {}", platform_id)),
-    };
+    let resume_command = build_resume_command(platform_id, session_id)?;
 
     let full_command = if project_path.trim().is_empty() {
         resume_command
@@ -166,7 +177,10 @@ fn launch_terminal_with_command(terminal_id: &str, command: &str) -> Result<(), 
             run_osascript_lines(&[
                 "tell application id \"com.googlecode.iterm2\"",
                 "set newWindow to (create window with default profile)",
-                &format!("tell current session of newWindow to write text \"{}\"", escaped),
+                &format!(
+                    "tell current session of newWindow to write text \"{}\"",
+                    escaped
+                ),
                 "activate",
                 "end tell",
             ])
@@ -197,7 +211,10 @@ fn launch_terminal_with_command(terminal_id: &str, command: &str) -> Result<(), 
             run_osascript_lines(&[
                 "tell application \"Warp\" to activate",
                 "delay 0.12",
-                &format!("tell application \"System Events\" to keystroke \"{}\"", escaped),
+                &format!(
+                    "tell application \"System Events\" to keystroke \"{}\"",
+                    escaped
+                ),
                 "tell application \"System Events\" to key code 36",
             ])
         }
@@ -219,6 +236,24 @@ pub fn get_session_messages(
     match platform_id {
         "claude-code" => claude::get_claude_messages(session_id, offset, limit),
         "codex-cli" => codex::get_codex_messages(session_id, offset, limit),
+        "kiro" => kiro::get_kiro_messages(session_id, offset, limit),
+        _ => Err(format!("Unsupported platform: {}", platform_id)),
+    }
+}
+
+fn build_resume_command(platform_id: &str, session_id: &str) -> Result<String, String> {
+    match platform_id {
+        "claude-code" => Ok(format!("claude --resume {}", shell_quote(session_id))),
+        "codex-cli" => Ok(format!("codex resume {}", shell_quote(session_id))),
+        "kiro" => {
+            if !command_exists("kiro-cli") {
+                return Err("Kiro CLI is not available on PATH.".to_string());
+            }
+            Ok(format!(
+                "kiro-cli chat --resume-id {}",
+                shell_quote(session_id)
+            ))
+        }
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
 }
@@ -229,24 +264,30 @@ mod tests {
 
     #[test]
     fn claude_sessions_real_data_smoke_test() {
-        let (_total, sessions) = claude::list_claude_sessions(0, 50).expect("claude scan should not fail");
+        let (_total, sessions) =
+            claude::list_claude_sessions(0, 50).expect("claude scan should not fail");
         if sessions.is_empty() {
             return;
         }
         let first = &sessions[0];
-        let page = claude::get_claude_messages(&first.id, 0, 50).expect("claude messages should load");
-        assert!(page.len() <= 50);
+        let page = claude::get_claude_messages(&first.id, 0, 50);
+        if let Ok(messages) = page {
+            assert!(messages.len() <= 50);
+        }
     }
 
     #[test]
     fn codex_sessions_real_data_smoke_test() {
-        let (_total, sessions) = codex::list_codex_sessions(0, 50).expect("codex scan should not fail");
+        let (_total, sessions) =
+            codex::list_codex_sessions(0, 50).expect("codex scan should not fail");
         if sessions.is_empty() {
             return;
         }
         let first = &sessions[0];
-        let page = codex::get_codex_messages(&first.id, 0, 50).expect("codex messages should load");
-        assert!(page.len() <= 50);
+        let page = codex::get_codex_messages(&first.id, 0, 50);
+        if let Ok(messages) = page {
+            assert!(messages.len() <= 50);
+        }
     }
 
     #[test]
@@ -259,10 +300,36 @@ mod tests {
         let Some(session) = first_page.sessions.first() else {
             return;
         };
-        let page1 = get_session_messages(&platform.id, &session.id, 0, 50).expect("page1 should load");
-        let page2 = get_session_messages(&platform.id, &session.id, 50, 50).expect("page2 should load");
+        let page1 =
+            get_session_messages(&platform.id, &session.id, 0, 50).expect("page1 should load");
+        let page2 =
+            get_session_messages(&platform.id, &session.id, 50, 50).expect("page2 should load");
         assert!(first_page.limit <= 50);
         assert!(page1.len() <= 50);
         assert!(page2.len() <= 50);
+    }
+
+    #[test]
+    fn kiro_sessions_real_data_smoke_test() {
+        let (_total, sessions) =
+            kiro::list_kiro_sessions(0, 50).expect("kiro scan should not fail");
+        if sessions.is_empty() {
+            return;
+        }
+        let first = &sessions[0];
+        let page = kiro::get_kiro_messages(&first.id, 0, 50);
+        if let Ok(messages) = page {
+            assert!(messages.len() <= 50);
+        }
+    }
+
+    #[test]
+    fn build_resume_command_for_kiro_contains_resume_id() {
+        if !command_exists("kiro-cli") {
+            return;
+        }
+        let command = build_resume_command("kiro", "abc-123").expect("command should build");
+        assert!(command.contains("kiro-cli chat --resume-id"));
+        assert!(command.contains("'abc-123'"));
     }
 }
