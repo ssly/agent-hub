@@ -26,7 +26,9 @@ pub fn read_mcp_servers(platform_id: &str) -> Result<Vec<McpServer>, String> {
 
 pub fn read_mcp_server(platform_id: &str, name: &str) -> Result<McpServer, String> {
     let servers = read_mcp_servers(platform_id)?;
-    servers.into_iter().find(|s| s.name == name)
+    servers
+        .into_iter()
+        .find(|s| s.name == name)
         .ok_or_else(|| format!("Server '{}' not found", name))
 }
 
@@ -60,7 +62,10 @@ fn parse_toml_servers(content: &str, mcp_key: &str) -> Result<Vec<McpServer>, St
     for key in keys {
         if let Some(val) = table.get(&key).cloned() {
             let json_val = toml_to_json(&val);
-            servers.push(McpServer { name: key, config: json_val });
+            servers.push(McpServer {
+                name: key,
+                config: json_val,
+            });
         }
     }
     servers.sort_by(|a, b| a.name.cmp(&b.name));
@@ -72,11 +77,13 @@ pub fn toml_to_json(val: &toml::Value) -> Value {
         toml::Value::String(s) => Value::String(s.clone()),
         toml::Value::Integer(i) => Value::Number((*i).into()),
         toml::Value::Float(f) => serde_json::Number::from_f64(*f)
-            .map(Value::Number).unwrap_or(Value::Null),
+            .map(Value::Number)
+            .unwrap_or(Value::Null),
         toml::Value::Boolean(b) => Value::Bool(*b),
         toml::Value::Array(arr) => Value::Array(arr.iter().map(toml_to_json).collect()),
         toml::Value::Table(tbl) => {
-            let map: serde_json::Map<String, Value> = tbl.iter()
+            let map: serde_json::Map<String, Value> = tbl
+                .iter()
                 .map(|(k, v)| (k.clone(), toml_to_json(v)))
                 .collect();
             Value::Object(map)
@@ -101,9 +108,12 @@ pub fn detect_format(text: &str) -> McpFormat {
 pub fn parse_input_config(text: &str) -> Result<Value, String> {
     let format = detect_format(text);
     match format {
-        McpFormat::Json => serde_json::from_str(text).map_err(|e| format!("JSON parse error: {}", e)),
+        McpFormat::Json => {
+            serde_json::from_str(text).map_err(|e| format!("JSON parse error: {}", e))
+        }
         McpFormat::Toml => {
-            let toml_val: toml::Value = toml::from_str(text).map_err(|e| format!("TOML parse error: {}", e))?;
+            let toml_val: toml::Value =
+                toml::from_str(text).map_err(|e| format!("TOML parse error: {}", e))?;
             Ok(toml_to_json(&toml_val))
         }
     }
@@ -157,8 +167,18 @@ pub fn preview_mcp_sync(
     };
 
     let after_text = match target_def.format {
-        McpFormat::Json => apply_json_server(&before_text, &target_def.mcp_key, server_name, &source_server.config),
-        McpFormat::Toml => apply_toml_server(&before_text, &target_def.mcp_key, server_name, &source_server.config),
+        McpFormat::Json => apply_json_server(
+            &before_text,
+            &target_def.mcp_key,
+            server_name,
+            &source_server.config,
+        ),
+        McpFormat::Toml => apply_toml_server(
+            &before_text,
+            &target_def.mcp_key,
+            server_name,
+            &source_server.config,
+        ),
     }?;
 
     let diff_lines = compute_text_diff(&before_text, &after_text);
@@ -170,7 +190,8 @@ pub fn preview_mcp_sync(
         target_format: match target_def.format {
             McpFormat::Json => "json",
             McpFormat::Toml => "toml",
-        }.to_string(),
+        }
+        .to_string(),
         target_config_path: target_def.config_path.display().to_string(),
         has_conflict,
         diff_lines,
@@ -179,7 +200,12 @@ pub fn preview_mcp_sync(
     })
 }
 
-pub(crate) fn apply_json_server(before: &str, mcp_key: &str, name: &str, config: &Value) -> Result<String, String> {
+pub(crate) fn apply_json_server(
+    before: &str,
+    mcp_key: &str,
+    name: &str,
+    config: &Value,
+) -> Result<String, String> {
     let new_config_str = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
     // Build indented config body. Prettified output:
     //   {
@@ -220,18 +246,26 @@ pub(crate) fn apply_json_server(before: &str, mcp_key: &str, name: &str, config:
         let after_key = &before[key_pos + server_key.len()..];
         let after_key_trimmed = after_key.trim_start();
         if after_key_trimmed.starts_with(':') {
-            let colon_pos = key_pos + server_key.len() + (after_key.len() - after_key_trimmed.len());
+            let colon_pos =
+                key_pos + server_key.len() + (after_key.len() - after_key_trimmed.len());
             let after_colon = before[colon_pos + 1..].trim_start();
             if after_colon.starts_with('{') {
-                let brace_start = colon_pos + 1 + (before[colon_pos + 1..].len() - after_colon.len());
+                let brace_start =
+                    colon_pos + 1 + (before[colon_pos + 1..].len() - after_colon.len());
                 let end_pos = find_matching_brace(before, brace_start)?;
                 let after_end = before[end_pos + 1..].trim_start();
                 let has_comma = after_end.starts_with(',');
-                let delete_end = if has_comma { end_pos + 1 + after_end[1..].find(',').unwrap_or(0) + 1 } else { end_pos };
+                let delete_end = if has_comma {
+                    end_pos + 1 + after_end[1..].find(',').unwrap_or(0) + 1
+                } else {
+                    end_pos
+                };
                 let mut result = String::with_capacity(before.len() + inner_body.len());
                 result.push_str(&before[..brace_start]);
                 result.push_str(&inner_body);
-                if has_comma { result.push(','); }
+                if has_comma {
+                    result.push(',');
+                }
                 result.push_str(&before[delete_end + 1..]);
                 return Ok(result);
             }
@@ -266,20 +300,40 @@ pub(crate) fn find_matching_brace(text: &str, open_pos: usize) -> Result<usize, 
     let mut in_string = false;
     let mut escaped = false;
     for (i, &ch) in chars.iter().enumerate() {
-        if escaped { escaped = false; continue; }
-        if ch == '\\' && in_string { escaped = true; continue; }
-        if ch == '"' { in_string = !in_string; continue; }
-        if in_string { continue; }
-        if ch == '{' { depth += 1; }
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' && in_string {
+            escaped = true;
+            continue;
+        }
+        if ch == '"' {
+            in_string = !in_string;
+            continue;
+        }
+        if in_string {
+            continue;
+        }
+        if ch == '{' {
+            depth += 1;
+        }
         if ch == '}' {
             depth -= 1;
-            if depth == 0 { return Ok(open_pos + i); }
+            if depth == 0 {
+                return Ok(open_pos + i);
+            }
         }
     }
     Err("Unmatched brace".into())
 }
 
-fn apply_toml_server(before: &str, mcp_key: &str, name: &str, config: &Value) -> Result<String, String> {
+fn apply_toml_server(
+    before: &str,
+    mcp_key: &str,
+    name: &str,
+    config: &Value,
+) -> Result<String, String> {
     let section_header = format!("[{}.{}]", mcp_key, name);
     let new_config = toml::to_string_pretty(&json_to_toml(config)).map_err(|e| e.to_string())?;
     let new_section = format!("{}\n{}", section_header, new_config.trim_end());
@@ -292,7 +346,10 @@ fn apply_toml_server(before: &str, mcp_key: &str, name: &str, config: &Value) ->
     if let Some(pos) = before.find(&section_header) {
         // Find the end of this section: next "[xxx" at line start or end of file
         let after_header = &before[pos + section_header.len()..];
-        let section_end = after_header.find("\n[").map(|i| pos + section_header.len() + i + 1).unwrap_or(before.len());
+        let section_end = after_header
+            .find("\n[")
+            .map(|i| pos + section_header.len() + i + 1)
+            .unwrap_or(before.len());
         // Replace: keep before + new section + after
         let mut result = String::with_capacity(before.len() + new_section.len());
         result.push_str(&before[..pos]);
@@ -389,7 +446,7 @@ mod tests {
     fn test_find_matching_brace() {
         let text = r#"{"a": {"b": [1, 2, 3]}, "c": "x"}"#;
         let pos = find_matching_brace(text, 4).unwrap(); // opening { after {"a":
-        // Should find the matching } after [1, 2, 3]
+                                                         // Should find the matching } after [1, 2, 3]
         let inner = &text[4..=pos];
         assert!(inner.contains("[1, 2, 3]"));
     }
@@ -397,13 +454,18 @@ mod tests {
 
 fn compute_text_diff(before: &str, after: &str) -> Vec<DiffLine> {
     let diff = TextDiff::from_lines(before, after);
-    diff.iter_all_changes().map(|change| {
-        let content = change.to_string_lossy().into_owned();
-        let tag = match change.tag() {
-            ChangeTag::Equal => "context",
-            ChangeTag::Insert => "added",
-            ChangeTag::Delete => "removed",
-        };
-        DiffLine { tag: tag.to_string(), content }
-    }).collect()
+    diff.iter_all_changes()
+        .map(|change| {
+            let content = change.to_string_lossy().into_owned();
+            let tag = match change.tag() {
+                ChangeTag::Equal => "context",
+                ChangeTag::Insert => "added",
+                ChangeTag::Delete => "removed",
+            };
+            DiffLine {
+                tag: tag.to_string(),
+                content,
+            }
+        })
+        .collect()
 }

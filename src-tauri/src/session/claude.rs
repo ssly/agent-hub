@@ -56,6 +56,12 @@ pub fn get_claude_messages(
     read_claude_messages_from_file(&path, offset, limit)
 }
 
+pub fn delete_claude_session(session_id: &str) -> Result<(), String> {
+    let projects_dir = claude_projects_dir()?;
+    let ignored_project_prefixes = claude_ignored_project_prefixes()?;
+    delete_claude_session_in_projects_dir(&projects_dir, session_id, &ignored_project_prefixes)
+}
+
 fn extract_session_summary(
     path: &Path,
     project_path: &str,
@@ -210,12 +216,25 @@ fn read_claude_messages_from_file(
 }
 
 fn find_session_file(session_id: &str) -> Option<PathBuf> {
+    let projects_dir = claude_projects_dir().ok()?;
+    let ignored_project_prefixes = claude_ignored_project_prefixes().ok()?;
+    find_session_file_in_projects_dir(&projects_dir, &ignored_project_prefixes, session_id)
+}
+
+fn find_session_file_in_projects_dir(
+    projects_dir: &Path,
+    ignored_project_prefixes: &[String],
+    session_id: &str,
+) -> Option<PathBuf> {
     let mut found = None;
-    let _ = for_each_claude_session_file(|path, _| {
-        if found.is_none() && path.file_stem().and_then(|stem| stem.to_str()) == Some(session_id) {
-            found = Some(path.to_path_buf());
-        }
-    });
+    let _ =
+        for_each_claude_session_file_in_dir(projects_dir, ignored_project_prefixes, |path, _| {
+            if found.is_none()
+                && path.file_stem().and_then(|stem| stem.to_str()) == Some(session_id)
+            {
+                found = Some(path.to_path_buf());
+            }
+        });
     found
 }
 
@@ -242,12 +261,23 @@ fn collect_claude_session_candidates() -> Result<Vec<ClaudeSessionCandidate>, St
     Ok(candidates)
 }
 
-fn for_each_claude_session_file<F>(mut visitor: F) -> Result<(), String>
+fn for_each_claude_session_file<F>(visitor: F) -> Result<(), String>
 where
     F: FnMut(&Path, String),
 {
     let projects_dir = claude_projects_dir()?;
     let ignored_project_prefixes = claude_ignored_project_prefixes()?;
+    for_each_claude_session_file_in_dir(&projects_dir, &ignored_project_prefixes, visitor)
+}
+
+fn for_each_claude_session_file_in_dir<F>(
+    projects_dir: &Path,
+    ignored_project_prefixes: &[String],
+    mut visitor: F,
+) -> Result<(), String>
+where
+    F: FnMut(&Path, String),
+{
     if !projects_dir.exists() {
         return Ok(());
     }
@@ -294,6 +324,19 @@ where
             visitor(&path, project_path.clone());
         }
     }
+    Ok(())
+}
+
+fn delete_claude_session_in_projects_dir(
+    projects_dir: &Path,
+    session_id: &str,
+    ignored_project_prefixes: &[String],
+) -> Result<(), String> {
+    let session_path =
+        find_session_file_in_projects_dir(projects_dir, ignored_project_prefixes, session_id)
+            .ok_or_else(|| format!("Claude session not found: {}", session_id))?;
+    fs::remove_file(&session_path)
+        .map_err(|err| format!("Failed to delete Claude session {}: {}", session_id, err))?;
     Ok(())
 }
 
@@ -386,6 +429,7 @@ fn truncate_chars(value: String, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn encode_claude_project_dir_name_replaces_non_alphanumeric() {
@@ -407,5 +451,27 @@ mod tests {
             "-Users-alice-Documents-code-agent-hub",
             &ignored
         ));
+    }
+
+    #[test]
+    fn delete_claude_session_removes_jsonl_file() {
+        let dir = tempdir().expect("temp dir should create");
+        let project_dir = dir.path().join("project-a");
+        fs::create_dir_all(&project_dir).expect("project dir should create");
+        let session_path = project_dir.join("session-1.jsonl");
+        fs::write(&session_path, "{\"type\":\"user\"}\n").expect("session file should write");
+
+        delete_claude_session_in_projects_dir(dir.path(), "session-1", &[])
+            .expect("delete should succeed");
+
+        assert!(!session_path.exists());
+    }
+
+    #[test]
+    fn delete_claude_session_returns_not_found() {
+        let dir = tempdir().expect("temp dir should create");
+        let err = delete_claude_session_in_projects_dir(dir.path(), "missing", &[])
+            .expect_err("missing session should fail");
+        assert!(err.contains("not found"));
     }
 }

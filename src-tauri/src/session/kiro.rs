@@ -38,6 +38,11 @@ pub fn get_kiro_messages(
     read_kiro_messages_from_jsonl(&path, offset, limit)
 }
 
+pub fn delete_kiro_session(session_id: &str) -> Result<(), String> {
+    let root = kiro_sessions_dir()?;
+    delete_kiro_session_in_dir(&root, session_id)
+}
+
 fn collect_kiro_sessions() -> Result<Vec<SessionSummary>, String> {
     let root = kiro_sessions_dir()?;
     if !root.exists() {
@@ -195,6 +200,87 @@ fn find_kiro_session_jsonl(session_id: &str) -> Result<PathBuf, String> {
         "Kiro session jsonl not found for id: {}",
         session_id
     ))
+}
+
+fn delete_kiro_session_in_dir(root: &Path, session_id: &str) -> Result<(), String> {
+    if !root.exists() {
+        return Err("Kiro session directory not found: ~/.kiro/sessions/cli".to_string());
+    }
+
+    let artifacts = collect_kiro_session_artifacts(root, session_id)?;
+    if artifacts.is_empty() {
+        return Err(format!("Kiro session not found: {}", session_id));
+    }
+
+    for path in artifacts {
+        if !path.exists() {
+            continue;
+        }
+        fs::remove_file(&path).map_err(|err| {
+            format!(
+                "Failed to delete Kiro session artifact {}: {}",
+                path.display(),
+                err
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn collect_kiro_session_artifacts(root: &Path, session_id: &str) -> Result<Vec<PathBuf>, String> {
+    let mut artifacts = Vec::new();
+    let direct_json = root.join(format!("{}.json", session_id));
+    if direct_json.exists() {
+        artifacts.push(direct_json);
+    }
+    let direct_jsonl = root.join(format!("{}.jsonl", session_id));
+    if direct_jsonl.exists() {
+        artifacts.push(direct_jsonl);
+    }
+
+    let entries = fs::read_dir(root).map_err(|err| err.to_string())?;
+    for entry in entries {
+        let entry = match entry {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        if !entry
+            .file_type()
+            .map(|file_type| file_type.is_file())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let fallback_id = match path.file_stem().and_then(|name| name.to_str()) {
+            Some(value) if !value.is_empty() => value.to_string(),
+            _ => continue,
+        };
+        let content = match fs::read_to_string(&path) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let value: Value = match serde_json::from_str(&content) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let Some(summary) = parse_kiro_summary(&value, &fallback_id, 0) else {
+            continue;
+        };
+        if summary.id != session_id {
+            continue;
+        }
+        artifacts.push(path.clone());
+        artifacts.push(root.join(format!("{}.jsonl", fallback_id)));
+        artifacts.push(root.join(format!("{}.jsonl", summary.id)));
+    }
+
+    artifacts.sort();
+    artifacts.dedup();
+    Ok(artifacts)
 }
 
 fn read_kiro_messages_from_jsonl(
@@ -425,5 +511,35 @@ mod tests {
         assert_eq!(page[1].content, "u2");
 
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn delete_kiro_session_removes_metadata_and_transcript() {
+        let dir = tempfile::tempdir().expect("temp dir should create");
+        let metadata_path = dir.path().join("meta-id.json");
+        let transcript_path = dir.path().join("meta-id.jsonl");
+        fs::write(
+            &metadata_path,
+            json!({
+                "session_id": "session-1",
+                "title": "test"
+            })
+            .to_string(),
+        )
+        .expect("metadata should write");
+        fs::write(&transcript_path, "{}\n").expect("transcript should write");
+
+        delete_kiro_session_in_dir(dir.path(), "session-1").expect("delete should succeed");
+
+        assert!(!metadata_path.exists());
+        assert!(!transcript_path.exists());
+    }
+
+    #[test]
+    fn delete_kiro_session_returns_not_found() {
+        let dir = tempfile::tempdir().expect("temp dir should create");
+        let err = delete_kiro_session_in_dir(dir.path(), "missing")
+            .expect_err("missing session should fail");
+        assert!(err.contains("not found"));
     }
 }

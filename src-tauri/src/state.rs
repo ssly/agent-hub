@@ -15,7 +15,11 @@ impl AppState {
         let config = Config::load();
         let locale = Locale::from_config(config.resolved_language());
         let platforms = crate::platform::discover_platforms(&config);
-        Self { config, locale, platforms }
+        Self {
+            config,
+            locale,
+            platforms,
+        }
     }
 }
 

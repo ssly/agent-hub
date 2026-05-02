@@ -39,6 +39,14 @@ function parseOptionalBoolean(value) {
     return null;
 }
 
+function normalizeDownloadEventKind(value) {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (normalized === 'started' || normalized === 'start') return 'started';
+    if (normalized === 'progress' || normalized === 'downloadprogress') return 'progress';
+    if (normalized === 'finished' || normalized === 'finish' || normalized === 'done') return 'finished';
+    return '';
+}
+
 function formatBytes(bytes) {
     if (!Number.isFinite(bytes) || bytes < 0) return '--';
     if (bytes < 1024) return `${Math.round(bytes)} B`;
@@ -66,7 +74,7 @@ function formatDuration(seconds) {
 }
 
 function parseDownloadProgressEvent(event) {
-    if (!event || typeof event !== 'object') {
+    if (event == null) {
         return {
             kind: '',
             chunkLength: null,
@@ -77,8 +85,66 @@ function parseDownloadProgressEvent(event) {
             usedResume: null,
         };
     }
-    const kind = typeof event.event === 'string' ? event.event : '';
-    const payload = event.data && typeof event.data === 'object' ? event.data : event;
+
+    let root = event;
+    if (typeof root === 'string') {
+        try {
+            root = JSON.parse(root);
+        } catch {
+            root = {};
+        }
+    }
+    if (Array.isArray(root)) {
+        root = root.length > 0 ? root[root.length - 1] : {};
+    }
+    if (!root || typeof root !== 'object') {
+        return {
+            kind: '',
+            chunkLength: null,
+            contentLength: null,
+            total: null,
+            downloaded: null,
+            resumedFrom: null,
+            usedResume: null,
+        };
+    }
+
+    // Some channel bridges wrap payload under `payload`.
+    if (
+        root.payload &&
+        typeof root.payload === 'object' &&
+        root.event == null &&
+        root.kind == null &&
+        root.type == null
+    ) {
+        root = root.payload;
+    }
+
+    let kind = normalizeDownloadEventKind(root.event ?? root.kind ?? root.type);
+    let payload = root.data && typeof root.data === 'object' ? root.data : root;
+
+    // Compatibility for externally-tagged shapes like { Started: { ... } }.
+    if (!kind) {
+        const variantKey = ['started', 'progress', 'finished', 'Started', 'Progress', 'Finished']
+            .find((key) => root[key] && typeof root[key] === 'object');
+        if (variantKey) {
+            kind = normalizeDownloadEventKind(variantKey);
+            payload = root[variantKey];
+        }
+    }
+
+    if (!kind) {
+        const hasProgressShape = parseNonNegativeNumber(payload.chunkLength ?? payload.chunk_length) !== null
+            || parseNonNegativeNumber(payload.downloaded) !== null;
+        const hasStartShape = parseNonNegativeNumber(payload.resumedFrom ?? payload.resumed_from) !== null
+            || parseNonNegativeNumber(payload.contentLength ?? payload.content_length) !== null;
+        if (hasProgressShape) {
+            kind = 'progress';
+        } else if (hasStartShape) {
+            kind = 'started';
+        }
+    }
+
     return {
         kind,
         chunkLength: parseNonNegativeNumber(payload.chunkLength ?? payload.chunk_length),
@@ -149,6 +215,9 @@ class App {
         this.sessionTerminals = [];
         this.selectedSessionTerminal = 'terminal-default';
         this.resumingSessionId = null;
+        this.confirmingSessionDeleteId = null;
+        this.sessionDeleteConfirmTimer = null;
+        this.deletingSessionId = null;
         // Trash state
         this.trashCount = 0;
         // Update state
@@ -414,9 +483,8 @@ class App {
             indeterminate.step = 0;
             progressBarEl.style.opacity = '0.85';
             indeterminate.timer = setInterval(() => {
-                indeterminate.step = (indeterminate.step + 1) % 20;
-                const phase = indeterminate.step < 10 ? indeterminate.step / 10 : (20 - indeterminate.step) / 10;
-                const width = 25 + phase * 60;
+                indeterminate.step = (indeterminate.step + 1) % 100;
+                const width = 8 + indeterminate.step * 0.9;
                 progressBarEl.style.width = `${width.toFixed(1)}%`;
             }, 160);
         };
@@ -495,13 +563,27 @@ class App {
             confirmBtn.classList.add('opacity-50');
             cancelBtn.classList.add('hidden');
             progressWrapEl?.classList.remove('hidden');
+            let unknownProgressEventCount = 0;
 
             const onProgress = (event) => {
                 const parsed = parseDownloadProgressEvent(event);
+                if (!parsed.kind) {
+                    if (unknownProgressEventCount < 5) {
+                        console.debug('Unknown update progress event payload:', event);
+                        unknownProgressEventCount += 1;
+                    }
+                    return;
+                }
                 const now = Date.now();
-                if (parsed.kind === 'Started') {
+                if (parsed.kind === 'started') {
                     progress.totalBytes = parsed.total ?? parsed.contentLength;
-                    progress.downloadedBytes = parsed.downloaded ?? parsed.resumedFrom ?? 0;
+                    const startedDownloaded = parsed.downloaded ?? parsed.resumedFrom ?? 0;
+                    const shouldRestartFromZero = progress.attempt > 1
+                        && startedDownloaded === 0
+                        && (parsed.resumedFrom ?? 0) === 0;
+                    progress.downloadedBytes = shouldRestartFromZero
+                        ? 0
+                        : Math.max(progress.downloadedBytes, startedDownloaded);
                     progress.resumedFrom = parsed.resumedFrom ?? 0;
                     progress.speedBps = 0;
                     progress.lastProgressAt = now;
@@ -517,10 +599,10 @@ class App {
                             current: progress.attempt,
                             total: maxAttempts,
                         });
-                } else if (parsed.kind === 'Progress') {
+                } else if (parsed.kind === 'progress') {
                     if (parsed.total !== null) progress.totalBytes = parsed.total;
                     if (parsed.downloaded !== null) {
-                        progress.downloadedBytes = parsed.downloaded;
+                        progress.downloadedBytes = Math.max(progress.downloadedBytes, parsed.downloaded);
                     } else if (parsed.chunkLength !== null) {
                         progress.downloadedBytes += parsed.chunkLength;
                     }
@@ -550,13 +632,13 @@ class App {
                             current: progress.attempt,
                             total: maxAttempts,
                         });
-                } else if (parsed.kind === 'Finished') {
+                } else if (parsed.kind === 'finished') {
                     stopIndeterminate();
                     if (parsed.total !== null) {
                         progress.totalBytes = parsed.total;
                     }
                     if (parsed.downloaded !== null) {
-                        progress.downloadedBytes = parsed.downloaded;
+                        progress.downloadedBytes = Math.max(progress.downloadedBytes, parsed.downloaded);
                     }
                     if (Number.isFinite(progress.totalBytes)) {
                         progress.downloadedBytes = Math.max(progress.downloadedBytes, progress.totalBytes);
@@ -571,7 +653,13 @@ class App {
             let lastError = null;
             for (let attempt = 1; attempt <= maxAttempts; attempt++) {
                 progress.attempt = attempt;
-                resetProgress();
+                if (attempt === 1) {
+                    resetProgress();
+                } else {
+                    progress.speedBps = 0;
+                    progress.lastProgressAt = 0;
+                    progress.lastDownloadedBytes = progress.downloadedBytes;
+                }
                 if (attempt > 1) {
                     statusEl.textContent = i.tWith('update.retrying', {
                         current: attempt,
@@ -584,7 +672,6 @@ class App {
                         total: maxAttempts,
                     });
                 }
-                startIndeterminate();
                 try {
                     await downloadAndInstallUpdateResumable(updateRid, onProgress);
                     installed = true;
@@ -779,7 +866,29 @@ class App {
     }
 
     // --- Sessions ---
+    clearSessionDeleteConfirmation() {
+        if (this.sessionDeleteConfirmTimer) {
+            clearTimeout(this.sessionDeleteConfirmTimer);
+            this.sessionDeleteConfirmTimer = null;
+        }
+        this.confirmingSessionDeleteId = null;
+    }
+
+    startSessionDeleteConfirmation(sessionId) {
+        this.clearSessionDeleteConfirmation();
+        this.confirmingSessionDeleteId = sessionId;
+        this.sessionDeleteConfirmTimer = setTimeout(() => {
+            if (this.confirmingSessionDeleteId === sessionId) {
+                this.confirmingSessionDeleteId = null;
+                this.sessionDeleteConfirmTimer = null;
+                this.render();
+            }
+        }, 3000);
+    }
+
     async refreshSessionPlatforms() {
+        this.clearSessionDeleteConfirmation();
+        this.deletingSessionId = null;
         this.sessionsLoadError = '';
         try {
             this.sessionPlatforms = await Api.listSessionPlatforms();
@@ -794,6 +903,7 @@ class App {
             this.sessionOffset = 0;
             this.sessionTotal = 0;
             this.sessionHasMore = false;
+            this.deletingSessionId = null;
             return;
         }
 
@@ -828,6 +938,8 @@ class App {
             this.sessionOffset = 0;
             this.sessionTotal = 0;
             this.sessionHasMore = false;
+            this.clearSessionDeleteConfirmation();
+            this.deletingSessionId = null;
             return;
         }
         const offset = append ? this.sessionOffset : 0;
@@ -843,6 +955,12 @@ class App {
             this.sessionOffset = Number(page?.offset ?? offset) + pageSessions.length;
             this.sessionHasMore = Boolean(page?.has_more) && this.sessionOffset < this.sessionTotal;
             this.sessionsLoadError = '';
+            if (this.confirmingSessionDeleteId && !this.sessions.some(s => s.id === this.confirmingSessionDeleteId)) {
+                this.clearSessionDeleteConfirmation();
+            }
+            if (this.deletingSessionId && !this.sessions.some(s => s.id === this.deletingSessionId)) {
+                this.deletingSessionId = null;
+            }
         } catch (e) {
             const errorText = e?.SyncError || e?.message || String(e);
             if (!append) {
@@ -850,6 +968,8 @@ class App {
                 this.sessionOffset = 0;
                 this.sessionTotal = 0;
                 this.sessionHasMore = false;
+                this.clearSessionDeleteConfirmation();
+                this.deletingSessionId = null;
                 this.sessionsLoadError = errorText;
             } else {
                 this.sessionsLoadError = '';
@@ -859,6 +979,8 @@ class App {
     }
 
     async selectSessionPlatform(id) {
+        this.clearSessionDeleteConfirmation();
+        this.deletingSessionId = null;
         this.selectedSessionPlatform = id;
         this.isSessionsLoading = true;
         this.render();
@@ -880,6 +1002,69 @@ class App {
             await this.loadSessionsForPlatform(this.selectedSessionPlatform, { append: true });
         } finally {
             this.sessionLoadingMore = false;
+            this.render();
+        }
+    }
+
+    async reloadSessionsAfterDelete(platformId, targetLoadedCount) {
+        const errorText = (value) => value?.SyncError || value?.message || String(value);
+        try {
+            this.sessionPlatforms = await Api.listSessionPlatforms();
+        } catch (e) {
+            this.sessionsLoadError = errorText(e);
+            return;
+        }
+
+        if (this.sessionPlatforms.length === 0) {
+            this.selectedSessionPlatform = null;
+            this.sessions = [];
+            this.sessionOffset = 0;
+            this.sessionTotal = 0;
+            this.sessionHasMore = false;
+            return;
+        }
+
+        const keepCurrentPlatform = this.sessionPlatforms.some(p => p.id === platformId);
+        this.selectedSessionPlatform = keepCurrentPlatform ? platformId : this.sessionPlatforms[0].id;
+
+        await this.loadSessionsForPlatform(this.selectedSessionPlatform, { append: false });
+
+        const desiredCount = Math.max(targetLoadedCount, 0);
+        while (this.sessionHasMore && this.sessions.length < desiredCount) {
+            const before = this.sessions.length;
+            await this.loadSessionsForPlatform(this.selectedSessionPlatform, { append: true });
+            if (this.sessions.length <= before) break;
+        }
+    }
+
+    async deleteSessionRecord(session) {
+        if (!session || !session.id || this.deletingSessionId) {
+            return;
+        }
+
+        const i = this.i18n;
+        const platformId = session.platform_id || this.selectedSessionPlatform;
+        if (!platformId) return;
+
+        if (this.confirmingSessionDeleteId !== session.id) {
+            this.startSessionDeleteConfirmation(session.id);
+            this.render();
+            return;
+        }
+
+        this.clearSessionDeleteConfirmation();
+        this.deletingSessionId = session.id;
+        this.render();
+
+        const targetLoadedCount = Math.max(this.sessions.length - 1, 0);
+        try {
+            await Api.deleteSession(platformId, session.id);
+            await this.reloadSessionsAfterDelete(platformId, targetLoadedCount);
+            alert(i.t('session.deleted'));
+        } catch (e) {
+            alert(i.tWith('session.delete_failed', { error: e?.SyncError || e?.message || e }));
+        } finally {
+            this.deletingSessionId = null;
             this.render();
         }
     }
@@ -1757,6 +1942,15 @@ args = ["mcp-server-time"]
             const messagesTag = session.message_count != null ? `<span class="text-purple-400">${i.tWith('session.messages_value', { count: formatInt(session.message_count) })}</span>` : '';
             const meta = [modelTag, tokensTag, messagesTag].filter(Boolean).join(' · ');
             const isResuming = this.resumingSessionId === session.id;
+            const isDeleting = this.deletingSessionId === session.id;
+            const isConfirmingDelete = this.confirmingSessionDeleteId === session.id;
+            const deleteLabel = isDeleting
+                ? i.t('session.deleting')
+                : (isConfirmingDelete ? i.t('session.confirm_delete') : i.t('session.delete'));
+            const deleteClass = isConfirmingDelete
+                ? 'bg-red-700 hover:bg-red-600 text-white border-red-700'
+                : 'text-red-500 hover:text-red-400 border-red-700/50 hover:bg-red-900/20';
+            const actionDisabled = isDeleting ? 'disabled' : '';
 
             html += `<div class="rounded-lg border border-gray-700 hover:border-cyan-700 hover:bg-gray-800/50 p-3">
                 <div class="flex items-center justify-between gap-3">
@@ -1769,7 +1963,8 @@ args = ["mcp-server-time"]
                     <span class="text-xs text-gray-600">${i.tWith('session.started_at', { time: this.formatSessionTime(session.started_at) })}</span>
                     <div class="flex items-center gap-2">
                         <button class="px-2 py-1 text-xs border border-gray-600 rounded hover:bg-gray-700 cursor-pointer session-open-btn" data-session-id="${esc(session.id)}">${i.t('session.view_messages')}</button>
-                        <button class="px-2 py-1 text-xs bg-green-700 hover:bg-green-600 rounded cursor-pointer session-resume-btn ${isResuming ? 'opacity-50' : ''}" data-session-id="${esc(session.id)}" ${isResuming ? 'disabled' : ''}>${isResuming ? i.t('session.resuming') : i.t('session.resume')}</button>
+                        <button class="px-2 py-1 text-xs bg-green-700 hover:bg-green-600 rounded cursor-pointer session-resume-btn ${(isResuming || isDeleting) ? 'opacity-50' : ''}" data-session-id="${esc(session.id)}" ${(isResuming || isDeleting) ? 'disabled' : ''}>${isResuming ? i.t('session.resuming') : i.t('session.resume')}</button>
+                        <button class="px-2 py-1 text-xs border rounded cursor-pointer session-delete-btn ${deleteClass} ${isDeleting ? 'opacity-50' : ''}" data-session-id="${esc(session.id)}" ${actionDisabled}>${deleteLabel}</button>
                     </div>
                 </div>
             </div>`;
@@ -1798,6 +1993,12 @@ args = ["mcp-server-time"]
             btn.addEventListener('click', () => {
                 const session = this.sessions.find(item => item.id === btn.dataset.sessionId);
                 if (session) this.resumeSessionInTerminal(session);
+            });
+        });
+        el.querySelectorAll('.session-delete-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const session = this.sessions.find(item => item.id === btn.dataset.sessionId);
+                if (session) this.deleteSessionRecord(session);
             });
         });
         const loadMoreBtn = el.querySelector('#session-load-more-btn');

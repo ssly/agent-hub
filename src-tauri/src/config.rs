@@ -17,7 +17,9 @@ pub struct GeneralConfig {
 
 impl Default for GeneralConfig {
     fn default() -> Self {
-        Self { language: "auto".to_string() }
+        Self {
+            language: "auto".to_string(),
+        }
     }
 }
 
@@ -45,7 +47,10 @@ impl Config {
         if let Some(parent) = config_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let _ = std::fs::write(&config_path, toml::to_string_pretty(&config).unwrap_or_default());
+        let _ = std::fs::write(
+            &config_path,
+            toml::to_string_pretty(&config).unwrap_or_default(),
+        );
         config
     }
 
@@ -62,6 +67,10 @@ impl Config {
     }
 
     pub fn resolved_language(&self) -> Option<&str> {
-        if self.general.language == "auto" { None } else { Some(&self.general.language) }
+        if self.general.language == "auto" {
+            None
+        } else {
+            Some(&self.general.language)
+        }
     }
 }

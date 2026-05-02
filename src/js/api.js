@@ -117,6 +117,10 @@ export async function getSessionMessages(platformId, sessionId, offset, limit) {
     return invoke('get_session_messages', { platformId, sessionId, offset, limit });
 }
 
+export async function deleteSession(platformId, sessionId) {
+    return invoke('delete_session', { platformId, sessionId });
+}
+
 export async function getAppVersion() {
     return invoke('get_app_version');
 }

@@ -53,18 +53,32 @@ pub fn diff_skills(source: &Skill, target: &Skill) -> DiffResult {
                 let line_count = read_line_count(&source.path.join(&file));
                 file_diffs.push(FileDiff {
                     file_path: file.display().to_string(),
-                    lines: vec![DiffLine::FileHeader(format!("Only in {}", source.platform_id))],
-                    stats: DiffStats { added: line_count, removed: 0 },
-                    source_only: true, target_only: false,
+                    lines: vec![DiffLine::FileHeader(format!(
+                        "Only in {}",
+                        source.platform_id
+                    ))],
+                    stats: DiffStats {
+                        added: line_count,
+                        removed: 0,
+                    },
+                    source_only: true,
+                    target_only: false,
                 });
             }
             (false, true) => {
                 let line_count = read_line_count(&target.path.join(&file));
                 file_diffs.push(FileDiff {
                     file_path: file.display().to_string(),
-                    lines: vec![DiffLine::FileHeader(format!("Only in {}", target.platform_id))],
-                    stats: DiffStats { added: 0, removed: line_count },
-                    source_only: false, target_only: true,
+                    lines: vec![DiffLine::FileHeader(format!(
+                        "Only in {}",
+                        target.platform_id
+                    ))],
+                    stats: DiffStats {
+                        added: 0,
+                        removed: line_count,
+                    },
+                    source_only: false,
+                    target_only: true,
                 });
             }
             (false, false) => {}
@@ -75,40 +89,66 @@ pub fn diff_skills(source: &Skill, target: &Skill) -> DiffResult {
                     let lines = unified_diff(&src_content, &tgt_content);
                     let stats = count_stats(&lines);
                     file_diffs.push(FileDiff {
-                        file_path: file.display().to_string(), lines, stats,
-                        source_only: false, target_only: false,
+                        file_path: file.display().to_string(),
+                        lines,
+                        stats,
+                        source_only: false,
+                        target_only: false,
                     });
                 }
             }
         }
     }
 
-    let stats = file_diffs.iter().fold(DiffStats { added: 0, removed: 0 }, |acc, d| {
-        DiffStats { added: acc.added + d.stats.added, removed: acc.removed + d.stats.removed }
-    });
+    let stats = file_diffs.iter().fold(
+        DiffStats {
+            added: 0,
+            removed: 0,
+        },
+        |acc, d| DiffStats {
+            added: acc.added + d.stats.added,
+            removed: acc.removed + d.stats.removed,
+        },
+    );
 
-    DiffResult { source_platform: source.platform_id.clone(), target_platform: target.platform_id.clone(),
-        skill_name: source.name.clone(), file_diffs, stats }
+    DiffResult {
+        source_platform: source.platform_id.clone(),
+        target_platform: target.platform_id.clone(),
+        skill_name: source.name.clone(),
+        file_diffs,
+        stats,
+    }
 }
 
 fn unified_diff(source: &str, target: &str) -> Vec<DiffLine> {
     let diff = TextDiff::from_lines(source, target);
-    diff.iter_all_changes().map(|change| {
-        let line = change.to_string_lossy().into_owned();
-        match change.tag() {
-            ChangeTag::Equal => DiffLine::Context(line),
-            ChangeTag::Insert => DiffLine::Added(line),
-            ChangeTag::Delete => DiffLine::Removed(line),
-        }
-    }).collect()
+    diff.iter_all_changes()
+        .map(|change| {
+            let line = change.to_string_lossy().into_owned();
+            match change.tag() {
+                ChangeTag::Equal => DiffLine::Context(line),
+                ChangeTag::Insert => DiffLine::Added(line),
+                ChangeTag::Delete => DiffLine::Removed(line),
+            }
+        })
+        .collect()
 }
 
 fn count_stats(lines: &[DiffLine]) -> DiffStats {
-    let mut added = 0; let mut removed = 0;
-    for line in lines { match line { DiffLine::Added(_) => added += 1, DiffLine::Removed(_) => removed += 1, _ => {} } }
+    let mut added = 0;
+    let mut removed = 0;
+    for line in lines {
+        match line {
+            DiffLine::Added(_) => added += 1,
+            DiffLine::Removed(_) => removed += 1,
+            _ => {}
+        }
+    }
     DiffStats { added, removed }
 }
 
 fn read_line_count(path: &std::path::Path) -> usize {
-    fs::read_to_string(path).map(|s| s.lines().count()).unwrap_or(0)
+    fs::read_to_string(path)
+        .map(|s| s.lines().count())
+        .unwrap_or(0)
 }

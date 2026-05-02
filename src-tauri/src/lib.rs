@@ -18,7 +18,8 @@ pub fn run() {
         .manage(std::sync::Mutex::new(AppState::new()))
         .setup(|app| {
             #[cfg(desktop)]
-            app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
             #[cfg(desktop)]
             app.handle().plugin(tauri_plugin_process::init())?;
             Ok(())
@@ -59,6 +60,7 @@ pub fn run() {
             commands::list_session_terminals,
             commands::resume_session,
             commands::get_session_messages,
+            commands::delete_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running agent-hub");

@@ -16,7 +16,11 @@ impl Locale {
 
     pub fn detect() -> Self {
         let locale_str = sys_locale::get_locale().unwrap_or_default();
-        if locale_str.starts_with("zh") { Locale::ZhCn } else { Locale::En }
+        if locale_str.starts_with("zh") {
+            Locale::ZhCn
+        } else {
+            Locale::En
+        }
     }
 
     pub fn from_config(config_val: Option<&str>) -> Self {

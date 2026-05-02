@@ -241,6 +241,15 @@ pub fn get_session_messages(
     }
 }
 
+pub fn delete_session(platform_id: &str, session_id: &str) -> Result<(), String> {
+    match platform_id {
+        "claude-code" => claude::delete_claude_session(session_id),
+        "codex-cli" => codex::delete_codex_session(session_id),
+        "kiro" => kiro::delete_kiro_session(session_id),
+        _ => Err(format!("Unsupported platform: {}", platform_id)),
+    }
+}
+
 fn build_resume_command(platform_id: &str, session_id: &str) -> Result<String, String> {
     match platform_id {
         "claude-code" => Ok(format!("claude --resume {}", shell_quote(session_id))),
@@ -331,5 +340,12 @@ mod tests {
         let command = build_resume_command("kiro", "abc-123").expect("command should build");
         assert!(command.contains("kiro-cli chat --resume-id"));
         assert!(command.contains("'abc-123'"));
+    }
+
+    #[test]
+    fn delete_session_rejects_unknown_platform() {
+        let err = delete_session("unknown-platform", "session-1")
+            .expect_err("unknown platform should be rejected");
+        assert!(err.contains("Unsupported platform"));
     }
 }

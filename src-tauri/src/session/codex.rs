@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
@@ -28,7 +28,10 @@ pub fn count_codex_sessions() -> Result<usize, String> {
     usize::try_from(count).map_err(|err| err.to_string())
 }
 
-pub fn list_codex_sessions(offset: usize, limit: usize) -> Result<(usize, Vec<SessionSummary>), String> {
+pub fn list_codex_sessions(
+    offset: usize,
+    limit: usize,
+) -> Result<(usize, Vec<SessionSummary>), String> {
     let db_path = codex_db_path()?;
     if !db_path.exists() {
         return Ok((0, Vec::new()));
@@ -64,7 +67,11 @@ pub fn list_codex_sessions(offset: usize, limit: usize) -> Result<(usize, Vec<Se
     Ok((total, sessions))
 }
 
-pub fn get_codex_messages(session_id: &str, offset: usize, limit: usize) -> Result<Vec<SessionMessage>, String> {
+pub fn get_codex_messages(
+    session_id: &str,
+    offset: usize,
+    limit: usize,
+) -> Result<Vec<SessionMessage>, String> {
     let db_path = codex_db_path()?;
     let conn = open_codex_db_readonly(&db_path)?;
     let rollout_path: String = conn
@@ -104,6 +111,11 @@ pub fn get_codex_messages(session_id: &str, offset: usize, limit: usize) -> Resu
     }
 
     Ok(messages)
+}
+
+pub fn delete_codex_session(session_id: &str) -> Result<(), String> {
+    let db_path = codex_db_path()?;
+    delete_codex_session_in_db(&db_path, session_id)
 }
 
 fn parse_codex_rollout_message(value: &Value) -> Option<SessionMessage> {
@@ -189,13 +201,25 @@ fn codex_db_path() -> Result<PathBuf, String> {
     Ok(home.join(".codex/state_5.sqlite"))
 }
 
-fn open_codex_db_readonly(path: &PathBuf) -> Result<Connection, String> {
+fn open_codex_db_readonly(path: &Path) -> Result<Connection, String> {
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-    for attempt in 0..2 {
+    open_codex_db_with_flags(path, flags)
+}
+
+fn open_codex_db_readwrite(path: &Path) -> Result<Connection, String> {
+    let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    open_codex_db_with_flags(path, flags)
+}
+
+fn open_codex_db_with_flags(path: &Path, flags: OpenFlags) -> Result<Connection, String> {
+    for attempt in 0..3 {
         match Connection::open_with_flags(path, flags) {
-            Ok(connection) => return Ok(connection),
+            Ok(connection) => {
+                let _ = connection.busy_timeout(Duration::from_millis(1500));
+                return Ok(connection);
+            }
             Err(error) => {
-                if attempt == 0 {
+                if attempt < 2 {
                     thread::sleep(Duration::from_millis(100));
                     continue;
                 }
@@ -204,6 +228,38 @@ fn open_codex_db_readonly(path: &PathBuf) -> Result<Connection, String> {
         }
     }
     Err(format!("Unable to open Codex database: {}", path.display()))
+}
+
+fn delete_codex_session_in_db(path: &Path, session_id: &str) -> Result<(), String> {
+    if !path.exists() {
+        return Err(format!(
+            "Codex session database not found: {}",
+            path.display()
+        ));
+    }
+
+    let conn = open_codex_db_readwrite(path)?;
+    let changed = conn
+        .execute(
+            "UPDATE threads SET archived = 1 WHERE id = ?1 AND archived = 0",
+            [session_id],
+        )
+        .map_err(|err| err.to_string())?;
+    if changed > 0 {
+        return Ok(());
+    }
+
+    let exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM threads WHERE id = ?1",
+            [session_id],
+            |row| row.get(0),
+        )
+        .map_err(|err| err.to_string())?;
+    if exists > 0 {
+        return Err(format!("Codex session already archived: {}", session_id));
+    }
+    Err(format!("Codex session not found: {}", session_id))
 }
 
 fn parse_rfc3339_to_ms(value: &str) -> Option<i64> {
@@ -248,5 +304,82 @@ fn truncate_chars(value: String, max_chars: usize) -> String {
         format!("{}...", result)
     } else {
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn create_test_codex_db() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempdir().expect("temp dir should create");
+        let db_path = dir.path().join("state_5.sqlite");
+        let conn = Connection::open(&db_path).expect("sqlite db should create");
+        conn.execute_batch(
+            "CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                model TEXT,
+                tokens_used INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL DEFAULT 0,
+                first_user_message TEXT NOT NULL DEFAULT '',
+                rollout_path TEXT NOT NULL DEFAULT '',
+                archived INTEGER NOT NULL DEFAULT 0
+            );",
+        )
+        .expect("threads table should create");
+        (dir, db_path)
+    }
+
+    #[test]
+    fn delete_codex_session_sets_archived_flag() {
+        let (_dir, db_path) = create_test_codex_db();
+        let conn = Connection::open(&db_path).expect("db should open");
+        conn.execute(
+            "INSERT INTO threads (id, title, cwd, model, tokens_used, created_at, updated_at, first_user_message, rollout_path, archived)
+             VALUES (?1, 't', '/tmp', NULL, 0, 1, 1, '', '', 0)",
+            ["thread-1"],
+        )
+        .expect("thread should insert");
+        drop(conn);
+
+        delete_codex_session_in_db(&db_path, "thread-1").expect("delete should succeed");
+
+        let conn = Connection::open(&db_path).expect("db should reopen");
+        let archived: i64 = conn
+            .query_row(
+                "SELECT archived FROM threads WHERE id = ?1",
+                ["thread-1"],
+                |row| row.get(0),
+            )
+            .expect("archived should load");
+        assert_eq!(archived, 1);
+    }
+
+    #[test]
+    fn delete_codex_session_reports_missing_session() {
+        let (_dir, db_path) = create_test_codex_db();
+        let err = delete_codex_session_in_db(&db_path, "missing")
+            .expect_err("missing session should fail");
+        assert!(err.contains("not found"));
+    }
+
+    #[test]
+    fn delete_codex_session_reports_missing_database() {
+        let mut missing = std::env::temp_dir();
+        let unique = format!(
+            "agent-hub-codex-missing-{}.sqlite",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock should be after epoch")
+                .as_nanos()
+        );
+        missing.push(unique);
+        let err = delete_codex_session_in_db(&missing, "thread-1")
+            .expect_err("missing database should fail");
+        assert!(err.contains("database not found"));
     }
 }

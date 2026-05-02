@@ -140,16 +140,14 @@ pub fn move_skill_to_trash(
 
     if original_path.is_symlink() {
         // Read the symlink target, then remove it
-        let target =
-            fs::read_link(original_path).map_err(|e| format!("read_link: {}", e))?;
+        let target = fs::read_link(original_path).map_err(|e| format!("read_link: {}", e))?;
         fs::remove_file(original_path).map_err(|e| format!("remove symlink: {}", e))?;
         // Store the symlink target as the "backup" — we recreate the symlink on restore
         fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
         fs::write(dest.join(".symlink_target"), target.display().to_string())
             .map_err(|e| e.to_string())?;
     } else {
-        fs::rename(original_path, &dest)
-            .map_err(|e| format!("rename to trash: {}", e))?;
+        fs::rename(original_path, &dest).map_err(|e| format!("rename to trash: {}", e))?;
     }
 
     let item = TrashItem {
@@ -207,10 +205,7 @@ pub fn restore_item(id: &str) -> Result<TrashItem, String> {
                 let mut items = read_index();
                 items.push(item.clone());
                 let _ = save_index(&items);
-                return Err(format!(
-                    "Original path already exists: {}",
-                    original_path
-                ));
+                return Err(format!("Original path already exists: {}", original_path));
             }
 
             if let Some(parent) = orig.parent() {
@@ -220,12 +215,10 @@ pub fn restore_item(id: &str) -> Result<TrashItem, String> {
             // Check if it was a symlink
             let symlink_target_file = trash_skill_dir.join(".symlink_target");
             if symlink_target_file.exists() {
-                let target =
-                    fs::read_to_string(&symlink_target_file).map_err(|e| e.to_string())?;
+                let target = fs::read_to_string(&symlink_target_file).map_err(|e| e.to_string())?;
                 let target = target.trim();
                 #[cfg(unix)]
-                std::os::unix::fs::symlink(target, &orig)
-                    .map_err(|e| format!("symlink: {}", e))?;
+                std::os::unix::fs::symlink(target, &orig).map_err(|e| format!("symlink: {}", e))?;
                 #[cfg(windows)]
                 std::os::windows::fs::symlink_file(target, &orig)
                     .map_err(|e| format!("symlink: {}", e))?;

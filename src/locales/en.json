@@ -40,6 +40,11 @@
     "no_more_sessions": "No more sessions",
     "load_more": "Load More",
     "loading_more": "Loading...",
+    "delete": "Delete",
+    "confirm_delete": "Confirm Delete",
+    "deleting": "Deleting...",
+    "deleted": "Deleted.",
+    "delete_failed": "Delete failed: {error}",
     "unavailable": "Unavailable",
     "resume_started": "Resume command launched:\n{command}",
     "resume_failed": "Failed to resume: {error}"

@@ -8,7 +8,10 @@ pub fn discover_platforms(config: &Config) -> Vec<Platform> {
 
     for custom in &config.platforms {
         let expanded = shellexpand_home(&custom.skill_dir);
-        let presence_path = expanded.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| expanded.clone());
+        let presence_path = expanded
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| expanded.clone());
         defs.push(PlatformDef {
             id: custom.id.clone(),
             display_name: custom.display_name.clone(),
@@ -27,7 +30,14 @@ pub fn discover_platforms(config: &Config) -> Vec<Platform> {
             } else {
                 Vec::new()
             };
-            Platform { id: d.id, display_name: d.display_name, description: d.description, skill_dir: d.skill_dir, installed: true, skills }
+            Platform {
+                id: d.id,
+                display_name: d.display_name,
+                description: d.description,
+                skill_dir: d.skill_dir,
+                installed: true,
+                skills,
+            }
         })
         .collect();
 
@@ -37,7 +47,9 @@ pub fn discover_platforms(config: &Config) -> Vec<Platform> {
 
 fn shellexpand_home(path: &str) -> std::path::PathBuf {
     if let Some(stripped) = path.strip_prefix("~/") {
-        dirs::home_dir().map(|h| h.join(stripped)).unwrap_or_else(|| std::path::PathBuf::from(path))
+        dirs::home_dir()
+            .map(|h| h.join(stripped))
+            .unwrap_or_else(|| std::path::PathBuf::from(path))
     } else {
         std::path::PathBuf::from(path)
     }

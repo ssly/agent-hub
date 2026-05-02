@@ -40,6 +40,11 @@
     "no_more_sessions": "已经到底啦",
     "load_more": "加载更多",
     "loading_more": "加载中...",
+    "delete": "删除",
+    "confirm_delete": "确认删除",
+    "deleting": "删除中...",
+    "deleted": "已删除。",
+    "delete_failed": "删除失败：{error}",
     "unavailable": "不可用",
     "resume_started": "已启动恢复命令：\n{command}",
     "resume_failed": "恢复失败：{error}"

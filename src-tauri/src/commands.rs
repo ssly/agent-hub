@@ -35,8 +35,13 @@ pub struct PlatformView {
 
 impl From<&Platform> for PlatformView {
     fn from(p: &Platform) -> Self {
-        Self { id: p.id.clone(), display_name: p.display_name.clone(), description: p.description.clone(),
-            skill_dir: p.skill_dir.display().to_string(), skill_count: p.skills.len() }
+        Self {
+            id: p.id.clone(),
+            display_name: p.display_name.clone(),
+            description: p.description.clone(),
+            skill_dir: p.skill_dir.display().to_string(),
+            skill_count: p.skills.len(),
+        }
     }
 }
 
@@ -54,11 +59,19 @@ pub struct SkillSummary {
 
 impl From<&Skill> for SkillSummary {
     fn from(s: &Skill) -> Self {
-        Self { name: s.name.clone(), folder: s.folder.clone(), version: s.version.clone(),
-            description: s.description.clone(), is_symlink: s.is_symlink,
+        Self {
+            name: s.name.clone(),
+            folder: s.folder.clone(),
+            version: s.version.clone(),
+            description: s.description.clone(),
+            is_symlink: s.is_symlink,
             symlink_target: s.symlink_target.as_ref().map(|p| p.display().to_string()),
             total_size: s.total_size,
-            modified_at: s.modified_at.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()) }
+            modified_at: s
+                .modified_at
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs()),
+        }
     }
 }
 
@@ -80,13 +93,23 @@ pub struct SkillDetail {
 
 impl From<&Skill> for SkillDetail {
     fn from(s: &Skill) -> Self {
-        Self { name: s.name.clone(), folder: s.folder.clone(), version: s.version.clone(),
-            description: s.description.clone(), platform_id: s.platform_id.clone(),
-            path: s.path.display().to_string(), is_symlink: s.is_symlink,
+        Self {
+            name: s.name.clone(),
+            folder: s.folder.clone(),
+            version: s.version.clone(),
+            description: s.description.clone(),
+            platform_id: s.platform_id.clone(),
+            path: s.path.display().to_string(),
+            is_symlink: s.is_symlink,
             symlink_target: s.symlink_target.as_ref().map(|p| p.display().to_string()),
             files: s.files.iter().map(|f| f.display().to_string()).collect(),
-            total_size: s.total_size, body: s.body.clone(),
-            modified_at: s.modified_at.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()) }
+            total_size: s.total_size,
+            body: s.body.clone(),
+            modified_at: s
+                .modified_at
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs()),
+        }
     }
 }
 
@@ -110,7 +133,10 @@ pub enum CommandError {
 // --- Helpers ---
 
 fn find_skill<'a>(platform: &'a Platform, skill_name: &str, folder: &str) -> Option<&'a Skill> {
-    platform.skills.iter().find(|sk| sk.name == skill_name && sk.folder == folder)
+    platform
+        .skills
+        .iter()
+        .find(|sk| sk.name == skill_name && sk.folder == folder)
 }
 
 // --- Commands ---
@@ -122,18 +148,30 @@ pub fn list_platforms(state: tauri::State<'_, SafeState>) -> Vec<PlatformView> {
 }
 
 #[tauri::command]
-pub fn get_platform_skills(state: tauri::State<'_, SafeState>, platform_id: String) -> Vec<SkillSummary> {
+pub fn get_platform_skills(
+    state: tauri::State<'_, SafeState>,
+    platform_id: String,
+) -> Vec<SkillSummary> {
     let s = state.lock().unwrap();
-    s.platforms.iter()
+    s.platforms
+        .iter()
         .find(|p| p.id == platform_id)
         .map(|p| p.skills.iter().map(SkillSummary::from).collect())
         .unwrap_or_default()
 }
 
 #[tauri::command]
-pub fn get_skill_detail(state: tauri::State<'_, SafeState>, platform_id: String, skill_name: String, folder: String) -> Result<SkillDetail, CommandError> {
+pub fn get_skill_detail(
+    state: tauri::State<'_, SafeState>,
+    platform_id: String,
+    skill_name: String,
+    folder: String,
+) -> Result<SkillDetail, CommandError> {
     let s = state.lock().unwrap();
-    let platform = s.platforms.iter().find(|p| p.id == platform_id)
+    let platform = s
+        .platforms
+        .iter()
+        .find(|p| p.id == platform_id)
         .ok_or_else(|| CommandError::NotFound(format!("Platform {} not found", platform_id)))?;
     let skill = find_skill(platform, &skill_name, &folder)
         .ok_or_else(|| CommandError::NotFound(format!("Skill {} not found", skill_name)))?;
@@ -141,24 +179,49 @@ pub fn get_skill_detail(state: tauri::State<'_, SafeState>, platform_id: String,
 }
 
 #[tauri::command]
-pub fn get_diff_candidates(state: tauri::State<'_, SafeState>, platform_id: String, skill_name: String, folder: String) -> Vec<PlatformView> {
+pub fn get_diff_candidates(
+    state: tauri::State<'_, SafeState>,
+    platform_id: String,
+    skill_name: String,
+    folder: String,
+) -> Vec<PlatformView> {
     let s = state.lock().unwrap();
-    s.platforms.iter()
-        .filter(|p| p.id != platform_id && p.skills.iter().any(|sk| sk.name == skill_name && sk.folder == folder))
+    s.platforms
+        .iter()
+        .filter(|p| {
+            p.id != platform_id
+                && p.skills
+                    .iter()
+                    .any(|sk| sk.name == skill_name && sk.folder == folder)
+        })
         .map(PlatformView::from)
         .collect()
 }
 
 #[tauri::command]
-pub fn diff_skills_cmd(state: tauri::State<'_, SafeState>, source_platform_id: String, target_platform_id: String, skill_name: String, folder: String) -> Result<crate::diff::DiffResult, CommandError> {
+pub fn diff_skills_cmd(
+    state: tauri::State<'_, SafeState>,
+    source_platform_id: String,
+    target_platform_id: String,
+    skill_name: String,
+    folder: String,
+) -> Result<crate::diff::DiffResult, CommandError> {
     let s = state.lock().unwrap();
-    let source_platform = s.platforms.iter().find(|p| p.id == source_platform_id)
+    let source_platform = s
+        .platforms
+        .iter()
+        .find(|p| p.id == source_platform_id)
         .ok_or_else(|| CommandError::NotFound("Source platform not found".into()))?;
-    let target_platform = s.platforms.iter().find(|p| p.id == target_platform_id)
+    let target_platform = s
+        .platforms
+        .iter()
+        .find(|p| p.id == target_platform_id)
         .ok_or_else(|| CommandError::NotFound("Target platform not found".into()))?;
-    let source_skill = find_skill(source_platform, &skill_name, &folder).cloned()
+    let source_skill = find_skill(source_platform, &skill_name, &folder)
+        .cloned()
         .ok_or_else(|| CommandError::NotFound("Source skill not found".into()))?;
-    let target_skill = find_skill(target_platform, &skill_name, &folder).cloned()
+    let target_skill = find_skill(target_platform, &skill_name, &folder)
+        .cloned()
         .ok_or_else(|| CommandError::NotFound("Target skill not found".into()))?;
     Ok(crate::diff::diff_skills(&source_skill, &target_skill))
 }
@@ -171,30 +234,59 @@ pub struct SyncTarget {
 }
 
 #[tauri::command]
-pub fn get_sync_targets(state: tauri::State<'_, SafeState>, platform_id: String, skill_name: String, folder: String) -> Vec<SyncTarget> {
+pub fn get_sync_targets(
+    state: tauri::State<'_, SafeState>,
+    platform_id: String,
+    skill_name: String,
+    folder: String,
+) -> Vec<SyncTarget> {
     let s = state.lock().unwrap();
-    s.platforms.iter()
+    s.platforms
+        .iter()
         .filter(|p| p.id != platform_id)
-        .map(|p| SyncTarget { id: p.id.clone(), display_name: p.display_name.clone(),
-            has_skill: p.skills.iter().any(|sk| sk.name == skill_name && sk.folder == folder) })
+        .map(|p| SyncTarget {
+            id: p.id.clone(),
+            display_name: p.display_name.clone(),
+            has_skill: p
+                .skills
+                .iter()
+                .any(|sk| sk.name == skill_name && sk.folder == folder),
+        })
         .collect()
 }
 
 #[tauri::command]
-pub fn sync_skill_cmd(state: tauri::State<'_, SafeState>, source_platform_id: String, target_platform_id: String, skill_name: String, folder: String, overwrite: bool) -> Result<String, CommandError> {
+pub fn sync_skill_cmd(
+    state: tauri::State<'_, SafeState>,
+    source_platform_id: String,
+    target_platform_id: String,
+    skill_name: String,
+    folder: String,
+    overwrite: bool,
+) -> Result<String, CommandError> {
     let (source_skill, target_platform) = {
         let s = state.lock().unwrap();
-        let source_platform = s.platforms.iter().find(|p| p.id == source_platform_id)
+        let source_platform = s
+            .platforms
+            .iter()
+            .find(|p| p.id == source_platform_id)
             .ok_or_else(|| CommandError::NotFound("Source platform not found".into()))?;
-        let target = s.platforms.iter().find(|p| p.id == target_platform_id)
+        let target = s
+            .platforms
+            .iter()
+            .find(|p| p.id == target_platform_id)
             .ok_or_else(|| CommandError::NotFound("Target platform not found".into()))?;
-        let skill = find_skill(source_platform, &skill_name, &folder).cloned()
+        let skill = find_skill(source_platform, &skill_name, &folder)
+            .cloned()
             .ok_or_else(|| CommandError::NotFound("Source skill not found".into()))?;
         (skill, target.clone())
     };
 
-    let result = if overwrite { crate::sync::sync_overwrite(&source_skill, &target_platform) }
-                 else { crate::sync::sync_skill(&source_skill, &target_platform) };
+    let result = if overwrite {
+        crate::sync::sync_overwrite(&source_skill, &target_platform)
+    } else {
+        crate::sync::sync_skill(&source_skill, &target_platform)
+    };
 
     match result {
         Ok(()) => {
@@ -207,15 +299,28 @@ pub fn sync_skill_cmd(state: tauri::State<'_, SafeState>, source_platform_id: St
 }
 
 #[tauri::command]
-pub fn sync_folder_cmd(state: tauri::State<'_, SafeState>, source_platform_id: String, target_platform_id: String, folder: String) -> Result<serde_json::Value, CommandError> {
+pub fn sync_folder_cmd(
+    state: tauri::State<'_, SafeState>,
+    source_platform_id: String,
+    target_platform_id: String,
+    folder: String,
+) -> Result<serde_json::Value, CommandError> {
     let results = {
         let s = state.lock().unwrap();
-        let source_platform = s.platforms.iter().find(|p| p.id == source_platform_id)
+        let source_platform = s
+            .platforms
+            .iter()
+            .find(|p| p.id == source_platform_id)
             .ok_or_else(|| CommandError::NotFound("Source platform not found".into()))?;
-        let target_platform = s.platforms.iter().find(|p| p.id == target_platform_id)
+        let target_platform = s
+            .platforms
+            .iter()
+            .find(|p| p.id == target_platform_id)
             .ok_or_else(|| CommandError::NotFound("Target platform not found".into()))?;
 
-        let skills: Vec<_> = source_platform.skills.iter()
+        let skills: Vec<_> = source_platform
+            .skills
+            .iter()
             .filter(|sk| sk.folder == folder)
             .cloned()
             .collect();
@@ -268,9 +373,16 @@ pub fn search_skills(state: tauri::State<'_, SafeState>, query: String) -> Vec<S
     let mut results = Vec::new();
     for platform in &s.platforms {
         for skill in &platform.skills {
-            if skill.name.to_lowercase().contains(&q) || skill.description.to_lowercase().contains(&q) {
-                results.push(SearchResult { platform_id: platform.id.clone(), platform_name: platform.display_name.clone(),
-                    skill_name: skill.name.clone(), folder: skill.folder.clone(), description: skill.description.clone() });
+            if skill.name.to_lowercase().contains(&q)
+                || skill.description.to_lowercase().contains(&q)
+            {
+                results.push(SearchResult {
+                    platform_id: platform.id.clone(),
+                    platform_name: platform.display_name.clone(),
+                    skill_name: skill.name.clone(),
+                    folder: skill.folder.clone(),
+                    description: skill.description.clone(),
+                });
             }
         }
     }
@@ -278,10 +390,18 @@ pub fn search_skills(state: tauri::State<'_, SafeState>, query: String) -> Vec<S
 }
 
 #[tauri::command]
-pub fn delete_skill_cmd(state: tauri::State<'_, SafeState>, platform_id: String, skill_name: String, folder: String) -> Result<String, CommandError> {
+pub fn delete_skill_cmd(
+    state: tauri::State<'_, SafeState>,
+    platform_id: String,
+    skill_name: String,
+    folder: String,
+) -> Result<String, CommandError> {
     let skill_path = {
         let s = state.lock().unwrap();
-        let platform = s.platforms.iter().find(|p| p.id == platform_id)
+        let platform = s
+            .platforms
+            .iter()
+            .find(|p| p.id == platform_id)
             .ok_or_else(|| CommandError::NotFound("Platform not found".into()))?;
         let skill = find_skill(platform, &skill_name, &folder)
             .ok_or_else(|| CommandError::NotFound(format!("Skill {} not found", skill_name)))?;
@@ -295,15 +415,27 @@ pub fn delete_skill_cmd(state: tauri::State<'_, SafeState>, platform_id: String,
 }
 
 #[tauri::command]
-pub fn read_skill_file(state: tauri::State<'_, SafeState>, platform_id: String, skill_name: String, folder: String, file_path: String) -> Result<String, CommandError> {
+pub fn read_skill_file(
+    state: tauri::State<'_, SafeState>,
+    platform_id: String,
+    skill_name: String,
+    folder: String,
+    file_path: String,
+) -> Result<String, CommandError> {
     let s = state.lock().unwrap();
-    let platform = s.platforms.iter().find(|p| p.id == platform_id)
+    let platform = s
+        .platforms
+        .iter()
+        .find(|p| p.id == platform_id)
         .ok_or_else(|| CommandError::NotFound(format!("Platform {} not found", platform_id)))?;
     let skill = find_skill(platform, &skill_name, &folder)
         .ok_or_else(|| CommandError::NotFound(format!("Skill {} not found", skill_name)))?;
     let full_path = skill.path.join(&file_path);
     if !full_path.exists() {
-        return Err(CommandError::NotFound(format!("File {} not found", file_path)));
+        return Err(CommandError::NotFound(format!(
+            "File {} not found",
+            file_path
+        )));
     }
     let canonical_skill = std::fs::canonicalize(&skill.path).unwrap_or_else(|_| skill.path.clone());
     let canonical_file = std::fs::canonicalize(&full_path).unwrap_or_else(|_| full_path.clone());
@@ -321,8 +453,13 @@ pub fn list_session_platforms() -> Result<Vec<session::SessionPlatform>, Command
 }
 
 #[tauri::command(async)]
-pub fn list_sessions(platform_id: String, offset: u32, limit: u32) -> Result<session::SessionListPage, CommandError> {
-    session::list_sessions(&platform_id, offset as usize, limit as usize).map_err(CommandError::SyncError)
+pub fn list_sessions(
+    platform_id: String,
+    offset: u32,
+    limit: u32,
+) -> Result<session::SessionListPage, CommandError> {
+    session::list_sessions(&platform_id, offset as usize, limit as usize)
+        .map_err(CommandError::SyncError)
 }
 
 #[tauri::command(async)]
@@ -331,15 +468,31 @@ pub fn list_session_terminals() -> Vec<session::SessionTerminalOption> {
 }
 
 #[tauri::command(async)]
-pub fn resume_session(platform_id: String, session_id: String, project_path: String, terminal_id: String) -> Result<String, CommandError> {
+pub fn resume_session(
+    platform_id: String,
+    session_id: String,
+    project_path: String,
+    terminal_id: String,
+) -> Result<String, CommandError> {
     session::resume_session(&platform_id, &session_id, &project_path, &terminal_id)
         .map_err(CommandError::SyncError)
 }
 
 #[tauri::command(async)]
-pub fn get_session_messages(platform_id: String, session_id: String, offset: u32, limit: u32) -> Result<Vec<session::SessionMessage>, CommandError> {
+pub fn get_session_messages(
+    platform_id: String,
+    session_id: String,
+    offset: u32,
+    limit: u32,
+) -> Result<Vec<session::SessionMessage>, CommandError> {
     session::get_session_messages(&platform_id, &session_id, offset as usize, limit as usize)
         .map_err(CommandError::SyncError)
+}
+
+#[tauri::command(async)]
+pub fn delete_session(platform_id: String, session_id: String) -> Result<String, CommandError> {
+    session::delete_session(&platform_id, &session_id).map_err(CommandError::SyncError)?;
+    Ok("ok".to_string())
 }
 
 // --- Trash Commands ---
@@ -391,7 +544,10 @@ impl From<&crate::skill::InvalidSkill> for InvalidSkillView {
 
 #[tauri::command]
 pub fn list_trash_cmd() -> Vec<TrashItemView> {
-    crate::trash::list_trash().iter().map(TrashItemView::from).collect()
+    crate::trash::list_trash()
+        .iter()
+        .map(TrashItemView::from)
+        .collect()
 }
 
 #[tauri::command]
@@ -399,14 +555,21 @@ pub fn scan_invalid_skills_cmd(state: tauri::State<'_, SafeState>) -> Vec<Invali
     let s = state.lock().unwrap();
     let mut invalid: Vec<InvalidSkillView> = Vec::new();
     for platform in &s.platforms {
-        let items = crate::skill::scan_invalid_skills(&platform.skill_dir, &platform.id, &platform.display_name);
+        let items = crate::skill::scan_invalid_skills(
+            &platform.skill_dir,
+            &platform.id,
+            &platform.display_name,
+        );
         invalid.extend(items.iter().map(InvalidSkillView::from));
     }
     invalid
 }
 
 #[tauri::command]
-pub fn restore_trash_item_cmd(state: tauri::State<'_, SafeState>, id: String) -> Result<String, CommandError> {
+pub fn restore_trash_item_cmd(
+    state: tauri::State<'_, SafeState>,
+    id: String,
+) -> Result<String, CommandError> {
     crate::trash::restore_item(&id).map_err(|e| CommandError::SyncError(e))?;
     let mut s = state.lock().unwrap();
     s.platforms = crate::platform::discover_platforms(&s.config);
@@ -451,11 +614,21 @@ pub struct McpServerDetail {
 
 fn server_summary(config: &serde_json::Value) -> String {
     let command = config.get("command").and_then(|v| v.as_str()).unwrap_or("");
-    let args = config.get("args")
+    let args = config
+        .get("args")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(" "))
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
         .unwrap_or_default();
-    if args.is_empty() { command.to_string() } else { format!("{} {}", command, args) }
+    if args.is_empty() {
+        command.to_string()
+    } else {
+        format!("{} {}", command, args)
+    }
 }
 
 #[tauri::command]
@@ -469,7 +642,11 @@ pub fn list_mcp_platforms() -> Vec<McpPlatformView> {
                 id: def.id,
                 display_name: def.display_name,
                 config_path: def.config_path.display().to_string(),
-                format: match def.format { crate::mcp::McpFormat::Json => "json", crate::mcp::McpFormat::Toml => "toml" }.to_string(),
+                format: match def.format {
+                    crate::mcp::McpFormat::Json => "json",
+                    crate::mcp::McpFormat::Toml => "toml",
+                }
+                .to_string(),
                 server_count: servers.len(),
             }
         })
@@ -478,28 +655,41 @@ pub fn list_mcp_platforms() -> Vec<McpPlatformView> {
 
 #[tauri::command]
 pub fn get_mcp_servers(platform_id: String) -> Result<Vec<McpServerView>, CommandError> {
-    let servers = crate::mcp::read_mcp_servers(&platform_id)
-        .map_err(|e| CommandError::NotFound(e))?;
-    Ok(servers.into_iter().map(|s| {
-        McpServerView { name: s.name, summary: server_summary(&s.config) }
-    }).collect())
+    let servers =
+        crate::mcp::read_mcp_servers(&platform_id).map_err(|e| CommandError::NotFound(e))?;
+    Ok(servers
+        .into_iter()
+        .map(|s| McpServerView {
+            name: s.name,
+            summary: server_summary(&s.config),
+        })
+        .collect())
 }
 
 #[tauri::command]
 pub fn get_mcp_server(platform_id: String, name: String) -> Result<McpServerDetail, CommandError> {
-    let server = crate::mcp::read_mcp_server(&platform_id, &name)
-        .map_err(|e| CommandError::NotFound(e))?;
-    let def = crate::mcp::find_mcp_platform(&platform_id).ok_or_else(|| CommandError::NotFound("Platform not found".into()))?;
+    let server =
+        crate::mcp::read_mcp_server(&platform_id, &name).map_err(|e| CommandError::NotFound(e))?;
+    let def = crate::mcp::find_mcp_platform(&platform_id)
+        .ok_or_else(|| CommandError::NotFound("Platform not found".into()))?;
     let config_text = crate::mcp::config_to_display(&server.config, def.format);
     Ok(McpServerDetail {
         name: server.name,
         config_text,
-        format: match def.format { crate::mcp::McpFormat::Json => "json", crate::mcp::McpFormat::Toml => "toml" }.to_string(),
+        format: match def.format {
+            crate::mcp::McpFormat::Json => "json",
+            crate::mcp::McpFormat::Toml => "toml",
+        }
+        .to_string(),
     })
 }
 
 #[tauri::command]
-pub fn save_mcp_server_cmd(platform_id: String, name: String, config_json: String) -> Result<String, CommandError> {
+pub fn save_mcp_server_cmd(
+    platform_id: String,
+    name: String,
+    config_json: String,
+) -> Result<String, CommandError> {
     let config: serde_json::Value = serde_json::from_str(&config_json)
         .map_err(|e| CommandError::SyncError(format!("Invalid JSON: {}", e)))?;
     crate::mcp::save_mcp_server(&platform_id, &name, config)
@@ -513,13 +703,16 @@ pub fn delete_mcp_server_cmd(platform_id: String, name: String) -> Result<String
     if let Ok(server) = crate::mcp::read_mcp_server(&platform_id, &name) {
         let _ = crate::trash::move_mcp_to_trash(&platform_id, &name, server.config);
     }
-    crate::mcp::delete_mcp_server(&platform_id, &name)
-        .map_err(|e| CommandError::SyncError(e))?;
+    crate::mcp::delete_mcp_server(&platform_id, &name).map_err(|e| CommandError::SyncError(e))?;
     Ok("ok".to_string())
 }
 
 #[tauri::command]
-pub fn import_mcp_server_cmd(platform_id: String, name: String, config_text: String) -> Result<String, CommandError> {
+pub fn import_mcp_server_cmd(
+    platform_id: String,
+    name: String,
+    config_text: String,
+) -> Result<String, CommandError> {
     crate::mcp::import_mcp_server(&platform_id, &name, &config_text)
         .map_err(|e| CommandError::SyncError(e))?;
     Ok("ok".to_string())
@@ -528,22 +721,24 @@ pub fn import_mcp_server_cmd(platform_id: String, name: String, config_text: Str
 // --- App Info ---
 
 #[derive(Debug, Clone, serde::Serialize)]
-#[serde(tag = "event", content = "data")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "event",
+    content = "data"
+)]
 pub enum ResumableDownloadEvent {
-    #[serde(rename_all = "camelCase")]
     Started {
         content_length: Option<u64>,
         total: Option<u64>,
         resumed_from: u64,
         downloaded: u64,
     },
-    #[serde(rename_all = "camelCase")]
     Progress {
         chunk_length: usize,
         total: Option<u64>,
         downloaded: u64,
     },
-    #[serde(rename_all = "camelCase")]
     Finished {
         total: Option<u64>,
         downloaded: u64,
@@ -576,7 +771,9 @@ pub async fn download_and_install_update_resumable<R: Runtime>(
 
     let cache_key = update_cache_key(&update);
     let partial_path = cache_dir.join(format!("{}-{}.part", update.version, cache_key));
-    let mut resumed_from = fs::metadata(&partial_path).map(|meta| meta.len()).unwrap_or(0);
+    let mut resumed_from = fs::metadata(&partial_path)
+        .map(|meta| meta.len())
+        .unwrap_or(0);
 
     let mut headers = update.headers.clone();
     if !headers.contains_key(ACCEPT) {
@@ -707,7 +904,9 @@ fn updater_pubkey<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<String, Comma
         .and_then(|updater| updater.get("pubkey"))
         .and_then(|pubkey| pubkey.as_str())
         .map(|value| value.to_string())
-        .ok_or_else(|| CommandError::SyncError("Updater pubkey is missing from config.".to_string()))
+        .ok_or_else(|| {
+            CommandError::SyncError("Updater pubkey is missing from config.".to_string())
+        })
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -764,11 +963,11 @@ fn verify_update_signature(
     pub_key: &str,
 ) -> Result<(), CommandError> {
     let pub_key_decoded = base64_to_string(pub_key)?;
-    let public_key =
-        PublicKey::decode(&pub_key_decoded).map_err(|err| CommandError::SyncError(err.to_string()))?;
+    let public_key = PublicKey::decode(&pub_key_decoded)
+        .map_err(|err| CommandError::SyncError(err.to_string()))?;
     let signature_decoded = base64_to_string(release_signature)?;
-    let signature =
-        Signature::decode(&signature_decoded).map_err(|err| CommandError::SyncError(err.to_string()))?;
+    let signature = Signature::decode(&signature_decoded)
+        .map_err(|err| CommandError::SyncError(err.to_string()))?;
     public_key
         .verify(data, &signature, true)
         .map_err(|err| CommandError::SyncError(err.to_string()))?;
@@ -797,7 +996,8 @@ pub struct McpSyncTarget {
 
 #[tauri::command]
 pub fn get_mcp_sync_targets(platform_id: String, server_name: String) -> Vec<McpSyncTarget> {
-    crate::mcp::builtin_mcp_platforms().into_iter()
+    crate::mcp::builtin_mcp_platforms()
+        .into_iter()
         .filter(|def| def.presence_path.exists())
         .filter(|def| def.id != platform_id)
         .map(|def| {
@@ -806,20 +1006,32 @@ pub fn get_mcp_sync_targets(platform_id: String, server_name: String) -> Vec<Mcp
                 id: def.id,
                 display_name: def.display_name,
                 has_server,
-                format: match def.format { crate::mcp::McpFormat::Json => "json", crate::mcp::McpFormat::Toml => "toml" }.to_string(),
+                format: match def.format {
+                    crate::mcp::McpFormat::Json => "json",
+                    crate::mcp::McpFormat::Toml => "toml",
+                }
+                .to_string(),
             }
         })
         .collect()
 }
 
 #[tauri::command]
-pub fn preview_mcp_sync_cmd(source_platform_id: String, target_platform_id: String, server_name: String) -> Result<crate::mcp::McpSyncPreview, CommandError> {
+pub fn preview_mcp_sync_cmd(
+    source_platform_id: String,
+    target_platform_id: String,
+    server_name: String,
+) -> Result<crate::mcp::McpSyncPreview, CommandError> {
     crate::mcp::preview_mcp_sync(&source_platform_id, &target_platform_id, &server_name)
         .map_err(|e| CommandError::SyncError(e))
 }
 
 #[tauri::command]
-pub fn sync_mcp_server_cmd(source_platform_id: String, target_platform_id: String, server_name: String) -> Result<String, CommandError> {
+pub fn sync_mcp_server_cmd(
+    source_platform_id: String,
+    target_platform_id: String,
+    server_name: String,
+) -> Result<String, CommandError> {
     let server = crate::mcp::read_mcp_server(&source_platform_id, &server_name)
         .map_err(|e| CommandError::NotFound(e))?;
     crate::mcp::save_mcp_server(&target_platform_id, &server_name, server.config)
