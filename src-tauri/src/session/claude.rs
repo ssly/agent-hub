@@ -18,15 +18,10 @@ struct ClaudeSessionCandidate {
     updated_at: i64,
 }
 
-pub fn list_claude_sessions(
-    offset: usize,
-    limit: usize,
-) -> Result<(usize, Vec<SessionSummary>), String> {
+pub fn list_claude_sessions_all() -> Result<Vec<SessionSummary>, String> {
     let candidates = collect_claude_session_candidates()?;
-    let total = candidates.len();
-    let page_limit = limit.max(1);
     let mut sessions = Vec::new();
-    for candidate in candidates.into_iter().skip(offset).take(page_limit) {
+    for candidate in candidates {
         if let Ok(session) = extract_session_summary(
             &candidate.path,
             &candidate.project_path,
@@ -35,7 +30,7 @@ pub fn list_claude_sessions(
             sessions.push(session);
         }
     }
-    Ok((total, sessions))
+    Ok(sessions)
 }
 
 pub fn count_claude_sessions() -> Result<usize, String> {

@@ -210,6 +210,8 @@ class App {
         this.sessionLoadingMore = false;
         this.isSessionsLoading = false;
         this.sessionsLoadError = '';
+        this.selectedSessionPathFilter = 'all';
+        this.sessionPathOptions = ['all', 'unknown'];
         this.sessionPageSize = 50;
         this.sessionMessagePageSize = 50;
         this.sessionTerminals = [];
@@ -752,7 +754,7 @@ class App {
                 this.isSessionsLoading = true;
                 this.render();
                 await Promise.all([
-                    this.refreshSessionPlatforms(),
+                    this.refreshSessionPlatforms({ keepCurrentPathFilter: true }),
                     this.refreshSessionTerminals(),
                 ]);
                 this.isSessionsLoading = false;
@@ -886,7 +888,8 @@ class App {
         }, 3000);
     }
 
-    async refreshSessionPlatforms() {
+    async refreshSessionPlatforms(options = {}) {
+        const keepCurrentPathFilter = options.keepCurrentPathFilter === true;
         this.clearSessionDeleteConfirmation();
         this.deletingSessionId = null;
         this.sessionsLoadError = '';
@@ -899,6 +902,8 @@ class App {
 
         if (this.sessionPlatforms.length === 0) {
             this.selectedSessionPlatform = null;
+            this.selectedSessionPathFilter = 'all';
+            this.sessionPathOptions = ['all', 'unknown'];
             this.sessions = [];
             this.sessionOffset = 0;
             this.sessionTotal = 0;
@@ -910,6 +915,9 @@ class App {
         const exists = this.sessionPlatforms.some(p => p.id === this.selectedSessionPlatform);
         if (!exists) {
             this.selectedSessionPlatform = this.sessionPlatforms[0].id;
+        }
+        if (!keepCurrentPathFilter) {
+            this.selectedSessionPathFilter = 'all';
         }
         await this.loadSessionsForPlatform(this.selectedSessionPlatform, { append: false });
     }
@@ -933,7 +941,10 @@ class App {
 
     async loadSessionsForPlatform(platformId, options = {}) {
         const append = options.append === true;
+        const allowResetFilter = options.allowResetFilter !== false;
         if (!platformId) {
+            this.sessionPathOptions = ['all', 'unknown'];
+            this.selectedSessionPathFilter = 'all';
             this.sessions = [];
             this.sessionOffset = 0;
             this.sessionTotal = 0;
@@ -944,7 +955,27 @@ class App {
         }
         const offset = append ? this.sessionOffset : 0;
         try {
-            const page = await Api.listSessions(platformId, offset, this.sessionPageSize);
+            const page = await Api.listSessions(
+                platformId,
+                this.selectedSessionPathFilter || 'all',
+                offset,
+                this.sessionPageSize
+            );
+            const pagePaths = Array.isArray(page?.paths) && page.paths.length > 0
+                ? page.paths
+                : ['all', 'unknown'];
+            this.sessionPathOptions = pagePaths;
+            if (!this.sessionPathOptions.includes(this.selectedSessionPathFilter)) {
+                if (this.selectedSessionPathFilter !== 'all') {
+                    this.selectedSessionPathFilter = 'all';
+                    if (!append && allowResetFilter) {
+                        await this.loadSessionsForPlatform(platformId, { append: false, allowResetFilter: false });
+                        return;
+                    }
+                } else {
+                    this.selectedSessionPathFilter = 'all';
+                }
+            }
             const pageSessions = Array.isArray(page?.sessions) ? page.sessions : [];
             if (append) {
                 this.sessions = [...this.sessions, ...pageSessions];
@@ -964,6 +995,8 @@ class App {
         } catch (e) {
             const errorText = e?.SyncError || e?.message || String(e);
             if (!append) {
+                this.sessionPathOptions = ['all', 'unknown'];
+                this.selectedSessionPathFilter = 'all';
                 this.sessions = [];
                 this.sessionOffset = 0;
                 this.sessionTotal = 0;
@@ -982,6 +1015,7 @@ class App {
         this.clearSessionDeleteConfirmation();
         this.deletingSessionId = null;
         this.selectedSessionPlatform = id;
+        this.selectedSessionPathFilter = 'all';
         this.isSessionsLoading = true;
         this.render();
         try {
@@ -1017,6 +1051,8 @@ class App {
 
         if (this.sessionPlatforms.length === 0) {
             this.selectedSessionPlatform = null;
+            this.selectedSessionPathFilter = 'all';
+            this.sessionPathOptions = ['all', 'unknown'];
             this.sessions = [];
             this.sessionOffset = 0;
             this.sessionTotal = 0;
@@ -1025,7 +1061,12 @@ class App {
         }
 
         const keepCurrentPlatform = this.sessionPlatforms.some(p => p.id === platformId);
-        this.selectedSessionPlatform = keepCurrentPlatform ? platformId : this.sessionPlatforms[0].id;
+        const nextPlatformId = keepCurrentPlatform ? platformId : this.sessionPlatforms[0].id;
+        const platformChanged = this.selectedSessionPlatform !== nextPlatformId;
+        this.selectedSessionPlatform = nextPlatformId;
+        if (platformChanged) {
+            this.selectedSessionPathFilter = 'all';
+        }
 
         await this.loadSessionsForPlatform(this.selectedSessionPlatform, { append: false });
 
@@ -1065,6 +1106,26 @@ class App {
             alert(i.tWith('session.delete_failed', { error: e?.SyncError || e?.message || e }));
         } finally {
             this.deletingSessionId = null;
+            this.render();
+        }
+    }
+
+    async changeSessionPathFilter(pathFilter) {
+        const nextFilter = typeof pathFilter === 'string' && pathFilter.trim()
+            ? pathFilter.trim()
+            : 'all';
+        if (!this.selectedSessionPlatform || this.selectedSessionPathFilter === nextFilter) {
+            return;
+        }
+        this.selectedSessionPathFilter = nextFilter;
+        this.clearSessionDeleteConfirmation();
+        this.deletingSessionId = null;
+        this.isSessionsLoading = true;
+        this.render();
+        try {
+            await this.loadSessionsForPlatform(this.selectedSessionPlatform, { append: false });
+        } finally {
+            this.isSessionsLoading = false;
             this.render();
         }
     }
@@ -1910,27 +1971,61 @@ args = ["mcp-server-time"]
             const label = item.available ? item.display_name : `${item.display_name} (${i.t('session.unavailable')})`;
             return `<option value="${esc(item.id)}" ${selected} ${disabled}>${esc(label)}</option>`;
         }).join('');
+        const pathOptions = (this.sessionPathOptions && this.sessionPathOptions.length > 0
+            ? this.sessionPathOptions
+            : ['all', 'unknown']
+        ).map((pathValue) => {
+            const selected = pathValue === this.selectedSessionPathFilter ? 'selected' : '';
+            let label = pathValue;
+            if (pathValue === 'all') {
+                label = i.t('session.path_filter_all');
+            } else if (pathValue === 'unknown') {
+                label = i.t('session.path_filter_unknown');
+            }
+            return `<option value="${esc(pathValue)}" ${selected}>${esc(label)}</option>`;
+        }).join('');
+        const currentPathLabel = this.selectedSessionPathFilter === 'all'
+            ? i.t('session.path_filter_all')
+            : (this.selectedSessionPathFilter === 'unknown'
+                ? i.t('session.path_filter_unknown')
+                : this.selectedSessionPathFilter);
 
         let html = `<div class="rounded-lg border border-gray-700 bg-gray-900/50 p-3 mb-3">
-            <div class="flex items-center justify-between gap-2">
+            <div class="flex items-start justify-between gap-3">
                 <div class="text-xs text-gray-400">${i.tWith('session.loaded_summary', { loaded: formatInt(this.sessions.length), total: formatInt(this.sessionTotal || 0) })}</div>
-                <div class="flex items-center gap-2">
-                    <span class="text-xs text-gray-500">${i.t('session.resume_terminal')}</span>
-                    <select id="session-terminal-select" class="text-xs bg-gray-800 border border-gray-700 rounded px-2 py-1 cursor-pointer">
-                        ${terminalOptions}
-                    </select>
+                <div class="flex flex-col items-end gap-2">
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs text-gray-500">${i.t('session.path_filter_label')}</span>
+                        <select id="session-path-filter-select" class="text-xs bg-gray-800 border border-gray-700 rounded px-2 py-1 cursor-pointer w-[30rem] max-w-[65vw]">
+                            ${pathOptions}
+                        </select>
+                    </div>
+                    <div class="text-[11px] text-gray-500 max-w-[65vw] break-all text-right">${esc(i.tWith('session.path_filter_current', { path: currentPathLabel }))}</div>
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs text-gray-500">${i.t('session.resume_terminal')}</span>
+                        <select id="session-terminal-select" class="text-xs bg-gray-800 border border-gray-700 rounded px-2 py-1 cursor-pointer">
+                            ${terminalOptions}
+                        </select>
+                    </div>
                 </div>
             </div>
         </div>`;
 
         if (this.sessions.length === 0) {
-            html += `<p class="text-gray-500">${i.t('session.no_sessions')}</p>`;
+            const emptyMessage = this.selectedSessionPathFilter && this.selectedSessionPathFilter !== 'all'
+                ? i.t('session.path_filter_empty')
+                : i.t('session.no_sessions');
+            html += `<p class="text-gray-500">${emptyMessage}</p>`;
             el.innerHTML = html;
             const terminalSelect = el.querySelector('#session-terminal-select');
             if (terminalSelect) {
                 terminalSelect.addEventListener('change', (e) => {
                     this.selectedSessionTerminal = e.target.value;
                 });
+            }
+            const pathFilterSelect = el.querySelector('#session-path-filter-select');
+            if (pathFilterSelect) {
+                pathFilterSelect.addEventListener('change', (e) => this.changeSessionPathFilter(e.target.value));
             }
             return;
         }
@@ -1957,7 +2052,7 @@ args = ["mcp-server-time"]
                     <h3 class="text-sm font-semibold text-gray-100 truncate">${esc(session.title || i.t('session.untitled'))}</h3>
                     <span class="text-xs text-gray-500 whitespace-nowrap">${esc(this.formatSessionTime(session.updated_at))}</span>
                 </div>
-                <div class="text-xs text-gray-500 truncate mt-1" title="${esc(session.project_path || '')}">${esc(session.project_path || i.t('session.no_project'))}</div>
+                <div class="text-xs text-gray-500 break-all whitespace-normal mt-1">${esc(session.project_path || i.t('session.no_project'))}</div>
                 ${meta ? `<div class="text-xs mt-2">${meta}</div>` : ''}
                 <div class="mt-2 flex items-center justify-between gap-2">
                     <span class="text-xs text-gray-600">${i.tWith('session.started_at', { time: this.formatSessionTime(session.started_at) })}</span>
@@ -1982,6 +2077,10 @@ args = ["mcp-server-time"]
             terminalSelect.addEventListener('change', (e) => {
                 this.selectedSessionTerminal = e.target.value;
             });
+        }
+        const pathFilterSelect = el.querySelector('#session-path-filter-select');
+        if (pathFilterSelect) {
+            pathFilterSelect.addEventListener('change', (e) => this.changeSessionPathFilter(e.target.value));
         }
         el.querySelectorAll('.session-open-btn').forEach(btn => {
             btn.addEventListener('click', () => {

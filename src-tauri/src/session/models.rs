@@ -20,6 +20,7 @@ pub struct SessionSummary {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SessionListPage {
+    pub paths: Vec<String>,
     pub total: usize,
     pub offset: usize,
     pub limit: usize,

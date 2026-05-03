@@ -9,6 +9,8 @@ use std::process::Command;
 pub use models::{SessionListPage, SessionMessage, SessionPlatform, SessionTerminalOption};
 
 const MAX_SESSION_PAGE_SIZE: usize = 200;
+const PATH_FILTER_ALL: &str = "all";
+const PATH_FILTER_UNKNOWN: &str = "unknown";
 
 pub fn list_session_platforms() -> Result<Vec<SessionPlatform>, String> {
     let mut platforms = Vec::new();
@@ -45,24 +47,76 @@ pub fn list_session_platforms() -> Result<Vec<SessionPlatform>, String> {
 
 pub fn list_sessions(
     platform_id: &str,
+    path_filter: &str,
     offset: usize,
     limit: usize,
 ) -> Result<SessionListPage, String> {
     let page_limit = limit.clamp(1, MAX_SESSION_PAGE_SIZE);
-    let (total, sessions) = match platform_id {
-        "claude-code" => claude::list_claude_sessions(offset, page_limit)?,
-        "codex-cli" => codex::list_codex_sessions(offset, page_limit)?,
-        "kiro" => kiro::list_kiro_sessions(offset, page_limit)?,
+    let all_sessions = match platform_id {
+        "claude-code" => claude::list_claude_sessions_all()?,
+        "codex-cli" => codex::list_codex_sessions_all()?,
+        "kiro" => kiro::list_kiro_sessions_all()?,
         _ => return Err(format!("Unsupported platform: {}", platform_id)),
     };
+    let paths = build_path_options(&all_sessions);
+    let filtered_sessions = filter_sessions_by_path(all_sessions, path_filter);
+    let total = filtered_sessions.len();
+    let sessions = filtered_sessions
+        .into_iter()
+        .skip(offset)
+        .take(page_limit)
+        .collect::<Vec<_>>();
     let has_more = offset.saturating_add(sessions.len()) < total;
     Ok(SessionListPage {
+        paths,
         total,
         offset,
         limit: page_limit,
         has_more,
         sessions,
     })
+}
+
+fn normalize_project_path(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn build_path_options(sessions: &[models::SessionSummary]) -> Vec<String> {
+    let mut options = sessions
+        .iter()
+        .filter_map(|session| normalize_project_path(&session.project_path))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+
+    options.insert(0, PATH_FILTER_UNKNOWN.to_string());
+    options.insert(0, PATH_FILTER_ALL.to_string());
+    options
+}
+
+fn filter_sessions_by_path(
+    sessions: Vec<models::SessionSummary>,
+    path_filter: &str,
+) -> Vec<models::SessionSummary> {
+    let filter = path_filter.trim();
+    if filter.is_empty() || filter == PATH_FILTER_ALL {
+        return sessions;
+    }
+    if filter == PATH_FILTER_UNKNOWN {
+        return sessions
+            .into_iter()
+            .filter(|session| normalize_project_path(&session.project_path).is_none())
+            .collect();
+    }
+    sessions
+        .into_iter()
+        .filter(|session| normalize_project_path(&session.project_path).as_deref() == Some(filter))
+        .collect()
 }
 
 pub fn list_session_terminals() -> Vec<SessionTerminalOption> {
@@ -273,8 +327,7 @@ mod tests {
 
     #[test]
     fn claude_sessions_real_data_smoke_test() {
-        let (_total, sessions) =
-            claude::list_claude_sessions(0, 50).expect("claude scan should not fail");
+        let sessions = claude::list_claude_sessions_all().expect("claude scan should not fail");
         if sessions.is_empty() {
             return;
         }
@@ -287,8 +340,7 @@ mod tests {
 
     #[test]
     fn codex_sessions_real_data_smoke_test() {
-        let (_total, sessions) =
-            codex::list_codex_sessions(0, 50).expect("codex scan should not fail");
+        let sessions = codex::list_codex_sessions_all().expect("codex scan should not fail");
         if sessions.is_empty() {
             return;
         }
@@ -305,7 +357,8 @@ mod tests {
         let Some(platform) = platforms.first() else {
             return;
         };
-        let first_page = list_sessions(&platform.id, 0, 50).expect("session list should load");
+        let first_page =
+            list_sessions(&platform.id, PATH_FILTER_ALL, 0, 50).expect("session list should load");
         let Some(session) = first_page.sessions.first() else {
             return;
         };
@@ -316,12 +369,16 @@ mod tests {
         assert!(first_page.limit <= 50);
         assert!(page1.len() <= 50);
         assert!(page2.len() <= 50);
+        assert!(first_page.paths.iter().any(|path| path == PATH_FILTER_ALL));
+        assert!(first_page
+            .paths
+            .iter()
+            .any(|path| path == PATH_FILTER_UNKNOWN));
     }
 
     #[test]
     fn kiro_sessions_real_data_smoke_test() {
-        let (_total, sessions) =
-            kiro::list_kiro_sessions(0, 50).expect("kiro scan should not fail");
+        let sessions = kiro::list_kiro_sessions_all().expect("kiro scan should not fail");
         if sessions.is_empty() {
             return;
         }
@@ -347,5 +404,42 @@ mod tests {
         let err = delete_session("unknown-platform", "session-1")
             .expect_err("unknown platform should be rejected");
         assert!(err.contains("Unsupported platform"));
+    }
+
+    #[test]
+    fn filter_sessions_by_path_supports_all_unknown_and_exact_match() {
+        let sessions = vec![
+            models::SessionSummary {
+                id: "1".to_string(),
+                title: "a".to_string(),
+                project_path: "/tmp/a".to_string(),
+                model: None,
+                started_at: 0,
+                updated_at: 0,
+                message_count: None,
+                tokens_used: None,
+                platform_id: "x".to_string(),
+            },
+            models::SessionSummary {
+                id: "2".to_string(),
+                title: "b".to_string(),
+                project_path: "  ".to_string(),
+                model: None,
+                started_at: 0,
+                updated_at: 0,
+                message_count: None,
+                tokens_used: None,
+                platform_id: "x".to_string(),
+            },
+        ];
+
+        let all = filter_sessions_by_path(sessions.clone(), PATH_FILTER_ALL);
+        assert_eq!(all.len(), 2);
+        let unknown = filter_sessions_by_path(sessions.clone(), PATH_FILTER_UNKNOWN);
+        assert_eq!(unknown.len(), 1);
+        assert_eq!(unknown[0].id, "2");
+        let exact = filter_sessions_by_path(sessions, "/tmp/a");
+        assert_eq!(exact.len(), 1);
+        assert_eq!(exact[0].id, "1");
     }
 }

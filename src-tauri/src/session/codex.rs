@@ -28,43 +28,29 @@ pub fn count_codex_sessions() -> Result<usize, String> {
     usize::try_from(count).map_err(|err| err.to_string())
 }
 
-pub fn list_codex_sessions(
-    offset: usize,
-    limit: usize,
-) -> Result<(usize, Vec<SessionSummary>), String> {
+pub fn list_codex_sessions_all() -> Result<Vec<SessionSummary>, String> {
     let db_path = codex_db_path()?;
     if !db_path.exists() {
-        return Ok((0, Vec::new()));
+        return Ok(Vec::new());
     }
 
     let conn = open_codex_db_readonly(&db_path)?;
-    let total: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM threads WHERE archived = 0",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|err| err.to_string())?;
-    let total = usize::try_from(total).map_err(|err| err.to_string())?;
-    let page_limit = i64::try_from(limit.max(1)).unwrap_or(i64::MAX);
-    let page_offset = i64::try_from(offset).map_err(|err| err.to_string())?;
-
     let mut stmt = conn
         .prepare(
             "SELECT id, title, cwd, model, tokens_used, created_at, updated_at, first_user_message \
-             FROM threads WHERE archived = 0 ORDER BY updated_at DESC LIMIT ?1 OFFSET ?2",
+             FROM threads WHERE archived = 0 ORDER BY updated_at DESC",
         )
         .map_err(|err| err.to_string())?;
 
     let rows = stmt
-        .query_map([page_limit, page_offset], parse_codex_summary_row)
+        .query_map([], parse_codex_summary_row)
         .map_err(|err| err.to_string())?;
 
     let mut sessions = Vec::new();
     for row in rows {
         sessions.push(row.map_err(|err| err.to_string())?);
     }
-    Ok((total, sessions))
+    Ok(sessions)
 }
 
 pub fn get_codex_messages(

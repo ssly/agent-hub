@@ -14,19 +14,8 @@ pub fn count_kiro_sessions() -> Result<usize, String> {
     Ok(sessions.len())
 }
 
-pub fn list_kiro_sessions(
-    offset: usize,
-    limit: usize,
-) -> Result<(usize, Vec<SessionSummary>), String> {
-    let sessions = collect_kiro_sessions()?;
-    let total = sessions.len();
-    let page_limit = limit.max(1);
-    let page = sessions
-        .into_iter()
-        .skip(offset)
-        .take(page_limit)
-        .collect::<Vec<_>>();
-    Ok((total, page))
+pub fn list_kiro_sessions_all() -> Result<Vec<SessionSummary>, String> {
+    collect_kiro_sessions()
 }
 
 pub fn get_kiro_messages(

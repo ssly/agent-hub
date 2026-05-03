@@ -455,10 +455,11 @@ pub fn list_session_platforms() -> Result<Vec<session::SessionPlatform>, Command
 #[tauri::command(async)]
 pub fn list_sessions(
     platform_id: String,
+    path_filter: String,
     offset: u32,
     limit: u32,
 ) -> Result<session::SessionListPage, CommandError> {
-    session::list_sessions(&platform_id, offset as usize, limit as usize)
+    session::list_sessions(&platform_id, &path_filter, offset as usize, limit as usize)
         .map_err(CommandError::SyncError)
 }
 

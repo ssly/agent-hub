@@ -101,8 +101,8 @@ export async function listSessionPlatforms() {
     return invoke('list_session_platforms');
 }
 
-export async function listSessions(platformId, offset, limit) {
-    return invoke('list_sessions', { platformId, offset, limit });
+export async function listSessions(platformId, pathFilter, offset, limit) {
+    return invoke('list_sessions', { platformId, pathFilter, offset, limit });
 }
 
 export async function listSessionTerminals() {
