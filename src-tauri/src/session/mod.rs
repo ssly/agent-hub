@@ -120,28 +120,54 @@ fn filter_sessions_by_path(
 }
 
 pub fn list_session_terminals() -> Vec<SessionTerminalOption> {
-    vec![
-        SessionTerminalOption {
-            id: "warp".to_string(),
-            display_name: "Warp".to_string(),
-            available: is_terminal_available("warp"),
-        },
-        SessionTerminalOption {
+    #[cfg(target_os = "macos")]
+    {
+        vec![
+            SessionTerminalOption {
+                id: "warp".to_string(),
+                display_name: "Warp".to_string(),
+                available: is_terminal_available("warp"),
+            },
+            SessionTerminalOption {
+                id: "terminal-default".to_string(),
+                display_name: "Terminal".to_string(),
+                available: is_terminal_available("terminal-default"),
+            },
+            SessionTerminalOption {
+                id: "iterm".to_string(),
+                display_name: "iTerm".to_string(),
+                available: is_terminal_available("iterm"),
+            },
+            SessionTerminalOption {
+                id: "ghostty".to_string(),
+                display_name: "Ghostty".to_string(),
+                available: is_terminal_available("ghostty"),
+            },
+        ]
+    }
+    #[cfg(target_os = "windows")]
+    {
+        vec![
+            SessionTerminalOption {
+                id: "terminal-default".to_string(),
+                display_name: "CMD".to_string(),
+                available: is_terminal_available("terminal-default"),
+            },
+            SessionTerminalOption {
+                id: "windows-terminal".to_string(),
+                display_name: "Windows Terminal".to_string(),
+                available: is_terminal_available("windows-terminal"),
+            },
+        ]
+    }
+    #[cfg(target_os = "linux")]
+    {
+        vec![SessionTerminalOption {
             id: "terminal-default".to_string(),
             display_name: "Terminal".to_string(),
             available: is_terminal_available("terminal-default"),
-        },
-        SessionTerminalOption {
-            id: "iterm".to_string(),
-            display_name: "iTerm".to_string(),
-            available: is_terminal_available("iterm"),
-        },
-        SessionTerminalOption {
-            id: "ghostty".to_string(),
-            display_name: "Ghostty".to_string(),
-            available: is_terminal_available("ghostty"),
-        },
-    ]
+        }]
+    }
 }
 
 pub fn resume_session(
@@ -155,15 +181,26 @@ pub fn resume_session(
     let full_command = if project_path.trim().is_empty() {
         resume_command
     } else {
-        format!("cd {} && {}", shell_quote(project_path), resume_command)
+        #[cfg(target_os = "macos")]
+        let sep = " && ";
+        #[cfg(not(target_os = "macos"))]
+        let sep = " & ";
+        format!("cd {}{}{}", shell_quote(project_path), sep, resume_command)
     };
 
     launch_terminal_with_command(terminal_id, &full_command)?;
     Ok(full_command)
 }
 
+#[cfg(target_os = "macos")]
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn shell_quote(value: &str) -> String {
+    // Windows: wrap in double quotes, escape inner double quotes with backslash
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 fn command_exists(command: &str) -> bool {
@@ -211,7 +248,25 @@ fn is_terminal_available(terminal_id: &str) -> bool {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+fn is_terminal_available(terminal_id: &str) -> bool {
+    match terminal_id {
+        "terminal-default" => true, // cmd.exe always available
+        "windows-terminal" => {
+            // Check for Windows Terminal via where command
+            Command::new("where")
+                .arg("wt.exe")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        }
+        _ => false,
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn is_terminal_available(terminal_id: &str) -> bool {
     terminal_id == "terminal-default"
 }
@@ -276,9 +331,39 @@ fn launch_terminal_with_command(terminal_id: &str, command: &str) -> Result<(), 
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+fn launch_terminal_with_command(terminal_id: &str, command: &str) -> Result<(), String> {
+    match terminal_id {
+        "terminal-default" | "windows-terminal" => {
+            // Write command to a .bat file to avoid cmd.exe escaping issues
+            let bat_path = std::env::temp_dir().join(format!(
+                "agent-hub-resume-{}.bat",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            ));
+            let escaped = command.replace('%', "%%").replace('"', "\"\"");
+            let bat_content = format!("@echo off\n{}\npause\n", escaped);
+            std::fs::write(&bat_path, &bat_content).map_err(|e| e.to_string())?;
+
+            Command::new("cmd.exe")
+                .arg("/c")
+                .arg("start")
+                .arg("cmd.exe")
+                .arg("/k")
+                .arg(&bat_path)
+                .spawn()
+                .map_err(|e| format!("Failed to launch terminal: {}", e))?;
+            Ok(())
+        }
+        _ => Err(format!("Unsupported terminal: {}", terminal_id)),
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn launch_terminal_with_command(_terminal_id: &str, _command: &str) -> Result<(), String> {
-    Err("Session resume terminal launcher is currently macOS-only.".to_string())
+    Err("Session resume terminal launcher is not yet supported on Linux.".to_string())
 }
 
 pub fn get_session_messages(

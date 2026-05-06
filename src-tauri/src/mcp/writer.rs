@@ -94,11 +94,11 @@ fn delete_json_server(def: &super::registry::McpPlatformDef, name: &str) -> Resu
                     let prefix = &content[..key_pos];
                     let has_comma_after = content[end_pos + 1..].trim_start().starts_with(',');
                     if has_comma_after {
-                        // Remove from key_pos to after the comma
-                        let after_comma = content[end_pos + 1..].find(',').unwrap_or(0);
+                        // Remove this entry; the trailing comma separates it from the next entry
+                        let comma_off = content[end_pos + 1..].find(',').unwrap_or(0);
                         let mut result = String::with_capacity(content.len());
                         result.push_str(&content[..key_pos]);
-                        result.push_str(&content[end_pos + 1 + after_comma + 1..]);
+                        result.push_str(&content[end_pos + 1 + comma_off + 1..]);
                         return fs::write(&def.config_path, result.trim_end().to_string() + "\n")
                             .map_err(|e| e.to_string());
                     } else {

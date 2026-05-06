@@ -255,13 +255,16 @@ pub(crate) fn apply_json_server(
                 let end_pos = find_matching_brace(before, brace_start)?;
                 let after_end = before[end_pos + 1..].trim_start();
                 let has_comma = after_end.starts_with(',');
+                // delete_end: position of the comma after this entry (or end_pos if last).
+                // Content from delete_end+1 onward starts at the next entry.
                 let delete_end = if has_comma {
-                    end_pos + 1 + after_end[1..].find(',').unwrap_or(0) + 1
+                    end_pos + 1 + after_end.find(',').unwrap_or(0)
                 } else {
                     end_pos
                 };
                 let mut result = String::with_capacity(before.len() + inner_body.len());
                 result.push_str(&before[..brace_start]);
+                result.push_str("{\n");
                 result.push_str(&inner_body);
                 if has_comma {
                     result.push(',');
@@ -449,6 +452,42 @@ mod tests {
                                                          // Should find the matching } after [1, 2, 3]
         let inner = &text[4..=pos];
         assert!(inner.contains("[1, 2, 3]"));
+    }
+
+    #[test]
+    fn test_apply_json_update_non_last_server_preserves_following_entries() {
+        // Bug repro: updating a non-last server must not corrupt the next entry
+        let before = r#"{
+  "mcpServers": {
+    "context7": {
+      "command": "old-cmd"
+    },
+    "server-b": {
+      "command": "keep-me"
+    }
+  }
+}"#;
+        let new_config = serde_json::json!({"command": "new-cmd", "args": ["--flag"]});
+        let result = apply_json_server(before, "mcpServers", "context7", &new_config).unwrap();
+        // Must produce valid JSON
+        let parsed: Value = serde_json::from_str(&result).expect("Result should be valid JSON");
+        // Both servers must still exist
+        assert!(
+            parsed["mcpServers"]["context7"].is_object(),
+            "context7 should exist"
+        );
+        assert!(
+            parsed["mcpServers"]["server-b"].is_object(),
+            "server-b must NOT be corrupted"
+        );
+        assert_eq!(
+            parsed["mcpServers"]["context7"]["command"], "new-cmd",
+            "context7 should be updated"
+        );
+        assert_eq!(
+            parsed["mcpServers"]["server-b"]["command"], "keep-me",
+            "server-b must be untouched"
+        );
     }
 }
 
