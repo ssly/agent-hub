@@ -1,21 +1,15 @@
 <claude-mem-context>
 # Memory Context
 
-# [agent-hub] recent context, 2026-05-02 10:28am GMT+8
+# [agent-hub] recent context, 2026-05-03 10:46am GMT+8
 
 Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision
 Format: ID TIME TYPE TITLE
 Fetch details: get_observations([IDs]) | Search: mem-search skill
 
-Stats: 50 obs (11,552t read) | 1,001,965t work | 99% savings
+Stats: 50 obs (12,455t read) | 1,012,582t work | 99% savings
 
 ### Apr 30, 2026
-351 9:59p ✅ TailwindCSS v4 配置和版本同步脚本
-352 10:00p ✅ TailwindCSS v4 配置和版本同步脚本
-354 10:01p ✅ Tauri 开发服务器成功启动并运行
-356 10:06p 🔄 会话列表接口性能优化
-358 10:07p 🔄 会话平台列表加载性能优化
-364 10:29p 🔴 Session click causes immediate unresponsiveness
 365 10:30p 🔴 Session click unresponsiveness fixed with async execution and loading states
 368 10:35p 🔴 Session click blocking issue addressed with async architecture
 371 10:41p 🟣 Session pagination and terminal resume functionality added
@@ -62,6 +56,13 @@ Stats: 50 obs (11,552t read) | 1,001,965t work | 99% savings
 514 10:01a 🟣 Backend Session Deletion Implementation Completed
 515 10:04a 🟣 Session Deletion UI Implementation with Confirmation Dialog
 517 10:12a 🟣 Session Deletion Feature Complete Implementation Summary
+### May 3, 2026
+586 10:08a 🔵 OpenSpec CLI Not Installed
+587 10:11a 🟣 Sessions Path Filtering Feature Created
+588 10:14a 🟣 Sessions Path-Based Filtering with Select Control
+589 10:16a ✅ Sessions Filter-by-Workdir Design Refinement
+591 10:45a 🔵 Scoped Directory Refresh Feasibility Analysis
+592 10:46a 🔴 HTTP2 Push Failure Resolution
 
-Access 1002k tokens of past work via get_observations([IDs]) or mem-search skill.
+Access 1013k tokens of past work via get_observations([IDs]) or mem-search skill.
 </claude-mem-context>
