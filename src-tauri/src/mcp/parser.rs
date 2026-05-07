@@ -206,97 +206,27 @@ pub(crate) fn apply_json_server(
     name: &str,
     config: &Value,
 ) -> Result<String, String> {
-    let new_config_str = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
-    // Build indented config body. Prettified output:
-    //   {
-    //     "key": "value"
-    //   }
-    // We need: content at level 3 (6 spaces), closing } at level 2 (4 spaces).
-    let lines: Vec<&str> = new_config_str.lines().collect();
-    let mut inner_body = String::new();
-    for line in &lines[1..lines.len() - 1] {
-        // Add 4 spaces to existing 2-space indent → 6 spaces (level 3)
-        inner_body.push_str("    ");
-        inner_body.push_str(line);
-        inner_body.push('\n');
-    }
-    // Closing brace at level 2 (4 spaces)
-    inner_body.push_str("    }");
-
     if before.trim().is_empty() || before.trim() == "{}" {
-        return Ok(format!(
-            "{{\n  \"{mcp_key}\": {{\n    \"{name}\": {{\n{inner_body}\n  }}\n}}",
-        ));
+        let mut doc = serde_json::Map::new();
+        let mut servers = serde_json::Map::new();
+        servers.insert(name.to_string(), config.clone());
+        doc.insert(mcp_key.to_string(), Value::Object(servers));
+        return serde_json::to_string_pretty(&Value::Object(doc)).map_err(|e| e.to_string());
     }
 
-    // If the file doesn't contain the mcp_key at all, treat as fresh
-    if !before.contains(&format!("\"{}\"", mcp_key)) {
-        let mut doc: Value = serde_json::from_str(before).map_err(|e| e.to_string())?;
-        let obj = doc.as_object_mut().ok_or("Not a JSON object")?;
-        let mut servers_map = serde_json::Map::new();
-        servers_map.insert(name.to_string(), config.clone());
-        obj.insert(mcp_key.to_string(), Value::Object(servers_map));
-        return serde_json::to_string_pretty(&doc).map_err(|e| e.to_string());
-    }
-
-    let server_key = format!("\"{}\"", name);
-
-    // Update existing server — find "name": { ... } and replace the block
-    if let Some(key_pos) = before.find(&server_key) {
-        let after_key = &before[key_pos + server_key.len()..];
-        let after_key_trimmed = after_key.trim_start();
-        if after_key_trimmed.starts_with(':') {
-            let colon_pos =
-                key_pos + server_key.len() + (after_key.len() - after_key_trimmed.len());
-            let after_colon = before[colon_pos + 1..].trim_start();
-            if after_colon.starts_with('{') {
-                let brace_start =
-                    colon_pos + 1 + (before[colon_pos + 1..].len() - after_colon.len());
-                let end_pos = find_matching_brace(before, brace_start)?;
-                let after_end = before[end_pos + 1..].trim_start();
-                let has_comma = after_end.starts_with(',');
-                // delete_end: position of the comma after this entry (or end_pos if last).
-                // Content from delete_end+1 onward starts at the next entry.
-                let delete_end = if has_comma {
-                    end_pos + 1 + after_end.find(',').unwrap_or(0)
-                } else {
-                    end_pos
-                };
-                let mut result = String::with_capacity(before.len() + inner_body.len());
-                result.push_str(&before[..brace_start]);
-                result.push_str("{\n");
-                result.push_str(&inner_body);
-                if has_comma {
-                    result.push(',');
-                }
-                result.push_str(&before[delete_end + 1..]);
-                return Ok(result);
-            }
-        }
-    }
-
-    // Append new server to the mcp_key object
-    if let Some(mcp_pos) = before.find(&format!("\"{}\"", mcp_key)) {
-        if let Some(obj_start) = before[mcp_pos..].find('{') {
-            let abs_start = mcp_pos + obj_start;
-            if let Ok(obj_end) = find_matching_brace(before, abs_start) {
-                let inner_content = before[abs_start + 1..obj_end].trim();
-                let comma = if inner_content.is_empty() { "" } else { "," };
-                let insert = format!("{comma}\n    \"{name}\": {{\n{inner_body}");
-                let mut result = String::with_capacity(before.len() + insert.len());
-                result.push_str(before[..obj_end].trim_end());
-                result.push_str(&insert);
-                result.push('\n');
-                result.push_str(&before[obj_end..]);
-                return Ok(result);
-            }
-        }
-    }
-
-    Err("Could not locate MCP key in JSON for targeted edit".into())
+    let mut doc: Value = serde_json::from_str(before).map_err(|e| e.to_string())?;
+    let obj = doc.as_object_mut().ok_or("Not a JSON object")?;
+    let servers = obj
+        .entry(mcp_key)
+        .or_insert_with(|| Value::Object(serde_json::Map::new()))
+        .as_object_mut()
+        .ok_or(format!("'{}' is not an object", mcp_key))?;
+    servers.insert(name.to_string(), config.clone());
+    serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())
 }
 
 /// Find the matching `}` for a `{` at `open_pos` in `text`
+#[allow(dead_code)]
 pub(crate) fn find_matching_brace(text: &str, open_pos: usize) -> Result<usize, String> {
     let chars: Vec<char> = text[open_pos..].chars().collect();
     let mut depth = 0;
@@ -394,15 +324,20 @@ mod tests {
             "args": ["-y", "@anthropic-ai/context7"]
         });
         let result = apply_json_server(before, "mcpServers", "context7", &new_config).unwrap();
-        // Should only change the context7 block, not touch server-a or server-z
-        assert!(result.contains("\"server-a\""));
-        assert!(result.contains("\"server-z\""));
-        assert!(result.contains("\"echo\""));
-        assert!(result.contains("@anthropic-ai/context7"));
+        // Verify valid JSON
+        let parsed: Value = serde_json::from_str(&result).expect("Result should be valid JSON");
+        let servers = parsed["mcpServers"].as_object().unwrap();
+        // All 3 servers must exist
+        assert!(servers.contains_key("server-a"));
+        assert!(servers.contains_key("context7"));
+        assert!(servers.contains_key("server-z"));
+        // context7 updated
+        assert_eq!(servers["context7"]["args"][1], "@anthropic-ai/context7");
         assert!(!result.contains("old-cmd"));
-        // server-a formatting should remain untouched
-        assert!(result.contains("\"npx\","));
-        assert!(result.contains("\"old-pkg\""));
+        // server-a and server-z untouched
+        assert_eq!(servers["server-a"]["command"], "npx");
+        assert_eq!(servers["server-a"]["args"][1], "old-pkg");
+        assert_eq!(servers["server-z"]["command"], "echo");
     }
 
     #[test]
@@ -643,6 +578,41 @@ mod tests {
         assert_eq!(ctx.config["args"][1], "updated");
         let other = servers.iter().find(|s| s.name == "other").unwrap();
         assert_eq!(other.config["command"], "keep");
+    }
+
+    #[test]
+    fn test_sync_targets_root_level_not_project_level() {
+        // .claude.json may contain project-level mcpServers under projects.<path>.
+        // apply_json_server must target the ROOT-level mcpServers, not project-level.
+        let before = r#"{
+  "projects": {
+    "D:/Coding": {
+      "mcpServers": {
+        "proj-server": {
+          "command": "proj-cmd"
+        }
+      }
+    }
+  }
+}"#;
+        let config = serde_json::json!({"command": "npx", "args": ["-y", "ctx7"]});
+        let result = apply_json_server(before, "mcpServers", "context7", &config).unwrap();
+        let parsed: Value = serde_json::from_str(&result).expect("must be valid JSON");
+        // Root-level mcpServers must be created with context7
+        assert!(
+            parsed["mcpServers"]["context7"].is_object(),
+            "root mcpServers.context7 must exist"
+        );
+        assert_eq!(parsed["mcpServers"]["context7"]["command"], "npx");
+        // Project-level must be untouched
+        assert!(
+            parsed["projects"]["D:/Coding"]["mcpServers"]["proj-server"].is_object(),
+            "project-level mcpServers must be preserved"
+        );
+        assert_eq!(
+            parsed["projects"]["D:/Coding"]["mcpServers"]["proj-server"]["command"],
+            "proj-cmd"
+        );
     }
 }
 
