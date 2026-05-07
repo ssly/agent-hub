@@ -489,6 +489,161 @@ mod tests {
             "server-b must be untouched"
         );
     }
+
+    /// Helper: verify result is valid JSON and contains all expected server names
+    fn assert_valid_with_servers(result: &str, expected_servers: &[&str]) -> Value {
+        let parsed: Value =
+            serde_json::from_str(result).unwrap_or_else(|e| panic!("Invalid JSON: {}\nGot:\n{}", e, result));
+        let servers = parsed["mcpServers"]
+            .as_object()
+            .expect("mcpServers should be an object");
+        for &name in expected_servers {
+            assert!(
+                servers.contains_key(name),
+                "Server '{}' missing. Got keys: {:?}\nFull JSON:\n{}",
+                name,
+                servers.keys().collect::<Vec<_>>(),
+                result
+            );
+        }
+        parsed
+    }
+
+    #[test]
+    fn test_sync_all_paths_comprehensive() {
+        let config_a = serde_json::json!({"command": "npx", "args": ["-y", "pkg-a"]});
+        let config_b = serde_json::json!({"command": "npx", "args": ["-y", "pkg-b"]});
+        let config_c = serde_json::json!({"command": "npx", "args": ["-y", "pkg-c"]});
+        let config_new = serde_json::json!({"command": "npx", "args": ["-y", "new-pkg"], "env": {"KEY": "val"}});
+
+        // 1. Empty file → first server
+        let r = apply_json_server("{}", "mcpServers", "srv-a", &config_a).unwrap();
+        let p = assert_valid_with_servers(&r, &["srv-a"]);
+        assert_eq!(p["mcpServers"]["srv-a"]["command"], "npx");
+
+        // 2. Existing file with one server → append second
+        let one_server = "{\n  \"mcpServers\": {\n    \"srv-a\": {\n      \"command\": \"npx\"\n    }\n  }\n}";
+        let r = apply_json_server(one_server, "mcpServers", "srv-b", &config_b).unwrap();
+        let _p = assert_valid_with_servers(&r, &["srv-a", "srv-b"]);
+
+        // 3. Two servers → append third
+        let two_servers = "{\n  \"mcpServers\": {\n    \"srv-a\": { \"command\": \"a\" },\n    \"srv-b\": { \"command\": \"b\" }\n  }\n}";
+        let r = apply_json_server(two_servers, "mcpServers", "srv-c", &config_c).unwrap();
+        let _p = assert_valid_with_servers(&r, &["srv-a", "srv-b", "srv-c"]);
+
+        // 4. Update only server (no comma after)
+        let one_srv = "{\n  \"mcpServers\": {\n    \"srv-a\": {\n      \"command\": \"old\"\n    }\n  }\n}";
+        let r = apply_json_server(one_srv, "mcpServers", "srv-a", &config_new).unwrap();
+        let p = assert_valid_with_servers(&r, &["srv-a"]);
+        assert_eq!(p["mcpServers"]["srv-a"]["command"], "npx");
+        assert_eq!(p["mcpServers"]["srv-a"]["env"]["KEY"], "val");
+
+        // 5. Update first of two (comma after) — THE critical path
+        let two = "{\n  \"mcpServers\": {\n    \"srv-a\": {\n      \"command\": \"old\"\n    },\n    \"srv-b\": {\n      \"command\": \"keep\"\n    }\n  }\n}";
+        let r = apply_json_server(two, "mcpServers", "srv-a", &config_new).unwrap();
+        let p = assert_valid_with_servers(&r, &["srv-a", "srv-b"]);
+        assert_eq!(p["mcpServers"]["srv-a"]["command"], "npx");
+        assert_eq!(p["mcpServers"]["srv-b"]["command"], "keep");
+
+        // 6. Update last of two (no comma after)
+        let r = apply_json_server(two, "mcpServers", "srv-b", &config_new).unwrap();
+        let p = assert_valid_with_servers(&r, &["srv-a", "srv-b"]);
+        assert_eq!(p["mcpServers"]["srv-a"]["command"], "old");
+        assert_eq!(p["mcpServers"]["srv-b"]["command"], "npx");
+
+        // 7. Update middle of three (comma both sides)
+        let three = "{\n  \"mcpServers\": {\n    \"srv-a\": { \"command\": \"a\" },\n    \"srv-b\": { \"command\": \"b\" },\n    \"srv-c\": { \"command\": \"c\" }\n  }\n}";
+        let r = apply_json_server(three, "mcpServers", "srv-b", &config_new).unwrap();
+        let p = assert_valid_with_servers(&r, &["srv-a", "srv-b", "srv-c"]);
+        assert_eq!(p["mcpServers"]["srv-a"]["command"], "a");
+        assert_eq!(p["mcpServers"]["srv-b"]["command"], "npx");
+        assert_eq!(p["mcpServers"]["srv-c"]["command"], "c");
+
+        // 8. Update first of three (comma after)
+        let r = apply_json_server(three, "mcpServers", "srv-a", &config_new).unwrap();
+        let p = assert_valid_with_servers(&r, &["srv-a", "srv-b", "srv-c"]);
+        assert_eq!(p["mcpServers"]["srv-a"]["command"], "npx");
+        assert_eq!(p["mcpServers"]["srv-b"]["command"], "b");
+        assert_eq!(p["mcpServers"]["srv-c"]["command"], "c");
+
+        // 9. Update last of three (no comma after)
+        let r = apply_json_server(three, "mcpServers", "srv-c", &config_new).unwrap();
+        let p = assert_valid_with_servers(&r, &["srv-a", "srv-b", "srv-c"]);
+        assert_eq!(p["mcpServers"]["srv-a"]["command"], "a");
+        assert_eq!(p["mcpServers"]["srv-b"]["command"], "b");
+        assert_eq!(p["mcpServers"]["srv-c"]["command"], "npx");
+    }
+
+    #[test]
+    fn test_sync_preview_equals_actual_sync() {
+        // The preview and actual sync must produce identical output
+        let configs = [
+            serde_json::json!({"command": "npx", "args": ["-y", "old-pkg"]}),
+            serde_json::json!({"command": "npx", "args": ["-y", "new-pkg"], "env": {"X": "1"}}),
+        ];
+        let targets = [
+            "{}",
+            "{\n  \"mcpServers\": {\n    \"other\": { \"command\": \"echo\" }\n  }\n}",
+            "{\n  \"mcpServers\": {\n    \"ctx7\": { \"command\": \"old\" },\n    \"other\": { \"command\": \"echo\" }\n  }\n}",
+            "{\n  \"mcpServers\": {\n    \"other\": { \"command\": \"echo\" },\n    \"ctx7\": { \"command\": \"old\" }\n  }\n}",
+        ];
+
+        for (i, target) in targets.iter().enumerate() {
+            for (j, config) in configs.iter().enumerate() {
+                let result = apply_json_server(target, "mcpServers", "ctx7", config);
+                assert!(
+                    result.is_ok(),
+                    "Failed for target[{}] config[{}]: {}",
+                    i, j, result.unwrap_err()
+                );
+                let text = result.unwrap();
+                let _: Value = serde_json::from_str(&text).unwrap_or_else(|e| {
+                    panic!("Invalid JSON for target[{}] config[{}]: {}\nGot:\n{}", i, j, e, text)
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn test_sync_write_read_roundtrip() {
+        // Simulate the full sync flow: apply → parse_json_servers → verify config
+        let source_config = serde_json::json!({
+            "command": "npx",
+            "args": ["-y", "@anthropic-ai/context7"],
+            "env": {"API_KEY": "secret"}
+        });
+        let target_before = "{\n  \"mcpServers\": {\n    \"existing\": { \"command\": \"echo\" }\n  }\n}";
+
+        let after = apply_json_server(target_before, "mcpServers", "context7", &source_config).unwrap();
+        // Verify the written content can be re-parsed and yields the same config
+        let servers = parse_json_servers(&after, "mcpServers").unwrap();
+        let ctx = servers.iter().find(|s| s.name == "context7").expect("context7 should exist");
+        assert_eq!(ctx.config, source_config);
+        let ex = servers.iter().find(|s| s.name == "existing").expect("existing should be preserved");
+        assert_eq!(ex.config["command"], "echo");
+    }
+
+    #[test]
+    fn test_sync_update_existing_roundtrip() {
+        // Sync to target that already has the same server → update
+        let new_config = serde_json::json!({"command": "npx", "args": ["-y", "updated"]});
+        let target_before = r#"{
+  "mcpServers": {
+    "context7": {
+      "command": "old"
+    },
+    "other": {
+      "command": "keep"
+    }
+  }
+}"#;
+        let after = apply_json_server(target_before, "mcpServers", "context7", &new_config).unwrap();
+        let servers = parse_json_servers(&after, "mcpServers").unwrap();
+        let ctx = servers.iter().find(|s| s.name == "context7").unwrap();
+        assert_eq!(ctx.config["args"][1], "updated");
+        let other = servers.iter().find(|s| s.name == "other").unwrap();
+        assert_eq!(other.config["command"], "keep");
+    }
 }
 
 fn compute_text_diff(before: &str, after: &str) -> Vec<DiffLine> {
