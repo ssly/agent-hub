@@ -1779,6 +1779,9 @@ args = ["mcp-server-time"]
         this.renderVersion();
         const langLabel = document.getElementById('btn-lang-label');
         if (langLabel) langLabel.textContent = this.i18n.locale === 'en' ? 'EN' : '中文';
+        const titleEl = document.querySelector('aside h1');
+        if (titleEl) titleEl.textContent = this.i18n.t('ui.title');
+        document.title = this.i18n.t('ui.title');
     }
 
     renderTabBar() {

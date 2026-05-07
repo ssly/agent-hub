@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicerdicer/tauri-v2-nightly-schema/main/tauri.schema.json",
-  "productName": "Agent Hub",
+  "productName": "AGENT HUB",
   "version": "0.6.26",
   "identifier": "com.agent-hub.app",
   "build": {
@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Agent Hub",
+        "title": "AGENT HUB",
         "width": 1024,
         "height": 768,
         "minWidth": 800,
