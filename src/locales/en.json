@@ -70,7 +70,8 @@
     "delete": "Delete",
     "confirm_delete": "Confirm Delete",
     "deleted": "Deleted.",
-    "delete_failed": "Delete failed: {error}"
+    "delete_failed": "Delete failed: {error}",
+    "confirm_delete_hint": "Click again to confirm deletion"
   },
   "action": {
     "sync": "Sync",

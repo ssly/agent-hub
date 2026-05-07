@@ -220,6 +220,7 @@ class App {
         this.confirmingSessionDeleteId = null;
         this.sessionDeleteConfirmTimer = null;
         this.deletingSessionId = null;
+        this.sidebarCollapsed = false;
         // Trash state
         this.trashCount = 0;
         // Update state
@@ -326,7 +327,7 @@ class App {
             this.selectedFolder = '';
             this.render();
         } catch (e) {
-            alert(this.i18n.tWith('sync.failed', { error: e.SyncError || e }));
+            this.showToast(this.i18n.tWith('sync.failed', { error: e.SyncError || e }), 'error');
         }
     }
 
@@ -338,9 +339,8 @@ class App {
             this.currentView = 'skills';
             this.render();
             const i = this.i18n;
-            alert(i.tWith('sync.done') + ` (${result.synced}/${result.total})`);
-        } catch (e) {
-            alert(this.i18n.tWith('sync.failed', { error: e.SyncError || e }));
+            this.showToast(i.tWith('sync.done') + ` (${result.synced}/${result.total})`, 'success');        } catch (e) {
+            this.showToast(this.i18n.tWith('sync.failed', { error: e.SyncError || e }), 'error');
         }
     }
 
@@ -359,7 +359,7 @@ class App {
                 await this.refreshTrashCount();
                 this.render();
             } catch (e) {
-                alert(i.tWith('skill.delete_failed', { error: e.SyncError || e }));
+                this.showToast(i.tWith('skill.delete_failed', { error: e.SyncError || e }), 'error');
             }
             return;
         }
@@ -718,6 +718,10 @@ class App {
         document.getElementById('btn-diff').addEventListener('click', () => this.showDiffModal());
         document.getElementById('btn-sync').addEventListener('click', () => this.showSyncModal());
         document.getElementById('btn-scan-invalid').addEventListener('click', () => this.scanInvalidSkills());
+        document.getElementById('btn-sidebar-toggle').addEventListener('click', () => {
+            this.sidebarCollapsed = !this.sidebarCollapsed;
+            document.getElementById('sidebar').classList.toggle('collapsed', this.sidebarCollapsed);
+        });
 
         let debounce;
         document.getElementById('search-input').addEventListener('input', (e) => {
@@ -804,7 +808,7 @@ class App {
             this.showInvalidSkillsModal(invalid);
         } catch (e) {
             console.error('Scan invalid skills error:', e);
-            alert(i.tWith('scan_invalid.error', { error: e.message || e.SyncError || e }));
+            this.showToast(i.tWith('scan_invalid.error', { error: e.message || e.SyncError || e }), 'error');
         } finally {
             btn.innerHTML = originalText;
             btn.disabled = false;
@@ -814,7 +818,7 @@ class App {
     showInvalidSkillsModal(invalid) {
         const i = this.i18n;
         if (invalid.length === 0) {
-            alert(i.t('scan_invalid.all_good'));
+            this.showToast(i.t('scan_invalid.all_good'), 'success');
             return;
         }
         const fixPrompt = this.buildFixPrompt(invalid);
@@ -1006,7 +1010,7 @@ class App {
                 this.sessionsLoadError = errorText;
             } else {
                 this.sessionsLoadError = '';
-                alert(this.i18n.tWith('session.load_failed', { error: errorText }));
+                this.showToast(this.i18n.tWith('session.load_failed', { error: errorText }), 'error');
             }
         }
     }
@@ -1101,9 +1105,9 @@ class App {
         try {
             await Api.deleteSession(platformId, session.id);
             await this.reloadSessionsAfterDelete(platformId, targetLoadedCount);
-            alert(i.t('session.deleted'));
+            this.showToast(i.t('session.deleted'), 'success');
         } catch (e) {
-            alert(i.tWith('session.delete_failed', { error: e?.SyncError || e?.message || e }));
+            this.showToast(i.tWith('session.delete_failed', { error: e?.SyncError || e?.message || e }), 'error');
         } finally {
             this.deletingSessionId = null;
             this.render();
@@ -1142,9 +1146,9 @@ class App {
                 session.project_path || '',
                 terminalId
             );
-            alert(i.tWith('session.resume_started', { command: launched }));
+            this.showToast(i.tWith('session.resume_started', { command: launched }), 'success', 5000);
         } catch (e) {
-            alert(i.tWith('session.resume_failed', { error: e.SyncError || e.message || e }));
+            this.showToast(i.tWith('session.resume_failed', { error: e.SyncError || e.message || e }), 'error');
         } finally {
             this.resumingSessionId = null;
             this.render();
@@ -1283,13 +1287,13 @@ args = ["mcp-server-time"]
         this.modalEl().querySelector('.mcp-add-save').addEventListener('click', async () => {
             const name = document.getElementById('mcp-add-name').value.trim();
             const text = document.getElementById('mcp-add-area').value.trim();
-            if (!name) { alert('Server name required'); return; }
+            if (!name) { this.showToast('Server name required', 'warning'); return; }
             try {
                 await Api.importMcpServer(this.selectedMcpPlatform, name, text);
                 this.closeModal();
                 await this.selectMcpPlatform(this.selectedMcpPlatform);
             } catch (e) {
-                alert(i.tWith('mcp.parse_error', { error: e.SyncError || e }));
+                this.showToast(i.tWith('mcp.parse_error', { error: e.SyncError || e }), 'error');
             }
         });
         this.modalEl().querySelector('.modal-cancel').addEventListener('click', () => this.closeModal());
@@ -1306,7 +1310,7 @@ args = ["mcp-server-time"]
                 await this.selectMcpPlatform(this.selectedMcpPlatform);
                 await this.refreshTrashCount();
             } catch (e) {
-                alert(i.tWith('mcp.delete_failed', { error: e.SyncError || e }));
+                this.showToast(i.tWith('mcp.delete_failed', { error: e.SyncError || e }), 'error');
             }
             return;
         }
@@ -1364,7 +1368,7 @@ args = ["mcp-server-time"]
             items = [];
         }
         if (items.length === 0) {
-            alert(i.t('trash.empty'));
+            this.showToast(i.t('trash.empty'), 'info');
             return;
         }
         const now = Math.floor(Date.now() / 1000);
@@ -1490,7 +1494,7 @@ args = ["mcp-server-time"]
             }
             this.render();
         } catch (e) {
-            alert(i.tWith('trash.restore_failed', { error: e.SyncError || e }));
+            this.showToast(i.tWith('trash.restore_failed', { error: e.SyncError || e }), 'error');
         }
     }
 
@@ -1502,7 +1506,7 @@ args = ["mcp-server-time"]
             if (this.trashCount > 0) this.showTrashModal();
         } catch (e) {
             console.error('Delete forever error:', e);
-            alert('Error: ' + (e.message || e.SyncError || (typeof e === 'object' ? JSON.stringify(e) : e)));
+            this.showToast('Error: ' + (e.message || e.SyncError || (typeof e === 'object' ? JSON.stringify(e) : e)), 'error');
         }
     }
 
@@ -1513,14 +1517,14 @@ args = ["mcp-server-time"]
             await this.refreshTrashCount();
         } catch (e) {
             console.error('Empty trash error:', e);
-            alert('Error: ' + (e.message || e.SyncError || (typeof e === 'object' ? JSON.stringify(e) : e)));
+            this.showToast('Error: ' + (e.message || e.SyncError || (typeof e === 'object' ? JSON.stringify(e) : e)), 'error');
         }
     }
 
     async showMcpSyncModal(serverName) {
         const targets = await Api.getMcpSyncTargets(this.selectedMcpPlatform, serverName);
         if (targets.length === 0) {
-            alert(this.i18n.t('error.no_target'));
+            this.showToast(this.i18n.t('error.no_target'), 'warning');
             return;
         }
         this.pendingSyncTarget = null;
@@ -1595,7 +1599,7 @@ args = ["mcp-server-time"]
                 await this.refreshMcpPlatforms();
                 await this.selectMcpPlatform(this.selectedMcpPlatform);
             } catch (e) {
-                alert(i.tWith('mcp.sync_failed', { error: e.SyncError || e }));
+                this.showToast(i.tWith('mcp.sync_failed', { error: e.SyncError || e }), 'error');
             }
         });
         this.modalEl().querySelector('.modal-cancel').addEventListener('click', () => this.closeModal());
@@ -1605,7 +1609,7 @@ args = ["mcp-server-time"]
     async showDiffModal() {
         const candidates = await Api.getDiffCandidates(this.selectedPlatformId, this.selectedSkillName, this.selectedFolder);
         if (candidates.length === 0) {
-            alert(this.i18n.t('diff.no_other'));
+            this.showToast(this.i18n.t('diff.no_other'), 'warning');
             return;
         }
         const i = this.i18n;
@@ -1629,7 +1633,7 @@ args = ["mcp-server-time"]
     async showSyncModal() {
         const targets = await Api.getSyncTargets(this.selectedPlatformId, this.selectedSkillName, this.selectedFolder);
         if (targets.length === 0) {
-            alert(this.i18n.t('error.no_target'));
+            this.showToast(this.i18n.t('error.no_target'), 'warning');
             return;
         }
         this.pendingSyncTarget = null;
@@ -1713,7 +1717,7 @@ args = ["mcp-server-time"]
     showFolderSyncModal(folder, count) {
         const targets = this.platforms.filter(p => p.id !== this.selectedPlatformId);
         if (targets.length === 0) {
-            alert(this.i18n.t('error.no_target'));
+            this.showToast(this.i18n.t('error.no_target'), 'warning');
             return;
         }
         this.pendingSyncTarget = null;
@@ -1768,6 +1772,24 @@ args = ["mcp-server-time"]
     }
 
     modalEl() { return document.getElementById('modal-content'); }
+
+    showToast(message, type = 'info', duration = 3000) {
+        const container = document.getElementById('toast-container');
+        if (!container) return;
+        const toast = document.createElement('div');
+        toast.className = `toast-item toast-${type}`;
+        toast.textContent = message;
+        container.appendChild(toast);
+        setTimeout(() => {
+            toast.classList.add('toast-exit');
+            toast.addEventListener('animationend', () => toast.remove());
+        }, duration);
+    }
+
+    renderEmptyState(message, icon = 'search') {
+        const iconSvg = (Icons[icon] || Icons.search).replace(/width="\d+"/, 'width="32"').replace(/height="\d+"/, 'height="32"');
+        return `<div class="empty-state"><div class="empty-state-icon">${iconSvg}</div><p>${message}</p></div>`;
+    }
 
     // --- Render ---
     render() {
@@ -1924,37 +1946,44 @@ args = ["mcp-server-time"]
     renderView() {
         const skillViews = ['skills', 'detail', 'diff', 'search'];
         const allViews = ['skills', 'detail', 'diff', 'search', 'mcp-servers', 'sessions'];
+        let activeViewId = null;
 
         if (this.currentTab === 'mcp') {
             for (const v of allViews) {
                 document.getElementById(`view-${v}`).classList.toggle('hidden', v !== 'mcp-servers');
             }
+            activeViewId = 'view-mcp-servers';
             this.renderMcpServerList();
-            return;
-        }
-
-        if (this.currentTab === 'sessions') {
+        } else if (this.currentTab === 'sessions') {
             for (const v of allViews) {
                 document.getElementById(`view-${v}`).classList.toggle('hidden', v !== 'sessions');
             }
+            activeViewId = 'view-sessions';
             this.renderSessionsView();
-            return;
+        } else {
+            for (const v of allViews) {
+                document.getElementById(`view-${v}`).classList.toggle('hidden', !skillViews.includes(v) || this.currentView !== v);
+            }
+            activeViewId = `view-${this.currentView}`;
+            if (this.currentView === 'skills') this.renderSkillList();
+            if (this.currentView === 'detail') this.renderSkillDetail();
+            if (this.currentView === 'diff') this.renderDiffView();
+            if (this.currentView === 'search') this.renderSearchResults();
         }
 
-        for (const v of allViews) {
-            document.getElementById(`view-${v}`).classList.toggle('hidden', !skillViews.includes(v) || this.currentView !== v);
+        const activeEl = activeViewId ? document.getElementById(activeViewId) : null;
+        if (activeEl) {
+            activeEl.classList.remove('view-transitioning');
+            void activeEl.offsetWidth;
+            activeEl.classList.add('view-transitioning');
         }
-        if (this.currentView === 'skills') this.renderSkillList();
-        if (this.currentView === 'detail') this.renderSkillDetail();
-        if (this.currentView === 'diff') this.renderDiffView();
-        if (this.currentView === 'search') this.renderSearchResults();
     }
 
     renderSessionsView() {
         const el = document.getElementById('view-sessions');
         const i = this.i18n;
         if (this.isSessionsLoading) {
-            el.innerHTML = `<p class="text-gray-500">${i.t('session.loading_messages')}</p>`;
+            el.innerHTML = `<div class="loading-pulse text-gray-500">${i.t('session.loading_messages')}</div>`;
             return;
         }
         if (this.sessionsLoadError) {
@@ -1962,7 +1991,7 @@ args = ["mcp-server-time"]
             return;
         }
         if (!this.selectedSessionPlatform) {
-            el.innerHTML = `<p class="text-gray-500">${i.t('session.select_platform')}</p>`;
+            el.innerHTML = this.renderEmptyState(i.t('session.select_platform'), 'search');
             return;
         }
         const terminalSource = (this.sessionTerminals && this.sessionTerminals.length > 0)
@@ -2121,12 +2150,12 @@ args = ["mcp-server-time"]
         const el = document.getElementById('view-mcp-servers');
         const i = this.i18n;
         if (!this.selectedMcpPlatform) {
-            el.innerHTML = `<p class="text-gray-500">${i.t('mcp.title')}</p>`;
+            el.innerHTML = this.renderEmptyState(i.t('mcp.title'), 'search');
             return;
         }
         if (this.mcpServers.length === 0) {
             el.innerHTML = `<div class="flex justify-between items-center mb-4">
-                <p class="text-gray-500">${i.t('mcp.no_servers')}</p>
+                <div class="empty-state" style="padding:2rem 0"><div class="empty-state-icon">${Icons.search.replace(/width="\d+"/, 'width="28"').replace(/height="\d+"/, 'height="28"')}</div><p>${i.t('mcp.no_servers')}</p></div>
                 <button class="px-3 py-1 text-xs bg-cyan-700 hover:bg-cyan-600 rounded cursor-pointer mcp-add-btn">+ ${i.t('mcp.add')}</button>
             </div>`;
             el.querySelector('.mcp-add-btn').addEventListener('click', () => this.showMcpAdd());
@@ -2148,8 +2177,8 @@ args = ["mcp-server-time"]
                             <div class="text-gray-500 text-sm">${esc(s.summary)}</div>
                         </div>
                     </button>
-                    <button class="text-xs text-cyan-600 hover:text-cyan-400 px-2 py-1 cursor-pointer hidden group-hover:inline mcp-sync-btn" data-name="${esc(s.name)}">${i.t('mcp.sync')}</button>
-                    <button class="text-xs text-red-600 hover:text-red-400 px-2 py-1 cursor-pointer hidden group-hover:inline mcp-delete-btn" data-name="${esc(s.name)}">${i.t('mcp.delete')}</button>
+                    <button class="text-xs text-cyan-600 hover:text-cyan-400 px-2 py-1 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity mcp-sync-btn" data-name="${esc(s.name)}">${i.t('mcp.sync')}</button>
+                    <button class="text-xs text-red-600 hover:text-red-400 px-2 py-1 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity mcp-delete-btn" data-name="${esc(s.name)}">${i.t('mcp.delete')}</button>
                 </div>
                 <div class="mcp-expand-area ${expanded ? '' : 'hidden'}" data-server="${esc(s.name)}">
                     ${detail ? this.renderMcpAccordionContent(s.name, detail) : '<div class="px-3 pb-2 text-gray-500 text-sm">Loading...</div>'}
@@ -2190,7 +2219,7 @@ args = ["mcp-server-time"]
                     // Strip [mcp_servers.xxx] header if present
                     saveText = text.replace(/^\[mcp_servers\.[^\]]+\]\s*\n?/, '');
                     if (!saveText.trim()) {
-                        alert('Empty config');
+                        this.showToast('Empty config', 'warning');
                         ta.value = originalText;
                         return;
                     }
@@ -2203,7 +2232,7 @@ args = ["mcp-server-time"]
                             saveText = JSON.stringify(parsed, null, 2);
                         }
                     } catch {
-                        alert(i.t('mcp.parse_error').includes('{error}') ? 'Invalid JSON format' : i.tWith('mcp.parse_error', { error: 'Invalid JSON' }));
+                        this.showToast(i.t('mcp.parse_error').includes('{error}') ? 'Invalid JSON format' : i.tWith('mcp.parse_error', { error: 'Invalid JSON' }), 'error');
                         ta.value = originalText;
                         return;
                     }
@@ -2215,7 +2244,7 @@ args = ["mcp-server-time"]
                     this.mcpServerDetails[name] = { config_text: newDetail.config_text, format: newDetail.format };
                     this.renderMcpServerList();
                 } catch (e) {
-                    alert(i.tWith('mcp.parse_error', { error: e.SyncError || e }));
+                    this.showToast(i.tWith('mcp.parse_error', { error: e.SyncError || e }), 'error');
                     ta.value = originalText;
                 }
             });
@@ -2293,7 +2322,7 @@ args = ["mcp-server-time"]
                 const detail = await Api.getMcpServer(this.selectedMcpPlatform, name);
                 this.mcpServerDetails[name] = { config_text: detail.config_text, format: detail.format };
             } catch (e) {
-                alert('Error: ' + e);
+                this.showToast('Error: ' + e, 'error');
                 this.expandedMcpServer = null;
                 return;
             }
@@ -2305,7 +2334,7 @@ args = ["mcp-server-time"]
         const el = document.getElementById('view-skills');
         const i = this.i18n;
         if (this.skills.length === 0) {
-            el.innerHTML = `<p class="text-gray-500">${i.t('ui.no_skills')}</p>`;
+            el.innerHTML = this.renderEmptyState(i.t('ui.no_skills'), 'folder');
             return;
         }
 
@@ -2390,7 +2419,7 @@ args = ["mcp-server-time"]
                 data-name="${esc(s.name)}" data-folder="${esc(s.folder)}">
                 <span class="text-cyan-400">${esc(s.name)}</span>${version}${desc}${symlink}${size}
             </button>
-            <button class="text-xs text-red-600 hover:text-red-400 px-2 py-1 cursor-pointer hidden group-hover:inline skill-delete-btn"
+            <button class="text-xs text-red-600 hover:text-red-400 px-2 py-1 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity skill-delete-btn"
                 data-name="${esc(s.name)}" data-folder="${esc(s.folder)}">${i.t('skill.delete')}</button>
         </div>`;
     }
@@ -2510,7 +2539,7 @@ args = ["mcp-server-time"]
         const el = document.getElementById('view-search');
         const i = this.i18n;
         if (this.searchResults.length === 0) {
-            el.innerHTML = `<p class="text-gray-500">${i.t('ui.no_results')}</p>`;
+            el.innerHTML = this.renderEmptyState(i.t('ui.no_results'), 'search');
             return;
         }
         el.innerHTML = `<h2 class="text-lg font-bold text-gray-300 mb-3">${i.t('ui.search_results')}</h2>
@@ -2635,10 +2664,10 @@ function renderSideBySide(pairs) {
         }
         lastShown = i;
         const p = pairs[i];
-        const lBg = p.left.type === 'removed' ? 'background:rgba(153,27,27,0.25);color:#fca5a5' : p.left.type === 'empty' ? 'background:rgba(10,10,15,0.6)' : 'color:#94a3b8';
-        const rBg = p.right.type === 'added' ? 'background:rgba(22,101,52,0.25);color:#86efac' : p.right.type === 'empty' ? 'background:rgba(10,10,15,0.6)' : 'color:#94a3b8';
-        const leftPre = p.left.type === 'removed' ? '<span style="color:#ef4444;font-weight:600">-</span> ' : p.left.type === 'empty' ? ' ' : ' ';
-        const rightPre = p.right.type === 'added' ? '<span style="color:#22c55e;font-weight:600">+</span> ' : p.right.type === 'empty' ? ' ' : ' ';
+        const lBg = p.left.type === 'removed' ? 'background:rgba(252,165,165,0.12);color:#fca5a5' : p.left.type === 'empty' ? 'background:rgba(26,26,46,0.6)' : 'color:#94a3b8';
+        const rBg = p.right.type === 'added' ? 'background:rgba(110,231,183,0.12);color:#6ee7b7' : p.right.type === 'empty' ? 'background:rgba(26,26,46,0.6)' : 'color:#94a3b8';
+        const leftPre = p.left.type === 'removed' ? '<span style="color:#fca5a5;font-weight:600">-</span> ' : p.left.type === 'empty' ? ' ' : ' ';
+        const rightPre = p.right.type === 'added' ? '<span style="color:#6ee7b7;font-weight:600">+</span> ' : p.right.type === 'empty' ? ' ' : ' ';
         const leftNum = p.left.num != null ? `<span style="${lineNumStyle}">${p.left.num}</span>` : `<span style="${lineNumStyle}"></span>`;
         const rightNum = p.right.num != null ? `<span style="${lineNumStyle}">${p.right.num}</span>` : `<span style="${lineNumStyle}"></span>`;
         html += `<div style="${lBg};padding:0 0.6rem;white-space:pre;overflow:hidden;border-right:1px solid #1e293b;min-height:1.6em;display:flex;align-items:baseline">${leftNum}${leftPre}${esc(p.left.text)}</div>`;
