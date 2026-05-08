@@ -3,4 +3,7 @@ node_modules
 src-tauri/target
 src/styles.css
 *.DS_Store
+
 .claude
+.codex
+.kiro
