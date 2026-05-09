@@ -5,12 +5,7 @@ import * as Api from './api.js';
 const tauriInvoke = window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);
 
 function createTauriChannel(onMessage) {
-    const id = window.__TAURI_INTERNALS__.transformCallback((msg) => {
-        onMessage?.(msg);
-    });
-    return {
-        __TAURI_TO_IPC_KEY__: () => `__CHANNEL__:${id}`
-    };
+    return new window.__TAURI_INTERNALS__.Channel(onMessage);
 }
 
 async function checkUpdate() {
