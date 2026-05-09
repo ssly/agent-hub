@@ -221,6 +221,11 @@ class App {
         this.sessionDeleteConfirmTimer = null;
         this.deletingSessionId = null;
         this.sidebarCollapsed = false;
+        // Monitor state
+        this.monitorSessions = [];
+        this.monitorConfig = null;
+        this.selectedMonitorAgent = null;
+        this.monitorUnlisten = null;
         // Trash state
         this.trashCount = 0;
         // Update state
@@ -740,6 +745,7 @@ class App {
         document.getElementById('tab-skills').addEventListener('click', () => this.switchTab('skills'));
         document.getElementById('tab-mcp').addEventListener('click', () => this.switchTab('mcp'));
         document.getElementById('tab-sessions').addEventListener('click', () => this.switchTab('sessions'));
+        document.getElementById('tab-monitor').addEventListener('click', () => this.switchTab('monitor'));
     }
 
     async handleRefreshClick() {
@@ -792,6 +798,13 @@ class App {
             });
             return;
         }
+        if (tab === 'monitor') {
+            this.refreshMonitor();
+            this.startMonitorListener();
+            this.render();
+            return;
+        }
+        this.stopMonitorListener();
         this.currentView = 'skills';
         this.render();
     }
@@ -1811,12 +1824,18 @@ args = ["mcp-server-time"]
         const skillsTab = document.getElementById('tab-skills');
         const mcpTab = document.getElementById('tab-mcp');
         const sessionsTab = document.getElementById('tab-sessions');
+        const monitorTab = document.getElementById('tab-monitor');
         skillsTab.textContent = i.t('ui.skills_tab');
         mcpTab.textContent = i.t('ui.mcp_tab');
         sessionsTab.textContent = i.t('ui.sessions_tab');
+        const activeCount = this.monitorSessions.filter(s => s.status !== 'ended').length;
+        monitorTab.innerHTML = activeCount > 0
+            ? `${i.t('ui.monitor_tab')} <span class="ml-0.5 px-1.5 py-0.5 text-[10px] font-bold rounded-full bg-green-500 text-white">${activeCount}</span>`
+            : i.t('ui.monitor_tab');
         skillsTab.className = `flex-1 py-2 text-sm text-center cursor-pointer border-b-2 ${this.currentTab === 'skills' ? 'text-gray-300 border-cyan-500' : 'text-gray-500 hover:text-white border-transparent'}`;
         mcpTab.className = `flex-1 py-2 text-sm text-center cursor-pointer border-b-2 ${this.currentTab === 'mcp' ? 'text-gray-300 border-cyan-500' : 'text-gray-500 hover:text-white border-transparent'}`;
         sessionsTab.className = `flex-1 py-2 text-sm text-center cursor-pointer border-b-2 ${this.currentTab === 'sessions' ? 'text-gray-300 border-cyan-500' : 'text-gray-500 hover:text-white border-transparent'}`;
+        monitorTab.className = `flex-1 py-2 text-sm text-center cursor-pointer border-b-2 ${this.currentTab === 'monitor' ? 'text-gray-300 border-cyan-500' : 'text-gray-500 hover:text-white border-transparent'}`;
     }
 
     renderSidebar() {
@@ -1865,6 +1884,40 @@ args = ["mcp-server-time"]
             }).join('');
             el.querySelectorAll('button[data-session-platform]').forEach(btn => {
                 btn.addEventListener('click', () => this.selectSessionPlatform(btn.dataset.sessionPlatform));
+            });
+            return;
+        }
+
+        if (this.currentTab === 'monitor') {
+            searchEl.classList.add('hidden');
+            const activeSessions = this.monitorSessions.filter(s => s.status !== 'ended');
+            const groups = [
+                { id: 'kiro', name: 'Kiro' },
+                { id: 'claude-code', name: 'Claude Code' },
+                { id: 'codex', name: 'Codex' },
+                { id: 'gemini', name: 'Gemini' },
+            ];
+            const withSessions = groups.filter(g => activeSessions.some(s => s.agent_type === g.id));
+            if (withSessions.length === 0) {
+                el.innerHTML = `<p class="text-gray-500 text-sm p-3">${i.t('monitor.empty')}</p>`;
+                return;
+            }
+            el.innerHTML = withSessions.map(g => {
+                const count = activeSessions.filter(s => s.agent_type === g.id).length;
+                const active = this.selectedMonitorAgent === g.id;
+                return `<button class="w-full text-left px-3 py-2 rounded cursor-pointer ${active ? 'bg-gray-700 text-green-400 font-bold' : 'text-gray-300 hover:bg-gray-700/50'}"
+                    data-monitor-agent="${g.id}">
+                    <div class="flex items-center justify-between">
+                        <span class="text-sm">${esc(g.name)}</span>
+                        <span class="text-xs ${active ? 'text-green-400' : 'text-gray-500'}">${count}</span>
+                    </div>
+                </button>`;
+            }).join('');
+            el.querySelectorAll('button[data-monitor-agent]').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    this.selectedMonitorAgent = btn.dataset.monitorAgent;
+                    this.render();
+                });
             });
             return;
         }
@@ -1923,6 +1976,34 @@ args = ["mcp-server-time"]
             return;
         }
 
+        if (this.currentTab === 'monitor') {
+            back.classList.add('hidden');
+            diff.classList.add('hidden');
+            sync.classList.add('hidden');
+            scanInvalid.classList.add('hidden');
+            const notificationEnabled = this.monitorConfig?.notification_enabled ?? false;
+            breadcrumb.innerHTML = `
+                <span>${i.t('monitor.title')}</span>
+                <div class="flex-1"></div>
+                <label class="flex items-center gap-2 text-xs text-gray-400 cursor-pointer mr-2">
+                    <span>${i.t('monitor.notification_toggle')}</span>
+                    <input type="checkbox" id="monitor-notification-toggle" ${notificationEnabled ? 'checked' : ''} class="cursor-pointer" />
+                </label>
+            `;
+            const toggle = document.getElementById('monitor-notification-toggle');
+            if (toggle) {
+                toggle.addEventListener('change', async (e) => {
+                    try {
+                        this.monitorConfig = await Api.setMonitorConfig({ notification_enabled: e.target.checked });
+                    } catch (err) {
+                        console.error('Failed to update monitor config:', err);
+                        e.target.checked = !e.target.checked;
+                    }
+                });
+            }
+            return;
+        }
+
         scanInvalid.classList.remove('hidden');
         back.classList.toggle('hidden', this.currentView === 'skills');
         const showAction = this.currentView === 'detail' || this.currentView === 'diff';
@@ -1945,7 +2026,7 @@ args = ["mcp-server-time"]
 
     renderView() {
         const skillViews = ['skills', 'detail', 'diff', 'search'];
-        const allViews = ['skills', 'detail', 'diff', 'search', 'mcp-servers', 'sessions'];
+        const allViews = ['skills', 'detail', 'diff', 'search', 'mcp-servers', 'sessions', 'monitor'];
         let activeViewId = null;
 
         if (this.currentTab === 'mcp') {
@@ -1960,6 +2041,12 @@ args = ["mcp-server-time"]
             }
             activeViewId = 'view-sessions';
             this.renderSessionsView();
+        } else if (this.currentTab === 'monitor') {
+            for (const v of allViews) {
+                document.getElementById(`view-${v}`).classList.toggle('hidden', v !== 'monitor');
+            }
+            activeViewId = 'view-monitor';
+            this.renderMonitorView();
         } else {
             for (const v of allViews) {
                 document.getElementById(`view-${v}`).classList.toggle('hidden', !skillViews.includes(v) || this.currentView !== v);
@@ -2561,6 +2648,161 @@ args = ["mcp-server-time"]
                 this.loadSkills().then(() => this.render());
             });
         });
+    }
+
+    // --- Monitor Methods ---
+
+    async refreshMonitor() {
+        try {
+            const [sessions, config] = await Promise.all([
+                Api.getActiveSessions(),
+                Api.getMonitorConfig(),
+            ]);
+            this.monitorSessions = sessions;
+            this.monitorConfig = config;
+        } catch (err) {
+            console.error('Failed to load monitor data:', err);
+            this.monitorSessions = [];
+        }
+    }
+
+    startMonitorListener() {
+        if (this.monitorUnlisten) return;
+        const { listen } = window.__TAURI_INTERNALS__;
+        if (!listen) return;
+        listen('monitor:state-changed', (event) => {
+            const { change, session } = event.payload || {};
+            if (!session) return;
+            const idx = this.monitorSessions.findIndex(s => s.session_id === session.session_id);
+            if (change === 'added') {
+                if (idx === -1) {
+                    this.monitorSessions.push(session);
+                } else {
+                    this.monitorSessions[idx] = session;
+                }
+            } else if (change === 'updated') {
+                if (idx !== -1) {
+                    this.monitorSessions[idx] = session;
+                } else {
+                    this.monitorSessions.push(session);
+                }
+            } else if (change === 'removed') {
+                if (idx !== -1) {
+                    this.monitorSessions[idx] = session;
+                }
+                // Remove ended sessions after 30s
+                setTimeout(() => {
+                    this.monitorSessions = this.monitorSessions.filter(
+                        s => s.session_id !== session.session_id || s.status !== 'ended'
+                    );
+                    this.render();
+                }, 30000);
+            }
+            this.render();
+        }).then(fn => { this.monitorUnlisten = fn; });
+    }
+
+    stopMonitorListener() {
+        if (this.monitorUnlisten) {
+            this.monitorUnlisten();
+            this.monitorUnlisten = null;
+        }
+    }
+
+    renderMonitorView() {
+        const el = document.getElementById('view-monitor');
+        const i = this.i18n;
+        const activeSessions = this.monitorSessions.filter(s => s.status !== 'ended');
+
+        if (activeSessions.length === 0) {
+            el.innerHTML = `
+                <div class="flex flex-col items-center justify-center h-full text-gray-500 gap-4">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="text-gray-600">
+                        <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+                    </svg>
+                    <p class="text-sm">${i.t('monitor.empty')}</p>
+                    <p class="text-xs text-gray-600">${i.t('monitor.empty_hint')}</p>
+                </div>`;
+            return;
+        }
+
+        if (!this.selectedMonitorAgent) {
+            el.innerHTML = `<div class="flex flex-col items-center justify-center h-full text-gray-500 gap-3">
+                <p class="text-sm">${i.t('monitor.no_selection')}</p>
+            </div>`;
+            return;
+        }
+
+        const sessions = activeSessions.filter(s => s.agent_type === this.selectedMonitorAgent);
+        if (sessions.length === 0) {
+            el.innerHTML = `<p class="text-gray-500 text-sm">${i.t('monitor.empty')}</p>`;
+            return;
+        }
+
+        // Data limited warning
+        let html = '';
+        const limitedSession = sessions.find(s => s.data_limited);
+        if (limitedSession) {
+            const reasonKey = limitedSession.data_limited_reason || '';
+            const reasonText = i.t(reasonKey);
+            html += `<div class="mb-3 px-3 py-2 rounded text-xs text-yellow-400 bg-yellow-900/20 border border-yellow-800/30">⚠️ ${esc(reasonText)}</div>`;
+        }
+
+        html += `<div class="space-y-2">`;
+        for (const s of sessions) {
+            html += this.renderMonitorCard(s);
+        }
+        html += `</div>`;
+
+        el.innerHTML = html;
+    }
+
+    renderMonitorCard(session) {
+        const i = this.i18n;
+        const statusMap = {
+            active: { color: 'bg-green-500', pulse: true, text: i.t('monitor.status.active') },
+            idle: { color: 'bg-gray-400', pulse: false, text: i.t('monitor.status.idle') },
+            completed: { color: 'bg-blue-500', pulse: false, text: i.t('monitor.status.completed') },
+            ended: { color: 'bg-red-500', pulse: false, text: i.t('monitor.status.ended') },
+        };
+        const st = statusMap[session.status] || statusMap.idle;
+        const sourceStyle = session.source_tag === 'CLI'
+            ? 'bg-gray-700 text-gray-300'
+            : 'bg-gray-600 text-gray-200';
+
+        let duration = '';
+        if (session.started_at) {
+            const started = new Date(session.started_at);
+            const now = Date.now();
+            const secs = Math.floor((now - started.getTime()) / 1000);
+            if (secs < 60) duration = `${secs}s`;
+            else if (secs < 3600) duration = `${Math.floor(secs / 60)}m ${secs % 60}s`;
+            else duration = `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
+        }
+
+        const cwdShort = session.cwd
+            ? session.cwd.split('/').slice(-2).join('/')
+            : '';
+        const pidStr = session.pid ? i.tWith('monitor.pid', { pid: session.pid }) : '';
+
+        return `<div class="bg-gray-800 rounded-lg border border-gray-700 p-3">
+            <div class="flex items-start justify-between">
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2 mb-1">
+                        <span class="${st.color} ${st.pulse ? 'animate-pulse' : ''} w-2 h-2 rounded-full inline-block"></span>
+                        <span class="text-xs text-gray-400">${esc(st.text)}</span>
+                        <span class="text-xs px-1.5 py-0.5 rounded ${sourceStyle}">${esc(session.source_tag)}</span>
+                        ${pidStr ? `<span class="text-xs text-gray-600 font-mono">${esc(pidStr)}</span>` : ''}
+                    </div>
+                    <div class="text-sm text-gray-200 truncate">${esc(session.title || session.session_id)}</div>
+                    <div class="flex items-center gap-3 mt-1 text-xs text-gray-500">
+                        <span>${esc(session.model)}</span>
+                        ${cwdShort ? `<span class="truncate" title="${esc(session.cwd)}">${esc(cwdShort)}</span>` : ''}
+                        ${duration ? `<span>${esc(duration)}</span>` : ''}
+                    </div>
+                </div>
+            </div>
+        </div>`;
     }
 }
 

@@ -7,6 +7,8 @@ pub struct Config {
     pub general: GeneralConfig,
     #[serde(default)]
     pub platforms: Vec<CustomPlatform>,
+    #[serde(default)]
+    pub monitor: crate::monitor::types::MonitorConfig,
 }
 
 #[derive(Debug, Deserialize, serde::Serialize)]

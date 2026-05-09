@@ -145,3 +145,16 @@ export async function emptyTrash() {
 export async function scanInvalidSkills() {
     return invoke('scan_invalid_skills_cmd');
 }
+
+// Monitor
+export async function getActiveSessions() {
+    return invoke('get_active_sessions');
+}
+
+export async function getMonitorConfig() {
+    return invoke('get_monitor_config');
+}
+
+export async function setMonitorConfig({ notification_enabled, notification_cooldown_secs } = {}) {
+    return invoke('set_monitor_config', { notification_enabled, notification_cooldown_secs });
+}

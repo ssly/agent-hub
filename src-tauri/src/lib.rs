@@ -3,6 +3,7 @@ mod config;
 mod diff;
 mod i18n;
 mod mcp;
+mod monitor;
 mod platform;
 mod session;
 mod skill;
@@ -11,6 +12,7 @@ mod sync;
 mod trash;
 
 use state::AppState;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -22,6 +24,30 @@ pub fn run() {
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
             #[cfg(desktop)]
             app.handle().plugin(tauri_plugin_process::init())?;
+            #[cfg(desktop)]
+            app.handle().plugin(tauri_plugin_notification::init())?;
+
+            // Initialize monitor service
+            let config = {
+                let state = app.state::<std::sync::Mutex<AppState>>();
+                let s = state.lock().unwrap();
+                s.config.monitor.clone()
+            };
+            let monitor_service =
+                monitor::service::MonitorService::new(app.handle().clone(), config);
+            app.manage(std::sync::Mutex::new(monitor_service));
+
+            // Start process poll timer (5s interval)
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    let state = handle.state::<std::sync::Mutex<monitor::service::MonitorService<tauri::Wry>>>();
+                    let svc = state.lock().unwrap();
+                    svc.poll();
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -61,6 +87,9 @@ pub fn run() {
             commands::resume_session,
             commands::get_session_messages,
             commands::delete_session,
+            commands::get_active_sessions,
+            commands::get_monitor_config,
+            commands::set_monitor_config,
         ])
         .run(tauri::generate_context!())
         .expect("error while running agent-hub");

@@ -128,6 +128,7 @@ pub struct SearchResult {
 pub enum CommandError {
     NotFound(String),
     SyncError(String),
+    General(String),
 }
 
 // --- Helpers ---
@@ -1038,4 +1039,49 @@ pub fn sync_mcp_server_cmd(
     crate::mcp::save_mcp_server(&target_platform_id, &server_name, server.config)
         .map_err(|e| CommandError::SyncError(e))?;
     Ok("ok".to_string())
+}
+
+// --- Monitor Commands ---
+
+use std::sync::Mutex as StdMutex;
+
+pub type MonitorStateHandle = StdMutex<crate::monitor::service::MonitorService<tauri::Wry>>;
+
+#[tauri::command]
+pub fn get_active_sessions(
+    monitor: tauri::State<'_, MonitorStateHandle>,
+) -> Vec<crate::monitor::types::AgentSession> {
+    monitor.lock().unwrap().get_sessions()
+}
+
+#[tauri::command]
+pub fn get_monitor_config(
+    monitor: tauri::State<'_, MonitorStateHandle>,
+) -> crate::monitor::types::MonitorConfig {
+    monitor.lock().unwrap().get_config()
+}
+
+#[tauri::command]
+pub fn set_monitor_config(
+    monitor: tauri::State<'_, MonitorStateHandle>,
+    state: tauri::State<'_, SafeState>,
+    notification_enabled: Option<bool>,
+    notification_cooldown_secs: Option<u64>,
+) -> Result<crate::monitor::types::MonitorConfig, CommandError> {
+    let svc = monitor.lock().unwrap();
+    let mut config = svc.get_config();
+    if let Some(v) = notification_enabled {
+        config.notification_enabled = v;
+    }
+    if let Some(v) = notification_cooldown_secs {
+        config.notification_cooldown_secs = v;
+    }
+    svc.set_config(config.clone());
+    drop(svc);
+
+    // Persist to config.toml
+    let mut app_state = state.lock().unwrap();
+    app_state.config.monitor = config.clone();
+    app_state.config.save().map_err(|e| CommandError::General(e))?;
+    Ok(config)
 }
