@@ -778,10 +778,14 @@ class App {
     switchTab(tab) {
         this.currentTab = tab;
         if (tab === 'mcp') {
+            this.stopMonitorListener();
+            Api.setMonitorPolling(false);
             this.refreshMcpPlatforms().then(() => this.render());
             return;
         }
         if (tab === 'sessions') {
+            this.stopMonitorListener();
+            Api.setMonitorPolling(false);
             this.isSessionsLoading = true;
             this.render();
             Promise.all([
@@ -794,12 +798,14 @@ class App {
             return;
         }
         if (tab === 'monitor') {
+            Api.setMonitorPolling(true);
             this.refreshMonitor();
             this.startMonitorListener();
             this.render();
             return;
         }
         this.stopMonitorListener();
+        Api.setMonitorPolling(false);
         this.currentView = 'skills';
         this.render();
     }
@@ -2779,6 +2785,8 @@ args = ["mcp-server-time"]
             ? session.cwd.split('/').slice(-2).join('/')
             : '';
         const pidStr = session.pid ? i.tWith('monitor.pid', { pid: session.pid }) : '';
+        const preview = session.last_message_preview || '';
+        const previewId = `preview-${session.session_id.replace(/[^a-zA-Z0-9-]/g, '_')}`;
 
         return `<div class="bg-gray-800 rounded-lg border border-gray-700 p-3">
             <div class="flex items-start justify-between">
@@ -2795,9 +2803,25 @@ args = ["mcp-server-time"]
                         ${cwdShort ? `<span class="truncate" title="${esc(session.cwd)}">${esc(cwdShort)}</span>` : ''}
                         ${duration ? `<span>${esc(duration)}</span>` : ''}
                     </div>
+                    ${preview ? `<div id="${previewId}" class="text-xs text-gray-500 mt-2 cursor-pointer hover:text-gray-300 transition-colors" style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:pre-wrap;word-break:break-word;" onclick="app.showMonitorPreview('${previewId}','${esc(session.session_id)}')">${esc(preview)}</div>` : ''}
                 </div>
             </div>
         </div>`;
+    }
+
+    showMonitorPreview(previewId, sessionId) {
+        const el = document.getElementById(previewId);
+        if (!el) return;
+        // Toggle expanded state
+        if (el.dataset.expanded === 'true') {
+            el.style.display = '-webkit-box';
+            el.style.webkitLineClamp = '2';
+            el.dataset.expanded = 'false';
+            return;
+        }
+        el.style.display = 'block';
+        el.style.webkitLineClamp = '';
+        el.dataset.expanded = 'true';
     }
 }
 

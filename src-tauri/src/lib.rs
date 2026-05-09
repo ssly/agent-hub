@@ -37,14 +37,16 @@ pub fn run() {
                 monitor::service::MonitorService::new(app.handle().clone(), config);
             app.manage(std::sync::Mutex::new(monitor_service));
 
-            // Start process poll timer (5s interval)
+            // Start process poll timer (5s interval, only when polling is enabled)
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(5));
                     let state = handle.state::<std::sync::Mutex<monitor::service::MonitorService<tauri::Wry>>>();
                     let svc = state.lock().unwrap();
-                    svc.poll();
+                    if svc.polling_enabled.load(std::sync::atomic::Ordering::Relaxed) {
+                        svc.poll();
+                    }
                 }
             });
 
@@ -90,6 +92,7 @@ pub fn run() {
             commands::get_active_sessions,
             commands::get_monitor_config,
             commands::set_monitor_config,
+            commands::set_monitor_polling,
         ])
         .run(tauri::generate_context!())
         .expect("error while running agent-hub");

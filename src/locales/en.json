@@ -199,6 +199,9 @@
     "data_limited_gemini": "Gemini CLI session data may not be written until completion, real-time status is approximate",
     "no_selection": "Select an agent on the left to view running instances.",
     "pid": "PID: {pid}",
+    "last_message": "Last output",
+    "no_preview": "No output yet",
+    "view_detail": "Click to expand",
     "status": {
       "active": "Running",
       "idle": "Idle",

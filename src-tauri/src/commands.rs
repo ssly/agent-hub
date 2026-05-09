@@ -1051,7 +1051,9 @@ pub type MonitorStateHandle = StdMutex<crate::monitor::service::MonitorService<t
 pub fn get_active_sessions(
     monitor: tauri::State<'_, MonitorStateHandle>,
 ) -> Vec<crate::monitor::types::AgentSession> {
-    monitor.lock().unwrap().get_sessions()
+    let svc = monitor.lock().unwrap();
+    svc.ensure_scanned();
+    svc.get_sessions()
 }
 
 #[tauri::command]
@@ -1084,4 +1086,14 @@ pub fn set_monitor_config(
     app_state.config.monitor = config.clone();
     app_state.config.save().map_err(|e| CommandError::General(e))?;
     Ok(config)
+}
+
+#[tauri::command]
+pub fn set_monitor_polling(
+    monitor: tauri::State<'_, MonitorStateHandle>,
+    enabled: bool,
+) {
+    let svc = monitor.lock().unwrap();
+    svc.polling_enabled
+        .store(enabled, std::sync::atomic::Ordering::Relaxed);
 }

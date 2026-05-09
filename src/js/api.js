@@ -158,3 +158,7 @@ export async function getMonitorConfig() {
 export async function setMonitorConfig({ notification_enabled, notification_cooldown_secs } = {}) {
     return invoke('set_monitor_config', { notification_enabled, notification_cooldown_secs });
 }
+
+export async function setMonitorPolling(enabled) {
+    return invoke('set_monitor_polling', { enabled });
+}

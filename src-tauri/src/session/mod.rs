@@ -333,23 +333,22 @@ fn launch_terminal_with_command(terminal_id: &str, command: &str) -> Result<(), 
 
 #[cfg(target_os = "windows")]
 fn launch_terminal_with_command(terminal_id: &str, command: &str) -> Result<(), String> {
-    match terminal_id {
-        "terminal-default" | "windows-terminal" => {
-            // Write command to a .bat file to avoid cmd.exe escaping issues
-            let bat_path = std::env::temp_dir().join(format!(
-                "agent-hub-resume-{}.bat",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_nanos()
-            ));
-            let escaped = command.replace('%', "%%").replace('"', "\"\"");
-            let bat_content = format!("@echo off\n{}\npause\n", escaped);
-            std::fs::write(&bat_path, &bat_content).map_err(|e| e.to_string())?;
+    // Write command to a .bat file to avoid cmd.exe escaping issues
+    let bat_path = std::env::temp_dir().join(format!(
+        "agent-hub-resume-{}.bat",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let escaped = command.replace('%', "%%").replace('"', "\"\"");
+    let bat_content = format!("@echo off\n{}\npause\n", escaped);
+    std::fs::write(&bat_path, &bat_content).map_err(|e| e.to_string())?;
 
-            Command::new("cmd.exe")
-                .arg("/c")
-                .arg("start")
+    match terminal_id {
+        "windows-terminal" => {
+            // Windows Terminal: direct launch, no intermediate cmd.exe
+            Command::new("wt.exe")
                 .arg("cmd.exe")
                 .arg("/k")
                 .arg(&bat_path)
@@ -357,7 +356,20 @@ fn launch_terminal_with_command(terminal_id: &str, command: &str) -> Result<(), 
                 .map_err(|e| format!("Failed to launch terminal: {}", e))?;
             Ok(())
         }
-        _ => Err(format!("Unsupported terminal: {}", terminal_id)),
+        _ => {
+            // Use PowerShell Start-Process to avoid the cmd.exe flash
+            let bat_str = bat_path.to_string_lossy().replace('\'', "''");
+            let ps_script =
+                format!("Start-Process cmd.exe -ArgumentList '/k','{}'", bat_str);
+            Command::new("powershell.exe")
+                .arg("-WindowStyle")
+                .arg("Hidden")
+                .arg("-Command")
+                .arg(&ps_script)
+                .spawn()
+                .map_err(|e| format!("Failed to launch terminal: {}", e))?;
+            Ok(())
+        }
     }
 }
 

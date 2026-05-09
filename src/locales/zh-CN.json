@@ -199,6 +199,9 @@
     "data_limited_gemini": "Gemini CLI 的会话数据可能在结束后才完整写入，实时状态仅供参考",
     "no_selection": "请在左侧选择一个 Agent 查看运行中的实例。",
     "pid": "PID: {pid}",
+    "last_message": "最近输出",
+    "no_preview": "暂无输出",
+    "view_detail": "点击展开",
     "status": {
       "active": "运行中",
       "idle": "空闲",

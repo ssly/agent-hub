@@ -2,11 +2,60 @@ use super::types::*;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::fs;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+
+const PREVIEW_MAX_LEN: usize = 150;
+
+fn truncate_preview(s: &str) -> String {
+    if s.len() <= PREVIEW_MAX_LEN {
+        s.to_string()
+    } else {
+        let truncated: String = s.chars().take(PREVIEW_MAX_LEN).collect();
+        truncated + "..."
+    }
+}
+
+/// Read the last N lines from a file efficiently without reading the whole file.
+fn read_last_lines(path: &Path, max_lines: usize) -> Vec<String> {
+    let Ok(mut file) = fs::File::open(path) else {
+        return vec![];
+    };
+    let Ok(size) = file.metadata().map(|m| m.len()) else {
+        return vec![];
+    };
+    if size == 0 {
+        return vec![];
+    }
+
+    // Read up to 64KB from the end — enough for hundreds of JSONL lines
+    let read_start = if size > 65536 { size - 65536 } else { 0 };
+    if file.seek(SeekFrom::Start(read_start)).is_err() {
+        return vec![];
+    }
+
+    let mut buf = String::new();
+    if file.read_to_string(&mut buf).is_err() {
+        return vec![];
+    }
+
+    // Skip the first partial line if we didn't start at 0
+    let lines: Vec<String> = if read_start > 0 {
+        buf.lines().skip(1).map(String::from).collect()
+    } else {
+        buf.lines().map(String::from).collect()
+    };
+
+    let start = if lines.len() > max_lines {
+        lines.len() - max_lines
+    } else {
+        0
+    };
+    lines[start..].to_vec()
+}
 
 pub struct KiroAdapter {
     home: PathBuf,
-    sessions: HashMap<String, AgentSession>,
 }
 
 impl KiroAdapter {
@@ -14,7 +63,6 @@ impl KiroAdapter {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
         Self {
             home,
-            sessions: HashMap::new(),
         }
     }
 
@@ -34,13 +82,52 @@ impl KiroAdapter {
     }
 
     fn last_jsonl_status(&self, path: &Path) -> Option<String> {
-        let content = fs::read_to_string(path).ok()?;
-        let last_line = content.lines().last()?;
+        let lines = read_last_lines(path, 5);
+        let last_line = lines.last()?;
         let json: serde_json::Value = serde_json::from_str(last_line).ok()?;
         json.get("kind").and_then(|v| v.as_str()).map(String::from)
     }
 
-    fn session_from_files(&self, session_id: &str, dir: &Path) -> Option<AgentSession> {
+    fn last_assistant_preview(&self, jsonl_path: &Path) -> Option<String> {
+        let lines = read_last_lines(jsonl_path, 50);
+        for line in lines.iter().rev() {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+                let kind = json.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+                if kind != "AssistantMessage" {
+                    continue;
+                }
+                // Try content.text field first
+                if let Some(text) = json
+                    .get("content")
+                    .and_then(|c| c.get("text"))
+                    .and_then(|t| t.as_str())
+                {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        return Some(truncate_preview(trimmed));
+                    }
+                }
+                // Fallback: content might be a string directly
+                if let Some(text) = json
+                    .get("content")
+                    .and_then(|c| c.as_str())
+                {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        return Some(truncate_preview(trimmed));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn session_from_files(
+        &self,
+        session_id: &str,
+        dir: &Path,
+        sys: &sysinfo::System,
+    ) -> Option<AgentSession> {
         let lock_path = dir.join(format!("{session_id}.lock"));
         let meta_path = dir.join(format!("{session_id}.json"));
         let jsonl_path = dir.join(format!("{session_id}.jsonl"));
@@ -88,7 +175,7 @@ impl KiroAdapter {
         let status = if let Some(kind) = self.last_jsonl_status(&jsonl_path) {
             match kind.as_str() {
                 "Prompt" => SessionStatus::Idle,
-                _ => SessionStatus::Active, // AssistantMessage, ToolUse, etc.
+                _ => SessionStatus::Active,
             }
         } else {
             SessionStatus::Idle
@@ -101,10 +188,7 @@ impl KiroAdapter {
             .map(|dt| dt.to_utc())
             .unwrap_or_default();
 
-        // Check if PID belongs to CLI or Desktop process
         let source_tag = if let Some(pid_val) = pid {
-            let mut sys = sysinfo::System::new_all();
-            sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
             let pid_obj = sysinfo::Pid::from_u32(pid_val);
             if let Some(proc) = sys.process(pid_obj) {
                 let proc_name = proc.name().to_string_lossy().to_string();
@@ -120,6 +204,12 @@ impl KiroAdapter {
             "CLI"
         };
 
+        let last_message_preview = if jsonl_path.exists() {
+            self.last_assistant_preview(&jsonl_path)
+        } else {
+            None
+        };
+
         Some(AgentSession {
             agent_type: "kiro".to_string(),
             source_tag: source_tag.to_string(),
@@ -133,6 +223,7 @@ impl KiroAdapter {
             data_limited: false,
             data_limited_reason: None,
             pid,
+            last_message_preview,
         })
     }
 }
@@ -151,7 +242,7 @@ impl AgentMonitor for KiroAdapter {
         }
     }
 
-    fn detect_sessions(&self) -> Vec<AgentSession> {
+    fn detect_sessions(&self, sys: &sysinfo::System) -> Vec<AgentSession> {
         let dir = self.sessions_dir();
         if !dir.exists() {
             return vec![];
@@ -165,19 +256,18 @@ impl AgentMonitor for KiroAdapter {
                 if name_str.ends_with(".lock") {
                     let session_id = name_str.trim_end_matches(".lock");
                     if seen.insert(session_id.to_string()) {
-                        // Verify PID is still alive
                         let lock_path = dir.join(format!("{session_id}.lock"));
                         let pid_alive = self.parse_lock_file(&lock_path)
                             .map(|pid| {
-                                let mut sys = sysinfo::System::new_all();
-                                sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
                                 sys.process(sysinfo::Pid::from_u32(pid)).is_some()
                             })
                             .unwrap_or(false);
                         if !pid_alive {
                             continue;
                         }
-                        if let Some(session) = self.session_from_files(session_id, &dir) {
+                        if let Some(session) =
+                            self.session_from_files(session_id, &dir, sys)
+                        {
                             result.push(session);
                         }
                     }
@@ -187,53 +277,13 @@ impl AgentMonitor for KiroAdapter {
         result
     }
 
-    fn on_fs_event(&mut self, event: &notify::Event) -> Vec<(StateChange, AgentSession)> {
-        let mut changes = Vec::new();
-        for path in &event.paths {
-            let file_name = path.file_name().unwrap_or_default().to_string_lossy();
-            let dir = path.parent().unwrap_or(Path::new(""));
-
-            if file_name.ends_with(".lock") {
-                let session_id = file_name.trim_end_matches(".lock");
-                match event.kind {
-                    notify::EventKind::Create(_) => {
-                        if let Some(session) = self.session_from_files(session_id, dir) {
-                            self.sessions
-                                .insert(session_id.to_string(), session.clone());
-                            changes.push((StateChange::Added, session));
-                        }
-                    }
-                    notify::EventKind::Remove(_) => {
-                        if let Some(mut session) = self.sessions.remove(session_id) {
-                            session.status = SessionStatus::Ended;
-                            changes.push((StateChange::Updated, session));
-                        }
-                    }
-                    _ => {}
-                }
-            } else if file_name.ends_with(".jsonl") || file_name.ends_with(".json") {
-                let session_id = file_name
-                    .trim_end_matches(".jsonl")
-                    .trim_end_matches(".json");
-                if let Some(session) = self.session_from_files(session_id, dir) {
-                    let change = if self.sessions.contains_key(session_id) {
-                        StateChange::Updated
-                    } else {
-                        StateChange::Added
-                    };
-                    self.sessions
-                        .insert(session_id.to_string(), session.clone());
-                    changes.push((change, session));
-                }
-            }
-        }
-        changes
+    fn on_fs_event(&mut self, _event: &notify::Event) -> Vec<(StateChange, AgentSession)> {
+        vec![]
     }
 }
 
 pub struct ClaudeCodeAdapter {
     home: PathBuf,
-    sessions: HashMap<String, AgentSession>,
 }
 
 impl ClaudeCodeAdapter {
@@ -241,7 +291,6 @@ impl ClaudeCodeAdapter {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
         Self {
             home,
-            sessions: HashMap::new(),
         }
     }
 
@@ -249,16 +298,79 @@ impl ClaudeCodeAdapter {
         self.home.join(".claude/projects")
     }
 
-    fn detect_from_processes(&self) -> Vec<AgentSession> {
+    fn find_latest_session_jsonl(&self, cwd: &str) -> Option<PathBuf> {
+        // Claude Code stores sessions under ~/.claude/projects/{encoded_path}/
+        // The encoded path replaces / with -
+        let encoded = cwd.trim_end_matches('/').replace('/', "-");
+        let project_dir = self.projects_dir().join(&encoded);
+        if !project_dir.exists() {
+            return None;
+        }
+
+        let mut latest: Option<(PathBuf, std::time::SystemTime)> = None;
+        if let Ok(entries) = fs::read_dir(&project_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+                    if let Ok(meta) = path.metadata() {
+                        if let Ok(modified) = meta.modified() {
+                            if latest.as_ref().map(|(_, t)| modified > *t).unwrap_or(true) {
+                                latest = Some((path, modified));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        latest.map(|(p, _)| p)
+    }
+
+    fn last_assistant_preview(&self, jsonl_path: &Path) -> Option<String> {
+        let lines = read_last_lines(jsonl_path, 50);
+        for line in lines.iter().rev() {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+                let msg_type = json.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                if msg_type != "assistant" {
+                    continue;
+                }
+                // Claude Code JSONL: message.content is an array of blocks
+                if let Some(content) = json.get("message").and_then(|m| m.get("content")) {
+                    if let Some(arr) = content.as_array() {
+                        // Get the last text block
+                        for block in arr.iter().rev() {
+                            if block.get("type").and_then(|t| t.as_str()) == Some("text") {
+                                if let Some(text) =
+                                    block.get("text").and_then(|t| t.as_str())
+                                {
+                                    let trimmed = text.trim();
+                                    if !trimmed.is_empty() {
+                                        return Some(truncate_preview(trimmed));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // Fallback: content as string
+                    if let Some(text) = content.as_str() {
+                        let trimmed = text.trim();
+                        if !trimmed.is_empty() {
+                            return Some(truncate_preview(trimmed));
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn detect_from_processes(&self, sys: &sysinfo::System) -> Vec<AgentSession> {
         let mut sessions = Vec::new();
-        let mut sys = sysinfo::System::new_all();
-        sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
         for (_, proc) in sys.processes() {
-            let exe = proc.exe()
+            let exe = proc
+                .exe()
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_default();
 
-            // Only match processes whose exe basename is exactly "claude"
             let exe_basename = std::path::Path::new(&exe)
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
@@ -273,20 +385,16 @@ impl ClaudeCodeAdapter {
                 .map(|s| s.to_string_lossy().to_string())
                 .collect();
 
-            // Skip internal/team processes
-            if cmd.iter().any(|a| a.starts_with("--teammate-mode")
-                || a.starts_with("--output-format"))
-            {
+            if cmd.iter().any(|a| {
+                a.starts_with("--teammate-mode") || a.starts_with("--output-format")
+            }) {
                 continue;
             }
-            // Skip processes with no meaningful arguments (sub-processes)
             if cmd.len() <= 1 {
                 continue;
             }
 
-            // Skip Claude Desktop internal agent processes
             if exe.contains("Claude-3p") || exe.contains("Claude.app") {
-                // Only show if it has --resume (user-facing Desktop session)
                 if !cmd.iter().any(|a| a == "--resume") {
                     continue;
                 }
@@ -319,13 +427,12 @@ impl ClaudeCodeAdapter {
                 session_id = format!("claude-{}", proc.pid().as_u32());
             }
 
-            let source_tag = if exe.contains("Claude-3p")
-                || exe.contains("Claude.app")
-            {
-                "Desktop"
-            } else {
-                "CLI"
-            };
+            let source_tag =
+                if exe.contains("Claude-3p") || exe.contains("Claude.app") {
+                    "Desktop"
+                } else {
+                    "CLI"
+                };
 
             let cwd = proc
                 .cwd()
@@ -344,8 +451,16 @@ impl ClaudeCodeAdapter {
                 format!("Claude Code #{}", proc.pid().as_u32())
             };
 
-            // Use actual process start time
-            let started_at = DateTime::from_timestamp(proc.start_time() as i64, 0).unwrap_or_default();
+            let started_at =
+                DateTime::from_timestamp(proc.start_time() as i64, 0).unwrap_or_default();
+
+            // Read last message preview from session JSONL
+            let last_message_preview = if !cwd.is_empty() {
+                self.find_latest_session_jsonl(&cwd)
+                    .and_then(|p| self.last_assistant_preview(&p))
+            } else {
+                None
+            };
 
             sessions.push(AgentSession {
                 agent_type: "claude-code".to_string(),
@@ -360,6 +475,7 @@ impl ClaudeCodeAdapter {
                 data_limited: false,
                 data_limited_reason: None,
                 pid: Some(proc.pid().as_u32()),
+                last_message_preview,
             });
         }
         sessions
@@ -380,48 +496,18 @@ impl AgentMonitor for ClaudeCodeAdapter {
         }
     }
 
-    fn detect_sessions(&self) -> Vec<AgentSession> {
-        self.detect_from_processes()
+    fn detect_sessions(&self, sys: &sysinfo::System) -> Vec<AgentSession> {
+        self.detect_from_processes(sys)
     }
 
     fn on_fs_event(&mut self, _event: &notify::Event) -> Vec<(StateChange, AgentSession)> {
-        // Claude Code relies on process detection; fs events just trigger refresh
-        let current = self.detect_from_processes();
-        let mut changes = Vec::new();
-        let current_ids: std::collections::HashSet<_> =
-            current.iter().map(|s| s.session_id.clone()).collect();
-
-        for (id, session) in &self.sessions {
-            if !current_ids.contains(id) {
-                let mut ended = session.clone();
-                ended.status = SessionStatus::Ended;
-                changes.push((StateChange::Updated, ended));
-            }
-        }
-
-        for session in current {
-            let change = if self.sessions.contains_key(&session.session_id) {
-                StateChange::Updated
-            } else {
-                StateChange::Added
-            };
-            self.sessions
-                .insert(session.session_id.clone(), session.clone());
-            changes.push((change, session));
-        }
-
-        // Remove ended sessions from tracking
-        self.sessions.retain(|id, s| {
-            current_ids.contains(id) || s.status != SessionStatus::Ended
-        });
-
-        changes
+        // Unused — service re-detects all sessions on fs events
+        vec![]
     }
 }
 
 pub struct CodexAdapter {
     home: PathBuf,
-    sessions: HashMap<String, AgentSession>,
 }
 
 impl CodexAdapter {
@@ -429,7 +515,6 @@ impl CodexAdapter {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
         Self {
             home,
-            sessions: HashMap::new(),
         }
     }
 
@@ -437,17 +522,16 @@ impl CodexAdapter {
         self.home.join(".codex")
     }
 
-    fn detect_from_processes(&self) -> Vec<AgentSession> {
+    fn detect_from_processes(&self, sys: &sysinfo::System) -> Vec<AgentSession> {
         let mut sessions = Vec::new();
-        let mut sys = sysinfo::System::new_all();
-        sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
         for (_, proc) in sys.processes() {
             let name = proc.name().to_string_lossy().to_string();
             let is_codex = name == "codex" || name == "Codex";
             if !is_codex {
                 continue;
             }
-            let exe_path = proc.exe()
+            let exe_path = proc
+                .exe()
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_default();
             let source_tag = if name == "Codex" || exe_path.contains("Electron") {
@@ -473,7 +557,8 @@ impl CodexAdapter {
                 format!("Codex – {short}")
             };
 
-            let started_at = DateTime::from_timestamp(proc.start_time() as i64, 0).unwrap_or_default();
+            let started_at =
+                DateTime::from_timestamp(proc.start_time() as i64, 0).unwrap_or_default();
             sessions.push(AgentSession {
                 agent_type: "codex".to_string(),
                 source_tag: source_tag.to_string(),
@@ -487,6 +572,7 @@ impl CodexAdapter {
                 data_limited: true,
                 data_limited_reason: Some("monitor.data_limited_codex".to_string()),
                 pid: Some(proc.pid().as_u32()),
+                last_message_preview: None,
             });
         }
         sessions
@@ -507,46 +593,17 @@ impl AgentMonitor for CodexAdapter {
         }
     }
 
-    fn detect_sessions(&self) -> Vec<AgentSession> {
-        self.detect_from_processes()
+    fn detect_sessions(&self, sys: &sysinfo::System) -> Vec<AgentSession> {
+        self.detect_from_processes(sys)
     }
 
     fn on_fs_event(&mut self, _event: &notify::Event) -> Vec<(StateChange, AgentSession)> {
-        let current = self.detect_from_processes();
-        let mut changes = Vec::new();
-        let current_ids: std::collections::HashSet<_> =
-            current.iter().map(|s| s.session_id.clone()).collect();
-
-        for (id, session) in &self.sessions {
-            if !current_ids.contains(id) {
-                let mut ended = session.clone();
-                ended.status = SessionStatus::Ended;
-                changes.push((StateChange::Updated, ended));
-            }
-        }
-
-        for session in current {
-            let change = if self.sessions.contains_key(&session.session_id) {
-                StateChange::Updated
-            } else {
-                StateChange::Added
-            };
-            self.sessions
-                .insert(session.session_id.clone(), session.clone());
-            changes.push((change, session));
-        }
-
-        self.sessions.retain(|id, s| {
-            current_ids.contains(id) || s.status != SessionStatus::Ended
-        });
-
-        changes
+        vec![]
     }
 }
 
 pub struct GeminiAdapter {
     home: PathBuf,
-    sessions: HashMap<String, AgentSession>,
 }
 
 impl GeminiAdapter {
@@ -554,7 +611,6 @@ impl GeminiAdapter {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
         Self {
             home,
-            sessions: HashMap::new(),
         }
     }
 
@@ -562,11 +618,9 @@ impl GeminiAdapter {
         self.home.join(".gemini/tmp")
     }
 
-    fn detect_from_processes(&self) -> Vec<AgentSession> {
-        let mut seen_cwd: HashMap<String, u32> = HashMap::new(); // cwd -> smallest PID
+    fn detect_from_processes(&self, sys: &sysinfo::System) -> Vec<AgentSession> {
+        let mut seen_cwd: HashMap<String, u32> = HashMap::new();
         let mut all: Vec<(u32, AgentSession)> = Vec::new();
-        let mut sys = sysinfo::System::new_all();
-        sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
         for (_, proc) in sys.processes() {
             let name = proc.name().to_string_lossy().to_string();
             if name != "node" {
@@ -600,57 +654,45 @@ impl GeminiAdapter {
                 format!("Gemini – {project_name}")
             };
 
-            let started_at = DateTime::from_timestamp(proc.start_time() as i64, 0).unwrap_or_default();
+            let started_at =
+                DateTime::from_timestamp(proc.start_time() as i64, 0).unwrap_or_default();
 
-            all.push((pid, AgentSession {
-                agent_type: "gemini".to_string(),
-                source_tag: "CLI".to_string(),
-                session_id: session_id.clone(),
-                title,
-                model: "gemini".to_string(),
-                cwd: cwd.clone(),
-                status: SessionStatus::Active,
-                started_at,
-                last_activity: Utc::now(),
-                data_limited: true,
-                data_limited_reason: Some(
-                    "monitor.data_limited_gemini".to_string(),
-                ),
-                pid: Some(pid),
-            }));
+            all.push((
+                pid,
+                AgentSession {
+                    agent_type: "gemini".to_string(),
+                    source_tag: "CLI".to_string(),
+                    session_id: session_id.clone(),
+                    title,
+                    model: "gemini".to_string(),
+                    cwd: cwd.clone(),
+                    status: SessionStatus::Active,
+                    started_at,
+                    last_activity: Utc::now(),
+                    data_limited: true,
+                    data_limited_reason: Some("monitor.data_limited_gemini".to_string()),
+                    pid: Some(pid),
+                    last_message_preview: None,
+                },
+            ));
 
-            // Track lowest PID per cwd (parent process)
-            seen_cwd.entry(cwd).and_modify(|e| {
-                if pid < *e { *e = pid; }
-            }).or_insert(pid);
+            seen_cwd
+                .entry(cwd)
+                .and_modify(|e| {
+                    if pid < *e {
+                        *e = pid;
+                    }
+                })
+                .or_insert(pid);
         }
-        // Deduplicate: keep only the parent process (lowest PID) per cwd
-        let parent_pids: std::collections::HashSet<u32> = seen_cwd.values().copied().collect();
+        let parent_pids: std::collections::HashSet<u32> =
+            seen_cwd.values().copied().collect();
         all.into_iter()
             .filter(|(pid, _)| parent_pids.contains(pid))
             .map(|(_, s)| s)
             .collect()
     }
 
-    fn read_logs_json(&self, project: &str) -> Option<String> {
-        let path = self.gemini_tmp_dir().join(project).join("logs.json");
-        let content = fs::read_to_string(path).ok()?;
-        let json: serde_json::Value = serde_json::from_str(&content).ok()?;
-        // Try to get the last user message as title
-        if let Some(messages) = json.as_array() {
-            for msg in messages.iter().rev() {
-                if msg.get("role").and_then(|r| r.as_str()) == Some("user") {
-                    return msg
-                        .get("parts")
-                        .and_then(|p| p.as_array())
-                        .and_then(|arr| arr.first())
-                        .and_then(|t| t.as_str())
-                        .map(|s| s.chars().take(50).collect());
-                }
-            }
-        }
-        None
-    }
 }
 
 impl AgentMonitor for GeminiAdapter {
@@ -667,57 +709,11 @@ impl AgentMonitor for GeminiAdapter {
         }
     }
 
-    fn detect_sessions(&self) -> Vec<AgentSession> {
-        self.detect_from_processes()
+    fn detect_sessions(&self, sys: &sysinfo::System) -> Vec<AgentSession> {
+        self.detect_from_processes(sys)
     }
 
-    fn on_fs_event(&mut self, event: &notify::Event) -> Vec<(StateChange, AgentSession)> {
-        // Try to enrich session data from file events
-        for path in &event.paths {
-            let file_name = path.file_name().unwrap_or_default().to_string_lossy();
-            if file_name == "logs.json" {
-                if let Some(project) = path.parent().and_then(|p| p.file_name()) {
-                    let project_str = project.to_string_lossy();
-                    if let Some(title) = self.read_logs_json(&project_str) {
-                        for (_, session) in self.sessions.iter_mut() {
-                            if session.cwd.contains(&*project_str) {
-                                session.title = title.clone();
-                                session.last_activity = Utc::now();
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        let current = self.detect_from_processes();
-        let mut changes = Vec::new();
-        let current_ids: std::collections::HashSet<_> =
-            current.iter().map(|s| s.session_id.clone()).collect();
-
-        for (id, session) in &self.sessions {
-            if !current_ids.contains(id) {
-                let mut ended = session.clone();
-                ended.status = SessionStatus::Ended;
-                changes.push((StateChange::Updated, ended));
-            }
-        }
-
-        for session in current {
-            let change = if self.sessions.contains_key(&session.session_id) {
-                StateChange::Updated
-            } else {
-                StateChange::Added
-            };
-            self.sessions
-                .insert(session.session_id.clone(), session.clone());
-            changes.push((change, session));
-        }
-
-        self.sessions.retain(|id, s| {
-            current_ids.contains(id) || s.status != SessionStatus::Ended
-        });
-
-        changes
+    fn on_fs_event(&mut self, _event: &notify::Event) -> Vec<(StateChange, AgentSession)> {
+        vec![]
     }
 }

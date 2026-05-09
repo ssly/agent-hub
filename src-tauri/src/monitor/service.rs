@@ -2,6 +2,7 @@ use super::types::*;
 use chrono::Utc;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Runtime};
 
@@ -10,6 +11,7 @@ pub struct MonitorService<R: Runtime> {
     adapters: Vec<Box<dyn AgentMonitor>>,
     _watcher: Option<RecommendedWatcher>,
     app: AppHandle<R>,
+    pub polling_enabled: Arc<AtomicBool>,
 }
 
 impl<R: Runtime> MonitorService<R> {
@@ -22,15 +24,18 @@ impl<R: Runtime> MonitorService<R> {
             Box::new(super::adapters::GeminiAdapter::new()),
         ];
 
+        let polling_enabled = Arc::new(AtomicBool::new(false));
+
         let mut service = Self {
             state,
             adapters,
             _watcher: None,
             app,
+            polling_enabled,
         };
 
         service.init_watcher();
-        service.initial_scan();
+        // Defer initial scan — will run on first poll or first get_active_sessions call
         service
     }
 
@@ -39,14 +44,10 @@ impl<R: Runtime> MonitorService<R> {
         let app = self.app.clone();
 
         let mut watcher = match RecommendedWatcher::new(
-            move |res: Result<notify::Event, notify::Error>| {
-                if let Ok(_event) = res {
-                    let state = state.clone();
-                    let app = app.clone();
-                    // We can't mutably borrow adapters here, so we do a full refresh
-                    // on fs events instead
-                    Self::handle_fs_event_static(&state, &app);
-                }
+            move |_res: Result<notify::Event, notify::Error>| {
+                let state = state.clone();
+                let app = app.clone();
+                Self::detect_and_emit(&state, &app);
             },
             notify::Config::default(),
         ) {
@@ -59,13 +60,8 @@ impl<R: Runtime> MonitorService<R> {
 
         for adapter in &self.adapters {
             for path in adapter.watch_paths() {
-                if let Err(e) =
-                    watcher.watch(&path, RecursiveMode::Recursive)
-                {
-                    log::warn!(
-                        "Failed to watch {:?}: {e}",
-                        path
-                    );
+                if let Err(e) = watcher.watch(&path, RecursiveMode::Recursive) {
+                    log::warn!("Failed to watch {:?}: {e}", path);
                 } else {
                     log::info!("Watching {:?} for {}", path, adapter.platform_id());
                 }
@@ -75,22 +71,9 @@ impl<R: Runtime> MonitorService<R> {
         self._watcher = Some(watcher);
     }
 
-    fn initial_scan(&mut self) {
-        let mut all_sessions = Vec::new();
-        for adapter in &self.adapters {
-            all_sessions.extend(adapter.detect_sessions());
-        }
-
-        let mut state = self.state.lock().unwrap();
-        for session in all_sessions {
-            state
-                .sessions
-                .insert(session.session_id.clone(), session);
-        }
-    }
-
-    fn handle_fs_event_static(state: &Arc<Mutex<MonitorState>>, app: &AppHandle<R>) {
-        // Re-detect all sessions on any fs event
+    /// Detect all sessions (lock-free), then briefly lock state to diff + emit.
+    fn detect_and_emit(state: &Arc<Mutex<MonitorState>>, app: &AppHandle<R>) {
+        let sys = sysinfo::System::new_all();
         let adapters: Vec<Box<dyn AgentMonitor>> = vec![
             Box::new(super::adapters::KiroAdapter::new()),
             Box::new(super::adapters::ClaudeCodeAdapter::new()),
@@ -98,18 +81,19 @@ impl<R: Runtime> MonitorService<R> {
             Box::new(super::adapters::GeminiAdapter::new()),
         ];
 
+        // Phase 1: detect all sessions (no lock held)
         let mut detected = HashMap::new();
         for adapter in &adapters {
-            for session in adapter.detect_sessions() {
+            for session in adapter.detect_sessions(&sys) {
                 detected.insert(session.session_id.clone(), session);
             }
         }
 
+        // Phase 2: brief lock to diff + emit events
         let mut state = state.lock().unwrap();
         let old_ids: std::collections::HashSet<_> = state.sessions.keys().cloned().collect();
         let new_ids: std::collections::HashSet<_> = detected.keys().cloned().collect();
 
-        // New sessions
         for id in new_ids.difference(&old_ids) {
             if let Some(session) = detected.get(id) {
                 state
@@ -125,7 +109,6 @@ impl<R: Runtime> MonitorService<R> {
             }
         }
 
-        // Updated sessions
         for id in new_ids.intersection(&old_ids) {
             if let Some(session) = detected.get(id) {
                 state
@@ -141,7 +124,6 @@ impl<R: Runtime> MonitorService<R> {
             }
         }
 
-        // Ended sessions
         for id in old_ids.difference(&new_ids) {
             if let Some(mut session) = state.sessions.remove(id) {
                 session.status = SessionStatus::Ended;
@@ -157,7 +139,19 @@ impl<R: Runtime> MonitorService<R> {
     }
 
     pub fn poll(&self) {
-        Self::handle_fs_event_static(&self.state, &self.app);
+        Self::detect_and_emit(&self.state, &self.app);
+    }
+
+    /// Ensure at least one scan has been done. Called by get_active_sessions
+    /// to guarantee data is available even before polling starts.
+    pub fn ensure_scanned(&self) {
+        let has_data = {
+            let state = self.state.lock().unwrap();
+            !state.sessions.is_empty()
+        };
+        if !has_data {
+            self.poll();
+        }
     }
 
     pub fn get_sessions(&self) -> Vec<AgentSession> {

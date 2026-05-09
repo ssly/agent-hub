@@ -46,6 +46,7 @@ pub struct AgentSession {
     pub data_limited_reason: Option<String>,
     #[allow(dead_code)]
     pub pid: Option<u32>,
+    pub last_message_preview: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,7 +93,7 @@ impl MonitorState {
 pub trait AgentMonitor: Send + Sync {
     fn platform_id(&self) -> &str;
     fn watch_paths(&self) -> Vec<PathBuf>;
-    fn detect_sessions(&self) -> Vec<AgentSession>;
+    fn detect_sessions(&self, sys: &sysinfo::System) -> Vec<AgentSession>;
     #[allow(dead_code)]
     fn on_fs_event(&mut self, event: &notify::Event) -> Vec<(StateChange, AgentSession)>;
 }
