@@ -1091,3 +1091,12 @@ pub fn set_monitor_polling(
     monitor.polling_enabled
         .store(enabled, std::sync::atomic::Ordering::Relaxed);
 }
+
+/// Force an immediate re-scan and emit. The 5s polling thread runs on its own
+/// cadence and the FS watcher only fires on file events; this command lets the
+/// UI request a fresh snapshot when the user opens the Monitor tab or hits a
+/// refresh button, without waiting for the next poll tick.
+#[tauri::command]
+pub fn force_poll_monitor(monitor: tauri::State<'_, MonitorStateHandle>) {
+    monitor.poll();
+}

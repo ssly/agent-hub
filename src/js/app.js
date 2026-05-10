@@ -2660,6 +2660,10 @@ args = ["mcp-server-time"]
 
     async refreshMonitor() {
         try {
+            // Force a fresh scan up front so the UI doesn't sit on a stale cache
+            // between 5s polling ticks. ensure_scanned in the backend only runs
+            // on the very first call.
+            await Api.forcePollMonitor();
             const [sessions, config] = await Promise.all([
                 Api.getActiveSessions(),
                 Api.getMonitorConfig(),
@@ -2792,6 +2796,11 @@ args = ["mcp-server-time"]
         const pidStr = session.pid ? i.tWith('monitor.pid', { pid: session.pid }) : '';
         const preview = session.last_message_preview || '';
         const previewId = `preview-${session.session_id.replace(/[^a-zA-Z0-9-]/g, '_')}`;
+        // Q-prompt-A-reply: headline = last user prompt. Falls back to project title
+        // when no JSONL data is available (Tier-2 adapters Codex/Gemini).
+        const userPrompt = (session.last_user_prompt || '').trim();
+        const headline = userPrompt || session.title || session.session_id;
+        const projectTag = userPrompt ? (session.title || '') : '';
 
         return `<div class="bg-gray-800 rounded-lg border border-gray-700 p-3">
             <div class="flex items-start justify-between">
@@ -2802,7 +2811,8 @@ args = ["mcp-server-time"]
                         <span class="text-xs px-1.5 py-0.5 rounded ${sourceStyle}">${esc(session.source_tag)}</span>
                         ${pidStr ? `<span class="text-xs text-gray-600 font-mono">${esc(pidStr)}</span>` : ''}
                     </div>
-                    <div class="text-sm text-gray-200 truncate">${esc(session.title || session.session_id)}</div>
+                    <div class="text-sm text-gray-200 truncate" title="${esc(headline)}">${esc(headline)}</div>
+                    ${projectTag ? `<div class="text-xs text-gray-500 truncate mt-0.5">${esc(projectTag)}</div>` : ''}
                     <div class="flex items-center gap-3 mt-1 text-xs text-gray-500">
                         <span>${esc(session.model)}</span>
                         ${cwdShort ? `<span class="truncate" title="${esc(session.cwd)}">${esc(cwdShort)}</span>` : ''}

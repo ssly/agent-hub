@@ -47,6 +47,10 @@ pub struct AgentSession {
     #[allow(dead_code)]
     pub pid: Option<u32>,
     pub last_message_preview: Option<String>,
+    /// Last user prompt text (Q in the Q-prompt-A-reply pairing).
+    /// `None` for Tier-2 adapters (Codex/Gemini) that do not parse JSONL.
+    #[serde(default)]
+    pub last_user_prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
