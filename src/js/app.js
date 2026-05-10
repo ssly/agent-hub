@@ -2775,7 +2775,15 @@ args = ["mcp-server-time"]
             completed: { color: 'bg-blue-500', pulse: false, text: i.t('monitor.status.completed') },
             ended: { color: 'bg-red-500', pulse: false, text: i.t('monitor.status.ended') },
         };
-        const st = statusMap[session.status] || statusMap.idle;
+        const wsMap = {
+            working: { color: 'bg-green-500', pulse: true, text: i.t('monitor.working_state.working') },
+            idle: { color: 'bg-gray-400', pulse: false, text: i.t('monitor.working_state.idle') },
+            finished: { color: 'bg-blue-500', pulse: false, text: i.t('monitor.working_state.finished') },
+        };
+        // Tier-1 adapters (Kiro, Claude Code) have real working_state;
+        // Tier-2 (Codex, Gemini) fall back to the coarse session.status.
+        const ws = session.working_state || 'idle';
+        const st = (!session.data_limited && wsMap[ws]) || statusMap[session.status] || statusMap.idle;
         const sourceStyle = session.source_tag === 'CLI'
             ? 'bg-gray-700 text-gray-300'
             : 'bg-gray-600 text-gray-200';
@@ -2802,6 +2810,20 @@ args = ["mcp-server-time"]
         const headline = userPrompt || session.title || session.session_id;
         const projectTag = userPrompt ? (session.title || '') : '';
 
+        // Subtitle driven by working_state for Tier-1 adapters.
+        let subtitle = '';
+        if (!session.data_limited) {
+            if (session.working_state === 'working') {
+                subtitle = i.t('monitor.working_state.working');
+            } else if (session.working_state === 'idle') {
+                subtitle = i.t('monitor.working_state.idle');
+            } else {
+                subtitle = preview;
+            }
+        } else {
+            subtitle = preview;
+        }
+
         return `<div class="bg-gray-800 rounded-lg border border-gray-700 p-3">
             <div class="flex items-start justify-between">
                 <div class="flex-1 min-w-0">
@@ -2818,7 +2840,7 @@ args = ["mcp-server-time"]
                         ${cwdShort ? `<span class="truncate" title="${esc(session.cwd)}">${esc(cwdShort)}</span>` : ''}
                         ${duration ? `<span>${esc(duration)}</span>` : ''}
                     </div>
-                    ${preview ? `<div id="${previewId}" class="text-xs text-gray-500 mt-2 cursor-pointer hover:text-gray-300 transition-colors" style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:pre-wrap;word-break:break-word;" onclick="app.showMonitorPreview('${previewId}','${esc(session.session_id)}')">${esc(preview)}</div>` : ''}
+                    ${subtitle ? `<div id="${previewId}" class="text-xs text-gray-500 mt-2 cursor-pointer hover:text-gray-300 transition-colors" style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:pre-wrap;word-break:break-word;" onclick="app.showMonitorPreview('${previewId}','${esc(session.session_id)}')">${esc(subtitle)}</div>` : ''}
                 </div>
             </div>
         </div>`;
