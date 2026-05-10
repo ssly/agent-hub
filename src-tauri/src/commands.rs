@@ -1043,24 +1043,21 @@ pub fn sync_mcp_server_cmd(
 
 // --- Monitor Commands ---
 
-use std::sync::Mutex as StdMutex;
-
-pub type MonitorStateHandle = StdMutex<crate::monitor::service::MonitorService<tauri::Wry>>;
+pub type MonitorStateHandle = std::sync::Arc<crate::monitor::service::MonitorService<tauri::Wry>>;
 
 #[tauri::command]
 pub fn get_active_sessions(
     monitor: tauri::State<'_, MonitorStateHandle>,
 ) -> Vec<crate::monitor::types::AgentSession> {
-    let svc = monitor.lock().unwrap();
-    svc.ensure_scanned();
-    svc.get_sessions()
+    monitor.ensure_scanned();
+    monitor.get_sessions()
 }
 
 #[tauri::command]
 pub fn get_monitor_config(
     monitor: tauri::State<'_, MonitorStateHandle>,
 ) -> crate::monitor::types::MonitorConfig {
-    monitor.lock().unwrap().get_config()
+    monitor.get_config()
 }
 
 #[tauri::command]
@@ -1070,16 +1067,14 @@ pub fn set_monitor_config(
     notification_enabled: Option<bool>,
     notification_cooldown_secs: Option<u64>,
 ) -> Result<crate::monitor::types::MonitorConfig, CommandError> {
-    let svc = monitor.lock().unwrap();
-    let mut config = svc.get_config();
+    let mut config = monitor.get_config();
     if let Some(v) = notification_enabled {
         config.notification_enabled = v;
     }
     if let Some(v) = notification_cooldown_secs {
         config.notification_cooldown_secs = v;
     }
-    svc.set_config(config.clone());
-    drop(svc);
+    monitor.set_config(config.clone());
 
     // Persist to config.toml
     let mut app_state = state.lock().unwrap();
@@ -1093,7 +1088,6 @@ pub fn set_monitor_polling(
     monitor: tauri::State<'_, MonitorStateHandle>,
     enabled: bool,
 ) {
-    let svc = monitor.lock().unwrap();
-    svc.polling_enabled
+    monitor.polling_enabled
         .store(enabled, std::sync::atomic::Ordering::Relaxed);
 }

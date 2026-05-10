@@ -35,17 +35,16 @@ pub fn run() {
             };
             let monitor_service =
                 monitor::service::MonitorService::new(app.handle().clone(), config);
-            app.manage(std::sync::Mutex::new(monitor_service));
+            app.manage(std::sync::Arc::new(monitor_service));
 
             // Start process poll timer (5s interval, only when polling is enabled)
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(5));
-                    let state = handle.state::<std::sync::Mutex<monitor::service::MonitorService<tauri::Wry>>>();
-                    let svc = state.lock().unwrap();
-                    if svc.polling_enabled.load(std::sync::atomic::Ordering::Relaxed) {
-                        svc.poll();
+                    let state = handle.state::<std::sync::Arc<monitor::service::MonitorService<tauri::Wry>>>();
+                    if state.polling_enabled.load(std::sync::atomic::Ordering::Relaxed) {
+                        state.poll();
                     }
                 }
             });

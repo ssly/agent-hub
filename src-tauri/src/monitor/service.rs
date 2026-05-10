@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Runtime};
+use tauri_plugin_notification::NotificationExt;
 
 pub struct MonitorService<R: Runtime> {
     state: Arc<Mutex<MonitorState>>,
@@ -72,6 +73,13 @@ impl<R: Runtime> MonitorService<R> {
     }
 
     /// Detect all sessions (lock-free), then briefly lock state to diff + emit.
+    ///
+    /// Stale-snapshot policy: `sysinfo::System::new_all()` is rebuilt every call,
+    /// and `MonitorState::new` starts with an empty session map, so there is no
+    /// cross-restart cache that can go stale. When Tier-1 fingerprint caching
+    /// (jsonl size+mtime+inode) is added, this function must reset that cache on
+    /// app start so a restarted agent's first poll sees an "added" event, not an
+    /// "updated" one against a stale fingerprint.
     fn detect_and_emit(state: &Arc<Mutex<MonitorState>>, app: &AppHandle<R>) {
         let sys = sysinfo::System::new_all();
         let adapters: Vec<Box<dyn AgentMonitor>> = vec![
@@ -111,6 +119,7 @@ impl<R: Runtime> MonitorService<R> {
 
         for id in new_ids.intersection(&old_ids) {
             if let Some(session) = detected.get(id) {
+                let old_status = state.sessions.get(id).map(|s| s.status);
                 state
                     .sessions
                     .insert(id.clone(), session.clone());
@@ -121,6 +130,20 @@ impl<R: Runtime> MonitorService<R> {
                         "session": session,
                     }),
                 );
+
+                // Turn-end semantic: Active → Idle/Completed.
+                // Notification fires here, NOT on `removed` (kill -9 must stay silent).
+                let is_turn_end = is_turn_end_transition(old_status, session.status);
+                if is_turn_end && Self::should_notify(&mut state, &session.session_id) {
+                    let title = session.title.clone();
+                    let body = format!("[{}] {}", session.agent_type, title);
+                    let _ = app
+                        .notification()
+                        .builder()
+                        .title("Agent 任务完成")
+                        .body(body)
+                        .show();
+                }
             }
         }
 
@@ -134,6 +157,8 @@ impl<R: Runtime> MonitorService<R> {
                         "session": session,
                     }),
                 );
+                // Intentionally no notification: kill -9 / terminal close should be silent.
+                // Turn-end notifications are emitted in the `updated` branch above.
             }
         }
     }
@@ -169,25 +194,138 @@ impl<R: Runtime> MonitorService<R> {
         state.config = new_config;
     }
 
-    #[allow(dead_code)]
-    pub fn check_and_notify(&self, session: &AgentSession) -> bool {
-        let mut state = self.state.lock().unwrap();
-        if !state.config.notification_enabled {
+    /// Returns true if a turn-end notification should fire for this session_id,
+    /// honoring `notification_enabled` and the per-session cooldown. On true, the
+    /// caller should fire the notification; this function records the timestamp so
+    /// the next call within the cooldown window returns false.
+    ///
+    /// Caller must already hold the state lock — this avoids re-locking inside
+    /// `detect_and_emit`, which would deadlock.
+    fn should_notify(state: &mut MonitorState, session_id: &str) -> bool {
+        should_notify_impl(state, session_id)
+    }
+}
+
+/// Pure transition predicate. Active → Idle/Completed counts as a turn-end.
+/// Anything else (including Active → Ended from a kill) does not.
+fn is_turn_end_transition(old: Option<SessionStatus>, new: SessionStatus) -> bool {
+    matches!(old, Some(SessionStatus::Active))
+        && matches!(new, SessionStatus::Idle | SessionStatus::Completed)
+}
+
+/// Cooldown + enabled gate for turn-end notifications. Pure on `state`.
+fn should_notify_impl(state: &mut MonitorState, session_id: &str) -> bool {
+    if !state.config.notification_enabled {
+        return false;
+    }
+    if let Some(last) = state.last_notified.get(session_id) {
+        let elapsed = Utc::now().signed_duration_since(*last).num_seconds();
+        if elapsed < state.config.notification_cooldown_secs as i64 {
             return false;
         }
+    }
+    state
+        .last_notified
+        .insert(session_id.to_string(), Utc::now());
+    true
+}
 
-        if let Some(last) = state.last_notified.get(&session.session_id) {
-            let elapsed = Utc::now()
-                .signed_duration_since(*last)
-                .num_seconds();
-            if elapsed < state.config.notification_cooldown_secs as i64 {
-                return false;
-            }
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        state
-            .last_notified
-            .insert(session.session_id.clone(), Utc::now());
-        true
+    fn make_state(notif_enabled: bool, cooldown: u64) -> MonitorState {
+        MonitorState::new(MonitorConfig {
+            enabled: true,
+            notification_enabled: notif_enabled,
+            notification_cooldown_secs: cooldown,
+        })
+    }
+
+    #[test]
+    fn turn_end_active_to_idle_is_true() {
+        assert!(is_turn_end_transition(
+            Some(SessionStatus::Active),
+            SessionStatus::Idle,
+        ));
+    }
+
+    #[test]
+    fn turn_end_active_to_completed_is_true() {
+        assert!(is_turn_end_transition(
+            Some(SessionStatus::Active),
+            SessionStatus::Completed,
+        ));
+    }
+
+    /// Regression: kill -9 (Active → Ended via removed branch) must NOT count
+    /// as turn-end. Defends against Issue #4 (kill misclassified as completion).
+    #[test]
+    fn turn_end_active_to_ended_is_false() {
+        assert!(!is_turn_end_transition(
+            Some(SessionStatus::Active),
+            SessionStatus::Ended,
+        ));
+    }
+
+    #[test]
+    fn turn_end_no_prior_state_is_false() {
+        // First sighting (added) is not a turn-end.
+        assert!(!is_turn_end_transition(None, SessionStatus::Idle));
+    }
+
+    #[test]
+    fn turn_end_idle_to_idle_is_false() {
+        assert!(!is_turn_end_transition(
+            Some(SessionStatus::Idle),
+            SessionStatus::Idle,
+        ));
+    }
+
+    #[test]
+    fn should_notify_disabled_returns_false() {
+        let mut s = make_state(false, 30);
+        assert!(!should_notify_impl(&mut s, "sess-1"));
+        assert!(s.last_notified.is_empty());
+    }
+
+    #[test]
+    fn should_notify_first_call_returns_true() {
+        let mut s = make_state(true, 30);
+        assert!(should_notify_impl(&mut s, "sess-1"));
+        assert_eq!(s.last_notified.len(), 1);
+    }
+
+    /// Regression: cooldown blocks duplicate notifications within window.
+    /// Defends against CQ #1 (cooldown logic dead-code regression).
+    #[test]
+    fn should_notify_within_cooldown_returns_false() {
+        let mut s = make_state(true, 30);
+        assert!(should_notify_impl(&mut s, "sess-1"));
+        // Immediate second call: same session, well within 30s.
+        assert!(!should_notify_impl(&mut s, "sess-1"));
+    }
+
+    #[test]
+    fn should_notify_cooldown_is_per_session() {
+        let mut s = make_state(true, 30);
+        assert!(should_notify_impl(&mut s, "sess-1"));
+        // Different session: cooldown does not apply.
+        assert!(should_notify_impl(&mut s, "sess-2"));
+    }
+
+    #[test]
+    fn should_notify_zero_cooldown_allows_back_to_back() {
+        let mut s = make_state(true, 0);
+        assert!(should_notify_impl(&mut s, "sess-1"));
+        // 0s cooldown means any positive elapsed unblocks the next call.
+        // Same-instant elapsed=0 still blocks per `<` comparison; that's fine.
+        // We only assert that with a longer wait it would unblock — verified via
+        // manual override below.
+        s.last_notified.insert(
+            "sess-1".to_string(),
+            Utc::now() - chrono::Duration::seconds(1),
+        );
+        assert!(should_notify_impl(&mut s, "sess-1"));
     }
 }
