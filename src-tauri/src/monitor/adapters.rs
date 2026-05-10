@@ -134,6 +134,54 @@ impl KiroAdapter {
         None
     }
 
+    /// Last user prompt (Q in the Q-A pairing). Kiro JSONL shape:
+    /// `{"kind":"Prompt","data":{"content":[{"kind":"text","data":"..."}]}}`
+    fn last_user_prompt_preview(&self, jsonl_path: &Path) -> Option<String> {
+        let lines = read_last_lines(jsonl_path, 50);
+        for line in lines.iter().rev() {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+                let kind = json.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+                if kind != "Prompt" {
+                    continue;
+                }
+                if let Some(content_arr) = json
+                    .get("data")
+                    .and_then(|d| d.get("content"))
+                    .and_then(|c| c.as_array())
+                {
+                    for block in content_arr {
+                        if block.get("kind").and_then(|k| k.as_str()) == Some("text") {
+                            if let Some(text) = block.get("data").and_then(|d| d.as_str()) {
+                                let trimmed = text.trim();
+                                if !trimmed.is_empty() {
+                                    return Some(truncate_preview(trimmed));
+                                }
+                            }
+                        }
+                    }
+                }
+                // Fallback: data.text or data as string for older Kiro variants.
+                if let Some(text) = json
+                    .get("data")
+                    .and_then(|d| d.get("text"))
+                    .and_then(|t| t.as_str())
+                {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        return Some(truncate_preview(trimmed));
+                    }
+                }
+                if let Some(text) = json.get("data").and_then(|d| d.as_str()) {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        return Some(truncate_preview(trimmed));
+                    }
+                }
+            }
+        }
+        None
+    }
+
     fn session_from_files(
         &self,
         session_id: &str,
@@ -222,6 +270,12 @@ impl KiroAdapter {
             None
         };
 
+        let last_user_prompt = if jsonl_path.exists() {
+            self.last_user_prompt_preview(&jsonl_path)
+        } else {
+            None
+        };
+
         Some(AgentSession {
             agent_type: "kiro".to_string(),
             source_tag: source_tag.to_string(),
@@ -236,6 +290,7 @@ impl KiroAdapter {
             data_limited_reason: None,
             pid,
             last_message_preview,
+            last_user_prompt,
         })
     }
 }
@@ -375,6 +430,52 @@ impl ClaudeCodeAdapter {
         None
     }
 
+    /// Last user prompt (Q in the Q-A pairing). Claude Code JSONL has two `type:"user"`
+    /// shapes: real prompts (`content` is a string or contains a `type:"text"` block)
+    /// and tool results (`content` is an array of `type:"tool_result"` blocks). Tool
+    /// results are NOT user input — skip them or the headline becomes "Tool returned…"
+    /// instead of "请帮我修…".
+    fn last_user_prompt_preview(&self, jsonl_path: &Path) -> Option<String> {
+        let lines = read_last_lines(jsonl_path, 50);
+        for line in lines.iter().rev() {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+                let msg_type = json.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                if msg_type != "user" {
+                    continue;
+                }
+                let content = match json.get("message").and_then(|m| m.get("content")) {
+                    Some(c) => c,
+                    None => continue,
+                };
+
+                // Plain string content — always a real user prompt.
+                if let Some(text) = content.as_str() {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        return Some(truncate_preview(trimmed));
+                    }
+                    continue;
+                }
+
+                // Array content — only count it as a user prompt if at least one block
+                // is `type:"text"`. Pure tool_result arrays are model output, not Q.
+                if let Some(arr) = content.as_array() {
+                    for block in arr.iter().rev() {
+                        if block.get("type").and_then(|t| t.as_str()) == Some("text") {
+                            if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                                let trimmed = text.trim();
+                                if !trimmed.is_empty() {
+                                    return Some(truncate_preview(trimmed));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
     fn detect_from_processes(&self, sys: &sysinfo::System) -> Vec<AgentSession> {
         let mut sessions = Vec::new();
         for (_, proc) in sys.processes() {
@@ -467,12 +568,17 @@ impl ClaudeCodeAdapter {
                 DateTime::from_timestamp(proc.start_time() as i64, 0).unwrap_or_default();
 
             // Read last message preview from session JSONL
-            let last_message_preview = if !cwd.is_empty() {
+            let jsonl_path = if !cwd.is_empty() {
                 self.find_latest_session_jsonl(&cwd)
-                    .and_then(|p| self.last_assistant_preview(&p))
             } else {
                 None
             };
+            let last_message_preview = jsonl_path
+                .as_ref()
+                .and_then(|p| self.last_assistant_preview(p));
+            let last_user_prompt = jsonl_path
+                .as_ref()
+                .and_then(|p| self.last_user_prompt_preview(p));
 
             sessions.push(AgentSession {
                 agent_type: "claude-code".to_string(),
@@ -488,6 +594,7 @@ impl ClaudeCodeAdapter {
                 data_limited_reason: None,
                 pid: Some(proc.pid().as_u32()),
                 last_message_preview,
+                last_user_prompt,
             });
         }
         sessions
@@ -589,6 +696,7 @@ impl CodexAdapter {
                 data_limited_reason: Some("monitor.data_limited_codex".to_string()),
                 pid: Some(proc.pid().as_u32()),
                 last_message_preview: None,
+                last_user_prompt: None,
             });
         }
         sessions
@@ -693,6 +801,7 @@ impl GeminiAdapter {
                     data_limited_reason: Some("monitor.data_limited_gemini".to_string()),
                     pid: Some(pid),
                     last_message_preview: None,
+                    last_user_prompt: None,
                 },
             ));
 
@@ -799,5 +908,111 @@ mod tests {
             format!("codex-{}", cwd_hash(cwd))
         };
         assert_eq!(id, "codex-pid1234");
+    }
+
+    // --- Q-prompt-A-reply: user prompt extraction ---
+
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn write_jsonl(lines: &[&str]) -> NamedTempFile {
+        let mut f = NamedTempFile::new().expect("create temp jsonl");
+        for line in lines {
+            writeln!(f, "{line}").expect("write line");
+        }
+        f.flush().expect("flush");
+        f
+    }
+
+    #[test]
+    fn kiro_extracts_last_user_prompt_from_content_array() {
+        let f = write_jsonl(&[
+            r#"{"kind":"Prompt","data":{"content":[{"kind":"text","data":"先归档所有 openspec"}]}}"#,
+        ]);
+        let adapter = KiroAdapter::new();
+        let got = adapter.last_user_prompt_preview(f.path());
+        assert_eq!(got.as_deref(), Some("先归档所有 openspec"));
+    }
+
+    #[test]
+    fn kiro_takes_most_recent_prompt_when_multiple() {
+        let f = write_jsonl(&[
+            r#"{"kind":"Prompt","data":{"content":[{"kind":"text","data":"first"}]}}"#,
+            r#"{"kind":"AssistantMessage","content":{"text":"reply"}}"#,
+            r#"{"kind":"Prompt","data":{"content":[{"kind":"text","data":"second"}]}}"#,
+        ]);
+        let adapter = KiroAdapter::new();
+        let got = adapter.last_user_prompt_preview(f.path());
+        assert_eq!(got.as_deref(), Some("second"));
+    }
+
+    /// Regression: assistant blocks must not be returned as the user prompt.
+    /// This was the root cause of the Q/A swap — the headline showed "Agent: 我已修复…"
+    /// instead of "User: 帮我修…".
+    #[test]
+    fn kiro_assistant_only_jsonl_returns_none() {
+        let f = write_jsonl(&[
+            r#"{"kind":"AssistantMessage","content":{"text":"only assistant here"}}"#,
+        ]);
+        let adapter = KiroAdapter::new();
+        assert_eq!(adapter.last_user_prompt_preview(f.path()), None);
+    }
+
+    #[test]
+    fn claude_code_extracts_user_prompt_from_string_content() {
+        let f = write_jsonl(&[
+            r#"{"type":"user","message":{"role":"user","content":"帮我看下这个 bug"}}"#,
+        ]);
+        let adapter = ClaudeCodeAdapter::new();
+        let got = adapter.last_user_prompt_preview(f.path());
+        assert_eq!(got.as_deref(), Some("帮我看下这个 bug"));
+    }
+
+    #[test]
+    fn claude_code_extracts_user_prompt_from_text_block() {
+        let f = write_jsonl(&[
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello with image"}]}}"#,
+        ]);
+        let adapter = ClaudeCodeAdapter::new();
+        let got = adapter.last_user_prompt_preview(f.path());
+        assert_eq!(got.as_deref(), Some("hello with image"));
+    }
+
+    /// Regression: tool_result entries are `type:"user"` in Claude Code JSONL but
+    /// they're model-side tool output, not user input. They must NOT be treated as
+    /// the user's last prompt.
+    #[test]
+    fn claude_code_skips_tool_result_only_user_messages() {
+        let f = write_jsonl(&[
+            r#"{"type":"user","message":{"role":"user","content":"原始的用户问题"}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"我去查"}]}}"#,
+            r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"call_1","type":"tool_result","content":[{"type":"text","text":"file contents..."}]}]}}"#,
+        ]);
+        let adapter = ClaudeCodeAdapter::new();
+        // Walks back from the end: tool_result line has no `text` block → skipped.
+        // First real prompt found is the original user question, NOT the tool result.
+        let got = adapter.last_user_prompt_preview(f.path());
+        assert_eq!(got.as_deref(), Some("原始的用户问题"));
+    }
+
+    #[test]
+    fn claude_code_assistant_only_jsonl_returns_none() {
+        let f = write_jsonl(&[
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"only assistant"}]}}"#,
+        ]);
+        let adapter = ClaudeCodeAdapter::new();
+        assert_eq!(adapter.last_user_prompt_preview(f.path()), None);
+    }
+
+    #[test]
+    fn claude_code_takes_text_block_when_mixed_with_tool_result() {
+        // A user turn that includes both tool_result AND a text block (e.g. user
+        // pasted text alongside an attachment) should still surface the text.
+        let f = write_jsonl(&[
+            r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"x","type":"tool_result","content":[]},{"type":"text","text":"看下这个"}]}}"#,
+        ]);
+        let adapter = ClaudeCodeAdapter::new();
+        let got = adapter.last_user_prompt_preview(f.path());
+        assert_eq!(got.as_deref(), Some("看下这个"));
     }
 }
