@@ -261,13 +261,15 @@ impl KiroAdapter {
             raw_title
         };
 
-        let status = if let Some(kind) = self.last_jsonl_status(&jsonl_path) {
+        let (status, working_state) = if let Some(kind) = self.last_jsonl_status(&jsonl_path) {
             match kind.as_str() {
-                "Prompt" => SessionStatus::Idle,
-                _ => SessionStatus::Active,
+                "Prompt" => (SessionStatus::Idle, WorkingState::Idle),
+                "ToolUseRequest" => (SessionStatus::Active, WorkingState::Working),
+                "AssistantMessage" => (SessionStatus::Active, WorkingState::Finished),
+                _ => (SessionStatus::Active, WorkingState::Idle),
             }
         } else {
-            SessionStatus::Idle
+            (SessionStatus::Idle, WorkingState::Idle)
         };
 
         let started_at = meta
@@ -320,6 +322,7 @@ impl KiroAdapter {
             pid,
             last_message_preview,
             last_user_prompt,
+            working_state,
         })
     }
 }
@@ -392,10 +395,6 @@ impl ClaudeCodeAdapter {
 
     fn projects_dir(&self) -> PathBuf {
         self.home.join(".claude/projects")
-    }
-
-    fn find_latest_session_jsonl(&self, cwd: &str) -> Option<PathBuf> {
-        self.find_session_jsonl(cwd, None)
     }
 
     /// Resolve the JSONL file for a Claude Code session.
@@ -535,6 +534,48 @@ impl ClaudeCodeAdapter {
         None
     }
 
+    /// Derive working state from the last meaningful line in the JSONL.
+    /// Claude Code writes `type:"user"` (Idle), `type:"assistant"` with
+    /// `stop_reason` (Finished), or `type:"assistant"` without it (Working).
+    fn working_state_from_jsonl(&self, jsonl_path: &Path) -> WorkingState {
+        let lines = read_last_lines(jsonl_path, 50);
+        for line in lines.iter().rev() {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+                let msg_type = json.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                if msg_type == "user" {
+                    let content = match json.get("message").and_then(|m| m.get("content")) {
+                        Some(c) => c,
+                        None => continue,
+                    };
+                    // Real user prompt (string or text block) → Idle.
+                    if content.as_str().is_some() {
+                        return WorkingState::Idle;
+                    }
+                    if let Some(arr) = content.as_array() {
+                        for block in arr.iter().rev() {
+                            if block.get("type").and_then(|t| t.as_str()) == Some("text") {
+                                return WorkingState::Idle;
+                            }
+                        }
+                    }
+                    continue; // tool_result-only user → skip
+                }
+                if msg_type == "assistant" {
+                    let has_stop_reason = json
+                        .get("message")
+                        .and_then(|m| m.get("stop_reason"))
+                        .is_some();
+                    return if has_stop_reason {
+                        WorkingState::Finished
+                    } else {
+                        WorkingState::Working
+                    };
+                }
+            }
+        }
+        WorkingState::Idle
+    }
+
     fn detect_from_processes(&self, sys: &sysinfo::System) -> Vec<AgentSession> {
         let mut sessions = Vec::new();
         for (_, proc) in sys.processes() {
@@ -646,6 +687,11 @@ impl ClaudeCodeAdapter {
                 .as_ref()
                 .and_then(|p| self.last_user_prompt_preview(p));
 
+            let working_state = jsonl_path
+                .as_ref()
+                .map(|p| self.working_state_from_jsonl(p))
+                .unwrap_or(WorkingState::Idle);
+
             sessions.push(AgentSession {
                 agent_type: "claude-code".to_string(),
                 source_tag: source_tag.to_string(),
@@ -661,6 +707,7 @@ impl ClaudeCodeAdapter {
                 pid: Some(proc.pid().as_u32()),
                 last_message_preview,
                 last_user_prompt,
+                working_state,
             });
         }
         sessions
@@ -763,6 +810,7 @@ impl CodexAdapter {
                 pid: Some(proc.pid().as_u32()),
                 last_message_preview: None,
                 last_user_prompt: None,
+                working_state: WorkingState::Idle,
             });
         }
         sessions
@@ -868,6 +916,7 @@ impl GeminiAdapter {
                     pid: Some(pid),
                     last_message_preview: None,
                     last_user_prompt: None,
+                    working_state: WorkingState::Idle,
                 },
             ));
 
@@ -1159,5 +1208,80 @@ mod tests {
         // No UUID hint, so resolver must encode cwd → project dir → newest jsonl.
         let got = adapter.find_session_jsonl("/Users/x/code/myapp", Some("claude-1234"));
         assert_eq!(got.as_deref(), Some(jsonl_path.as_path()));
+    }
+
+    // --- Tier-1 state machine (WorkingState) ---
+
+    #[test]
+    fn kiro_prompt_means_idle() {
+        let f = write_jsonl(&[
+            r#"{"kind":"Prompt","data":{"content":[{"kind":"text","data":"hello"}]}}"#,
+        ]);
+        let adapter = KiroAdapter::new();
+        let kind = adapter.last_jsonl_status(f.path());
+        assert_eq!(kind.as_deref(), Some("Prompt"));
+        // Mapping in session_from_files: Prompt → Idle
+    }
+
+    #[test]
+    fn kiro_tool_use_request_means_working() {
+        let f = write_jsonl(&[
+            r#"{"kind":"ToolUseRequest","data":{"name":"Read"}}"#,
+        ]);
+        let adapter = KiroAdapter::new();
+        let kind = adapter.last_jsonl_status(f.path());
+        assert_eq!(kind.as_deref(), Some("ToolUseRequest"));
+        // Mapping: ToolUseRequest → Working
+    }
+
+    #[test]
+    fn kiro_assistant_message_means_finished() {
+        let f = write_jsonl(&[
+            r#"{"kind":"AssistantMessage","data":{"content":[{"kind":"text","data":"done"}]}}"#,
+        ]);
+        let adapter = KiroAdapter::new();
+        let kind = adapter.last_jsonl_status(f.path());
+        assert_eq!(kind.as_deref(), Some("AssistantMessage"));
+        // Mapping: AssistantMessage → Finished
+    }
+
+    #[test]
+    fn claude_code_user_text_means_idle() {
+        let f = write_jsonl(&[
+            r#"{"type":"user","message":{"role":"user","content":"hello"}}"#,
+        ]);
+        let adapter = ClaudeCodeAdapter::new();
+        assert_eq!(adapter.working_state_from_jsonl(f.path()), WorkingState::Idle);
+    }
+
+    #[test]
+    fn claude_code_assistant_with_stop_reason_means_finished() {
+        let f = write_jsonl(&[
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}}"#,
+        ]);
+        let adapter = ClaudeCodeAdapter::new();
+        assert_eq!(adapter.working_state_from_jsonl(f.path()), WorkingState::Finished);
+    }
+
+    #[test]
+    fn claude_code_assistant_without_stop_reason_means_working() {
+        let f = write_jsonl(&[
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"thinking..."}]}}"#,
+        ]);
+        let adapter = ClaudeCodeAdapter::new();
+        assert_eq!(adapter.working_state_from_jsonl(f.path()), WorkingState::Working);
+    }
+
+    #[test]
+    fn claude_code_tool_result_user_skipped_looks_earlier() {
+        // tool_result-only user message is skipped; look at the preceding real prompt.
+        let f = write_jsonl(&[
+            r#"{"type":"user","message":{"role":"user","content":"original question"}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"let me check"}]}}"#,
+            r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"x","type":"tool_result","content":[]}]}}"#,
+        ]);
+        let adapter = ClaudeCodeAdapter::new();
+        // Last meaningful line is assistant (Working), tool_result is skipped.
+        assert_eq!(adapter.working_state_from_jsonl(f.path()), WorkingState::Working);
     }
 }
