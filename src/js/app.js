@@ -2660,6 +2660,10 @@ args = ["mcp-server-time"]
 
     async refreshMonitor() {
         try {
+            // Force a fresh scan up front so the UI doesn't sit on a stale cache
+            // between 5s polling ticks. ensure_scanned in the backend only runs
+            // on the very first call.
+            await Api.forcePollMonitor();
             const [sessions, config] = await Promise.all([
                 Api.getActiveSessions(),
                 Api.getMonitorConfig(),

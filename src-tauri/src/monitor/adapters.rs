@@ -627,10 +627,14 @@ impl ClaudeCodeAdapter {
                 DateTime::from_timestamp(proc.start_time() as i64, 0).unwrap_or_default();
 
             // Read last message preview from session JSONL.
-            // Pass session_id so processes resumed via `claude --resume <uuid>` find
-            // their JSONL across project dirs even when the process cwd has been
-            // changed via `cd` since startup.
-            let jsonl_path = if !cwd.is_empty() {
+            // Only attempt this when session_id is a real UUID — i.e. the process
+            // was started with `claude --resume <uuid>` so we can pin its jsonl
+            // file. Without a UUID the cwd-encoding fallback would just pick up
+            // the most-recent jsonl in that project dir, which usually belongs to
+            // *another* Claude Code instance and would mislabel this row's
+            // headline. Better to leave the fields None and let the UI fall back
+            // to the project title.
+            let jsonl_path = if !cwd.is_empty() && is_uuid(&session_id) {
                 self.find_session_jsonl(&cwd, Some(&session_id))
             } else {
                 None
