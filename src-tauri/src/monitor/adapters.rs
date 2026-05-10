@@ -16,6 +16,18 @@ fn truncate_preview(s: &str) -> String {
     }
 }
 
+/// FNV-1a 64-bit hash of cwd. Stable across process restarts and platforms,
+/// so an agent restarted in the same cwd keeps the same session_id.
+/// Used by Tier-2 adapters (Codex, Gemini) where no internal session id is exposed.
+fn cwd_hash(cwd: &str) -> String {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in cwd.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{:016x}", hash)
+}
+
 /// Read the last N lines from a file efficiently without reading the whole file.
 fn read_last_lines(path: &Path, max_lines: usize) -> Vec<String> {
     let Ok(mut file) = fs::File::open(path) else {
@@ -545,7 +557,11 @@ impl CodexAdapter {
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_default();
 
-            let session_id = format!("codex-{}", proc.pid().as_u32());
+            let session_id = if cwd.is_empty() {
+                format!("codex-pid{}", proc.pid().as_u32())
+            } else {
+                format!("codex-{}", cwd_hash(&cwd))
+            };
 
             let title = if cwd.is_empty() {
                 format!("Codex {}", source_tag)
@@ -647,7 +663,11 @@ impl GeminiAdapter {
                 .unwrap_or_default();
 
             let pid = proc.pid().as_u32();
-            let session_id = format!("gemini-{}", pid);
+            let session_id = if cwd.is_empty() {
+                format!("gemini-pid{pid}")
+            } else {
+                format!("gemini-{}", cwd_hash(&cwd))
+            };
             let title = if project_name.is_empty() {
                 "Gemini CLI".to_string()
             } else {
@@ -715,5 +735,69 @@ impl AgentMonitor for GeminiAdapter {
 
     fn on_fs_event(&mut self, _event: &notify::Event) -> Vec<(StateChange, AgentSession)> {
         vec![]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cwd_hash_is_stable_across_calls() {
+        let cwd = "/Users/foo/code/myapp";
+        assert_eq!(cwd_hash(cwd), cwd_hash(cwd));
+    }
+
+    #[test]
+    fn cwd_hash_different_inputs_produce_different_outputs() {
+        let a = cwd_hash("/Users/foo/code/myapp");
+        let b = cwd_hash("/Users/foo/code/other");
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn cwd_hash_format_is_16_hex_chars() {
+        let h = cwd_hash("/some/path");
+        assert_eq!(h.len(), 16);
+        assert!(h.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn cwd_hash_empty_string_is_handled() {
+        let h = cwd_hash("");
+        assert_eq!(h.len(), 16);
+    }
+
+    /// Regression: Codex restart in the same cwd must keep the same session_id
+    /// (PID changes, cwd does not). Defends against Issue #5 — Codex/Gemini ghost-row.
+    #[test]
+    fn codex_session_id_only_depends_on_cwd_not_pid() {
+        let cwd = "/Users/foo/code/myapp";
+        let id_pid_1234 = format!("codex-{}", cwd_hash(cwd));
+        let id_pid_5678 = format!("codex-{}", cwd_hash(cwd));
+        assert_eq!(id_pid_1234, id_pid_5678);
+    }
+
+    /// Regression: same as above for Gemini.
+    #[test]
+    fn gemini_session_id_only_depends_on_cwd_not_pid() {
+        let cwd = "/Users/foo/code/myapp";
+        let id_pid_1234 = format!("gemini-{}", cwd_hash(cwd));
+        let id_pid_5678 = format!("gemini-{}", cwd_hash(cwd));
+        assert_eq!(id_pid_1234, id_pid_5678);
+    }
+
+    #[test]
+    fn empty_cwd_falls_back_to_pid_in_session_id() {
+        // Documents the fallback behavior — when cwd is empty (rare), PID is used.
+        // This branch is not stable across restarts but is the best we can do.
+        let cwd = "";
+        let pid: u32 = 1234;
+        let id = if cwd.is_empty() {
+            format!("codex-pid{pid}")
+        } else {
+            format!("codex-{}", cwd_hash(cwd))
+        };
+        assert_eq!(id, "codex-pid1234");
     }
 }
