@@ -28,6 +28,35 @@ fn cwd_hash(cwd: &str) -> String {
     format!("{:016x}", hash)
 }
 
+/// Claude Code maps both `/` and `.` to `-` when deriving the project dir name.
+/// So `/Users/x/.claude/worktrees/foo` → `-Users-x--claude-worktrees-foo`.
+fn encode_claude_project_dir(cwd: &str) -> String {
+    cwd.trim_end_matches('/')
+        .chars()
+        .map(|c| if c == '/' || c == '.' { '-' } else { c })
+        .collect()
+}
+
+/// Check if a string looks like a Claude Code session UUID
+/// (8-4-4-4-12 lowercase hex with dashes).
+fn is_uuid(s: &str) -> bool {
+    if s.len() != 36 {
+        return false;
+    }
+    let bytes = s.as_bytes();
+    let dash_positions = [8, 13, 18, 23];
+    for (i, &b) in bytes.iter().enumerate() {
+        if dash_positions.contains(&i) {
+            if b != b'-' {
+                return false;
+            }
+        } else if !b.is_ascii_hexdigit() {
+            return false;
+        }
+    }
+    true
+}
+
 /// Read the last N lines from a file efficiently without reading the whole file.
 fn read_last_lines(path: &Path, max_lines: usize) -> Vec<String> {
     let Ok(mut file) = fs::File::open(path) else {
@@ -366,9 +395,39 @@ impl ClaudeCodeAdapter {
     }
 
     fn find_latest_session_jsonl(&self, cwd: &str) -> Option<PathBuf> {
-        // Claude Code stores sessions under ~/.claude/projects/{encoded_path}/
-        // The encoded path replaces / with -
-        let encoded = cwd.trim_end_matches('/').replace('/', "-");
+        self.find_session_jsonl(cwd, None)
+    }
+
+    /// Resolve the JSONL file for a Claude Code session.
+    ///
+    /// Strategy:
+    /// 1. If `session_id_hint` looks like a UUID (e.g. from `claude --resume <uuid>`),
+    ///    scan every project dir for `<uuid>.jsonl`. This is the only reliable path
+    ///    when the user starts Claude Code in cwd A then `cd`s into worktree B —
+    ///    sysinfo reports B as the process cwd, but the jsonl was written under A.
+    /// 2. Fallback to encoding `cwd` into the project dir name. Claude Code maps
+    ///    BOTH `/` and `.` to `-`, so `.claude` becomes `--claude`, not `.claude`.
+    fn find_session_jsonl(
+        &self,
+        cwd: &str,
+        session_id_hint: Option<&str>,
+    ) -> Option<PathBuf> {
+        // Step 1: try session_id-based lookup if it looks like a UUID.
+        if let Some(sid) = session_id_hint {
+            if is_uuid(sid) {
+                if let Ok(entries) = fs::read_dir(self.projects_dir()) {
+                    for entry in entries.flatten() {
+                        let candidate = entry.path().join(format!("{sid}.jsonl"));
+                        if candidate.exists() {
+                            return Some(candidate);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Step 2: encode cwd into project dir name and pick the latest jsonl.
+        let encoded = encode_claude_project_dir(cwd);
         let project_dir = self.projects_dir().join(&encoded);
         if !project_dir.exists() {
             return None;
@@ -567,9 +626,12 @@ impl ClaudeCodeAdapter {
             let started_at =
                 DateTime::from_timestamp(proc.start_time() as i64, 0).unwrap_or_default();
 
-            // Read last message preview from session JSONL
+            // Read last message preview from session JSONL.
+            // Pass session_id so processes resumed via `claude --resume <uuid>` find
+            // their JSONL across project dirs even when the process cwd has been
+            // changed via `cd` since startup.
             let jsonl_path = if !cwd.is_empty() {
-                self.find_latest_session_jsonl(&cwd)
+                self.find_session_jsonl(&cwd, Some(&session_id))
             } else {
                 None
             };
@@ -1014,5 +1076,84 @@ mod tests {
         let adapter = ClaudeCodeAdapter::new();
         let got = adapter.last_user_prompt_preview(f.path());
         assert_eq!(got.as_deref(), Some("看下这个"));
+    }
+
+    // --- jsonl path resolution: encoded-cwd & session_id-based ---
+
+    #[test]
+    fn encode_claude_project_dir_replaces_slash_and_dot() {
+        // Real-world: ~/.claude/worktrees/foo lives under "-Users-x--claude-worktrees-foo".
+        // Both `/` and `.` map to `-`.
+        assert_eq!(
+            encode_claude_project_dir("/Users/foo/.claude/worktrees/bar"),
+            "-Users-foo--claude-worktrees-bar"
+        );
+        assert_eq!(
+            encode_claude_project_dir("/Users/foo/code/agent-hub"),
+            "-Users-foo-code-agent-hub"
+        );
+    }
+
+    #[test]
+    fn encode_claude_project_dir_strips_trailing_slash() {
+        assert_eq!(encode_claude_project_dir("/foo/"), "-foo");
+    }
+
+    #[test]
+    fn is_uuid_accepts_canonical_form() {
+        assert!(is_uuid("260e932f-7946-4650-a23c-30ba12c7ef57"));
+    }
+
+    #[test]
+    fn is_uuid_rejects_pid_fallback_format() {
+        // session_id = "claude-{pid}" must not be treated as a UUID and trigger a
+        // global jsonl scan.
+        assert!(!is_uuid("claude-11476"));
+        assert!(!is_uuid(""));
+        assert!(!is_uuid("260e932f-7946-4650-a23c-30ba12c7ef5")); // 35 chars
+    }
+
+    /// Regression: the `--resume <uuid>` jsonl path must resolve even when the
+    /// process cwd no longer maps to the original project dir (user `cd`'d into
+    /// a subdir or worktree after starting Claude Code).
+    #[test]
+    fn find_session_jsonl_uses_uuid_when_cwd_dir_missing() {
+        use tempfile::TempDir;
+        let tmp = TempDir::new().unwrap();
+        let projects_dir = tmp.path().join(".claude/projects");
+        let real_dir = projects_dir.join("-Users-x-code-myapp");
+        fs::create_dir_all(&real_dir).unwrap();
+        let uuid = "260e932f-7946-4650-a23c-30ba12c7ef57";
+        let jsonl_path = real_dir.join(format!("{uuid}.jsonl"));
+        fs::write(&jsonl_path, "").unwrap();
+
+        let adapter = ClaudeCodeAdapter {
+            home: tmp.path().to_path_buf(),
+        };
+        // cwd reported by sysinfo points at a subdirectory whose encoded form
+        // does NOT exist as a project dir — but the UUID does.
+        let got = adapter.find_session_jsonl(
+            "/Users/x/code/myapp/.claude/worktrees/foo",
+            Some(uuid),
+        );
+        assert_eq!(got.as_deref(), Some(jsonl_path.as_path()));
+    }
+
+    #[test]
+    fn find_session_jsonl_falls_back_to_cwd_encoding_without_uuid() {
+        use tempfile::TempDir;
+        let tmp = TempDir::new().unwrap();
+        let projects_dir = tmp.path().join(".claude/projects");
+        let dir = projects_dir.join("-Users-x-code-myapp");
+        fs::create_dir_all(&dir).unwrap();
+        let jsonl_path = dir.join("session-a.jsonl");
+        fs::write(&jsonl_path, "").unwrap();
+
+        let adapter = ClaudeCodeAdapter {
+            home: tmp.path().to_path_buf(),
+        };
+        // No UUID hint, so resolver must encode cwd → project dir → newest jsonl.
+        let got = adapter.find_session_jsonl("/Users/x/code/myapp", Some("claude-1234"));
+        assert_eq!(got.as_deref(), Some(jsonl_path.as_path()));
     }
 }
