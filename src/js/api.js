@@ -162,3 +162,7 @@ export async function setMonitorConfig({ notification_enabled, notification_cool
 export async function setMonitorPolling(enabled) {
     return invoke('set_monitor_polling', { enabled });
 }
+
+export async function forcePollMonitor() {
+    return invoke('force_poll_monitor');
+}

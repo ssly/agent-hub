@@ -28,6 +28,35 @@ fn cwd_hash(cwd: &str) -> String {
     format!("{:016x}", hash)
 }
 
+/// Claude Code maps both `/` and `.` to `-` when deriving the project dir name.
+/// So `/Users/x/.claude/worktrees/foo` → `-Users-x--claude-worktrees-foo`.
+fn encode_claude_project_dir(cwd: &str) -> String {
+    cwd.trim_end_matches('/')
+        .chars()
+        .map(|c| if c == '/' || c == '.' { '-' } else { c })
+        .collect()
+}
+
+/// Check if a string looks like a Claude Code session UUID
+/// (8-4-4-4-12 lowercase hex with dashes).
+fn is_uuid(s: &str) -> bool {
+    if s.len() != 36 {
+        return false;
+    }
+    let bytes = s.as_bytes();
+    let dash_positions = [8, 13, 18, 23];
+    for (i, &b) in bytes.iter().enumerate() {
+        if dash_positions.contains(&i) {
+            if b != b'-' {
+                return false;
+            }
+        } else if !b.is_ascii_hexdigit() {
+            return false;
+        }
+    }
+    true
+}
+
 /// Read the last N lines from a file efficiently without reading the whole file.
 fn read_last_lines(path: &Path, max_lines: usize) -> Vec<String> {
     let Ok(mut file) = fs::File::open(path) else {
@@ -134,6 +163,54 @@ impl KiroAdapter {
         None
     }
 
+    /// Last user prompt (Q in the Q-A pairing). Kiro JSONL shape:
+    /// `{"kind":"Prompt","data":{"content":[{"kind":"text","data":"..."}]}}`
+    fn last_user_prompt_preview(&self, jsonl_path: &Path) -> Option<String> {
+        let lines = read_last_lines(jsonl_path, 50);
+        for line in lines.iter().rev() {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+                let kind = json.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+                if kind != "Prompt" {
+                    continue;
+                }
+                if let Some(content_arr) = json
+                    .get("data")
+                    .and_then(|d| d.get("content"))
+                    .and_then(|c| c.as_array())
+                {
+                    for block in content_arr {
+                        if block.get("kind").and_then(|k| k.as_str()) == Some("text") {
+                            if let Some(text) = block.get("data").and_then(|d| d.as_str()) {
+                                let trimmed = text.trim();
+                                if !trimmed.is_empty() {
+                                    return Some(truncate_preview(trimmed));
+                                }
+                            }
+                        }
+                    }
+                }
+                // Fallback: data.text or data as string for older Kiro variants.
+                if let Some(text) = json
+                    .get("data")
+                    .and_then(|d| d.get("text"))
+                    .and_then(|t| t.as_str())
+                {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        return Some(truncate_preview(trimmed));
+                    }
+                }
+                if let Some(text) = json.get("data").and_then(|d| d.as_str()) {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        return Some(truncate_preview(trimmed));
+                    }
+                }
+            }
+        }
+        None
+    }
+
     fn session_from_files(
         &self,
         session_id: &str,
@@ -222,6 +299,12 @@ impl KiroAdapter {
             None
         };
 
+        let last_user_prompt = if jsonl_path.exists() {
+            self.last_user_prompt_preview(&jsonl_path)
+        } else {
+            None
+        };
+
         Some(AgentSession {
             agent_type: "kiro".to_string(),
             source_tag: source_tag.to_string(),
@@ -236,6 +319,7 @@ impl KiroAdapter {
             data_limited_reason: None,
             pid,
             last_message_preview,
+            last_user_prompt,
         })
     }
 }
@@ -311,9 +395,39 @@ impl ClaudeCodeAdapter {
     }
 
     fn find_latest_session_jsonl(&self, cwd: &str) -> Option<PathBuf> {
-        // Claude Code stores sessions under ~/.claude/projects/{encoded_path}/
-        // The encoded path replaces / with -
-        let encoded = cwd.trim_end_matches('/').replace('/', "-");
+        self.find_session_jsonl(cwd, None)
+    }
+
+    /// Resolve the JSONL file for a Claude Code session.
+    ///
+    /// Strategy:
+    /// 1. If `session_id_hint` looks like a UUID (e.g. from `claude --resume <uuid>`),
+    ///    scan every project dir for `<uuid>.jsonl`. This is the only reliable path
+    ///    when the user starts Claude Code in cwd A then `cd`s into worktree B —
+    ///    sysinfo reports B as the process cwd, but the jsonl was written under A.
+    /// 2. Fallback to encoding `cwd` into the project dir name. Claude Code maps
+    ///    BOTH `/` and `.` to `-`, so `.claude` becomes `--claude`, not `.claude`.
+    fn find_session_jsonl(
+        &self,
+        cwd: &str,
+        session_id_hint: Option<&str>,
+    ) -> Option<PathBuf> {
+        // Step 1: try session_id-based lookup if it looks like a UUID.
+        if let Some(sid) = session_id_hint {
+            if is_uuid(sid) {
+                if let Ok(entries) = fs::read_dir(self.projects_dir()) {
+                    for entry in entries.flatten() {
+                        let candidate = entry.path().join(format!("{sid}.jsonl"));
+                        if candidate.exists() {
+                            return Some(candidate);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Step 2: encode cwd into project dir name and pick the latest jsonl.
+        let encoded = encode_claude_project_dir(cwd);
         let project_dir = self.projects_dir().join(&encoded);
         if !project_dir.exists() {
             return None;
@@ -367,6 +481,52 @@ impl ClaudeCodeAdapter {
                         let trimmed = text.trim();
                         if !trimmed.is_empty() {
                             return Some(truncate_preview(trimmed));
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Last user prompt (Q in the Q-A pairing). Claude Code JSONL has two `type:"user"`
+    /// shapes: real prompts (`content` is a string or contains a `type:"text"` block)
+    /// and tool results (`content` is an array of `type:"tool_result"` blocks). Tool
+    /// results are NOT user input — skip them or the headline becomes "Tool returned…"
+    /// instead of "请帮我修…".
+    fn last_user_prompt_preview(&self, jsonl_path: &Path) -> Option<String> {
+        let lines = read_last_lines(jsonl_path, 50);
+        for line in lines.iter().rev() {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+                let msg_type = json.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                if msg_type != "user" {
+                    continue;
+                }
+                let content = match json.get("message").and_then(|m| m.get("content")) {
+                    Some(c) => c,
+                    None => continue,
+                };
+
+                // Plain string content — always a real user prompt.
+                if let Some(text) = content.as_str() {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        return Some(truncate_preview(trimmed));
+                    }
+                    continue;
+                }
+
+                // Array content — only count it as a user prompt if at least one block
+                // is `type:"text"`. Pure tool_result arrays are model output, not Q.
+                if let Some(arr) = content.as_array() {
+                    for block in arr.iter().rev() {
+                        if block.get("type").and_then(|t| t.as_str()) == Some("text") {
+                            if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                                let trimmed = text.trim();
+                                if !trimmed.is_empty() {
+                                    return Some(truncate_preview(trimmed));
+                                }
+                            }
                         }
                     }
                 }
@@ -466,13 +626,25 @@ impl ClaudeCodeAdapter {
             let started_at =
                 DateTime::from_timestamp(proc.start_time() as i64, 0).unwrap_or_default();
 
-            // Read last message preview from session JSONL
-            let last_message_preview = if !cwd.is_empty() {
-                self.find_latest_session_jsonl(&cwd)
-                    .and_then(|p| self.last_assistant_preview(&p))
+            // Read last message preview from session JSONL.
+            // Only attempt this when session_id is a real UUID — i.e. the process
+            // was started with `claude --resume <uuid>` so we can pin its jsonl
+            // file. Without a UUID the cwd-encoding fallback would just pick up
+            // the most-recent jsonl in that project dir, which usually belongs to
+            // *another* Claude Code instance and would mislabel this row's
+            // headline. Better to leave the fields None and let the UI fall back
+            // to the project title.
+            let jsonl_path = if !cwd.is_empty() && is_uuid(&session_id) {
+                self.find_session_jsonl(&cwd, Some(&session_id))
             } else {
                 None
             };
+            let last_message_preview = jsonl_path
+                .as_ref()
+                .and_then(|p| self.last_assistant_preview(p));
+            let last_user_prompt = jsonl_path
+                .as_ref()
+                .and_then(|p| self.last_user_prompt_preview(p));
 
             sessions.push(AgentSession {
                 agent_type: "claude-code".to_string(),
@@ -488,6 +660,7 @@ impl ClaudeCodeAdapter {
                 data_limited_reason: None,
                 pid: Some(proc.pid().as_u32()),
                 last_message_preview,
+                last_user_prompt,
             });
         }
         sessions
@@ -589,6 +762,7 @@ impl CodexAdapter {
                 data_limited_reason: Some("monitor.data_limited_codex".to_string()),
                 pid: Some(proc.pid().as_u32()),
                 last_message_preview: None,
+                last_user_prompt: None,
             });
         }
         sessions
@@ -693,6 +867,7 @@ impl GeminiAdapter {
                     data_limited_reason: Some("monitor.data_limited_gemini".to_string()),
                     pid: Some(pid),
                     last_message_preview: None,
+                    last_user_prompt: None,
                 },
             ));
 
@@ -799,5 +974,190 @@ mod tests {
             format!("codex-{}", cwd_hash(cwd))
         };
         assert_eq!(id, "codex-pid1234");
+    }
+
+    // --- Q-prompt-A-reply: user prompt extraction ---
+
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn write_jsonl(lines: &[&str]) -> NamedTempFile {
+        let mut f = NamedTempFile::new().expect("create temp jsonl");
+        for line in lines {
+            writeln!(f, "{line}").expect("write line");
+        }
+        f.flush().expect("flush");
+        f
+    }
+
+    #[test]
+    fn kiro_extracts_last_user_prompt_from_content_array() {
+        let f = write_jsonl(&[
+            r#"{"kind":"Prompt","data":{"content":[{"kind":"text","data":"先归档所有 openspec"}]}}"#,
+        ]);
+        let adapter = KiroAdapter::new();
+        let got = adapter.last_user_prompt_preview(f.path());
+        assert_eq!(got.as_deref(), Some("先归档所有 openspec"));
+    }
+
+    #[test]
+    fn kiro_takes_most_recent_prompt_when_multiple() {
+        let f = write_jsonl(&[
+            r#"{"kind":"Prompt","data":{"content":[{"kind":"text","data":"first"}]}}"#,
+            r#"{"kind":"AssistantMessage","content":{"text":"reply"}}"#,
+            r#"{"kind":"Prompt","data":{"content":[{"kind":"text","data":"second"}]}}"#,
+        ]);
+        let adapter = KiroAdapter::new();
+        let got = adapter.last_user_prompt_preview(f.path());
+        assert_eq!(got.as_deref(), Some("second"));
+    }
+
+    /// Regression: assistant blocks must not be returned as the user prompt.
+    /// This was the root cause of the Q/A swap — the headline showed "Agent: 我已修复…"
+    /// instead of "User: 帮我修…".
+    #[test]
+    fn kiro_assistant_only_jsonl_returns_none() {
+        let f = write_jsonl(&[
+            r#"{"kind":"AssistantMessage","content":{"text":"only assistant here"}}"#,
+        ]);
+        let adapter = KiroAdapter::new();
+        assert_eq!(adapter.last_user_prompt_preview(f.path()), None);
+    }
+
+    #[test]
+    fn claude_code_extracts_user_prompt_from_string_content() {
+        let f = write_jsonl(&[
+            r#"{"type":"user","message":{"role":"user","content":"帮我看下这个 bug"}}"#,
+        ]);
+        let adapter = ClaudeCodeAdapter::new();
+        let got = adapter.last_user_prompt_preview(f.path());
+        assert_eq!(got.as_deref(), Some("帮我看下这个 bug"));
+    }
+
+    #[test]
+    fn claude_code_extracts_user_prompt_from_text_block() {
+        let f = write_jsonl(&[
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello with image"}]}}"#,
+        ]);
+        let adapter = ClaudeCodeAdapter::new();
+        let got = adapter.last_user_prompt_preview(f.path());
+        assert_eq!(got.as_deref(), Some("hello with image"));
+    }
+
+    /// Regression: tool_result entries are `type:"user"` in Claude Code JSONL but
+    /// they're model-side tool output, not user input. They must NOT be treated as
+    /// the user's last prompt.
+    #[test]
+    fn claude_code_skips_tool_result_only_user_messages() {
+        let f = write_jsonl(&[
+            r#"{"type":"user","message":{"role":"user","content":"原始的用户问题"}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"我去查"}]}}"#,
+            r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"call_1","type":"tool_result","content":[{"type":"text","text":"file contents..."}]}]}}"#,
+        ]);
+        let adapter = ClaudeCodeAdapter::new();
+        // Walks back from the end: tool_result line has no `text` block → skipped.
+        // First real prompt found is the original user question, NOT the tool result.
+        let got = adapter.last_user_prompt_preview(f.path());
+        assert_eq!(got.as_deref(), Some("原始的用户问题"));
+    }
+
+    #[test]
+    fn claude_code_assistant_only_jsonl_returns_none() {
+        let f = write_jsonl(&[
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"only assistant"}]}}"#,
+        ]);
+        let adapter = ClaudeCodeAdapter::new();
+        assert_eq!(adapter.last_user_prompt_preview(f.path()), None);
+    }
+
+    #[test]
+    fn claude_code_takes_text_block_when_mixed_with_tool_result() {
+        // A user turn that includes both tool_result AND a text block (e.g. user
+        // pasted text alongside an attachment) should still surface the text.
+        let f = write_jsonl(&[
+            r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"x","type":"tool_result","content":[]},{"type":"text","text":"看下这个"}]}}"#,
+        ]);
+        let adapter = ClaudeCodeAdapter::new();
+        let got = adapter.last_user_prompt_preview(f.path());
+        assert_eq!(got.as_deref(), Some("看下这个"));
+    }
+
+    // --- jsonl path resolution: encoded-cwd & session_id-based ---
+
+    #[test]
+    fn encode_claude_project_dir_replaces_slash_and_dot() {
+        // Real-world: ~/.claude/worktrees/foo lives under "-Users-x--claude-worktrees-foo".
+        // Both `/` and `.` map to `-`.
+        assert_eq!(
+            encode_claude_project_dir("/Users/foo/.claude/worktrees/bar"),
+            "-Users-foo--claude-worktrees-bar"
+        );
+        assert_eq!(
+            encode_claude_project_dir("/Users/foo/code/agent-hub"),
+            "-Users-foo-code-agent-hub"
+        );
+    }
+
+    #[test]
+    fn encode_claude_project_dir_strips_trailing_slash() {
+        assert_eq!(encode_claude_project_dir("/foo/"), "-foo");
+    }
+
+    #[test]
+    fn is_uuid_accepts_canonical_form() {
+        assert!(is_uuid("260e932f-7946-4650-a23c-30ba12c7ef57"));
+    }
+
+    #[test]
+    fn is_uuid_rejects_pid_fallback_format() {
+        // session_id = "claude-{pid}" must not be treated as a UUID and trigger a
+        // global jsonl scan.
+        assert!(!is_uuid("claude-11476"));
+        assert!(!is_uuid(""));
+        assert!(!is_uuid("260e932f-7946-4650-a23c-30ba12c7ef5")); // 35 chars
+    }
+
+    /// Regression: the `--resume <uuid>` jsonl path must resolve even when the
+    /// process cwd no longer maps to the original project dir (user `cd`'d into
+    /// a subdir or worktree after starting Claude Code).
+    #[test]
+    fn find_session_jsonl_uses_uuid_when_cwd_dir_missing() {
+        use tempfile::TempDir;
+        let tmp = TempDir::new().unwrap();
+        let projects_dir = tmp.path().join(".claude/projects");
+        let real_dir = projects_dir.join("-Users-x-code-myapp");
+        fs::create_dir_all(&real_dir).unwrap();
+        let uuid = "260e932f-7946-4650-a23c-30ba12c7ef57";
+        let jsonl_path = real_dir.join(format!("{uuid}.jsonl"));
+        fs::write(&jsonl_path, "").unwrap();
+
+        let adapter = ClaudeCodeAdapter {
+            home: tmp.path().to_path_buf(),
+        };
+        // cwd reported by sysinfo points at a subdirectory whose encoded form
+        // does NOT exist as a project dir — but the UUID does.
+        let got = adapter.find_session_jsonl(
+            "/Users/x/code/myapp/.claude/worktrees/foo",
+            Some(uuid),
+        );
+        assert_eq!(got.as_deref(), Some(jsonl_path.as_path()));
+    }
+
+    #[test]
+    fn find_session_jsonl_falls_back_to_cwd_encoding_without_uuid() {
+        use tempfile::TempDir;
+        let tmp = TempDir::new().unwrap();
+        let projects_dir = tmp.path().join(".claude/projects");
+        let dir = projects_dir.join("-Users-x-code-myapp");
+        fs::create_dir_all(&dir).unwrap();
+        let jsonl_path = dir.join("session-a.jsonl");
+        fs::write(&jsonl_path, "").unwrap();
+
+        let adapter = ClaudeCodeAdapter {
+            home: tmp.path().to_path_buf(),
+        };
+        // No UUID hint, so resolver must encode cwd → project dir → newest jsonl.
+        let got = adapter.find_session_jsonl("/Users/x/code/myapp", Some("claude-1234"));
+        assert_eq!(got.as_deref(), Some(jsonl_path.as_path()));
     }
 }

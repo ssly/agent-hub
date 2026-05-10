@@ -92,6 +92,7 @@ pub fn run() {
             commands::get_monitor_config,
             commands::set_monitor_config,
             commands::set_monitor_polling,
+            commands::force_poll_monitor,
         ])
         .run(tauri::generate_context!())
         .expect("error while running agent-hub");
