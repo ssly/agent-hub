@@ -202,6 +202,11 @@
     "last_message": "Last output",
     "no_preview": "No output yet",
     "view_detail": "Click to expand",
+    "working_state": {
+      "working": "Working...",
+      "idle": "Waiting for reply...",
+      "finished": "Finished"
+    },
     "status": {
       "active": "Running",
       "idle": "Idle",

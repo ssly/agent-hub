@@ -31,6 +31,18 @@ pub enum StateChange {
     Removed,
 }
 
+/// WorkingState represents what the agent is *doing* right now within a turn.
+/// Tier-1 adapters (Kiro, Claude Code) derive this from JSONL parsing.
+/// Tier-2 adapters (Codex, Gemini) leave it at Idle since they don't parse logs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkingState {
+    #[default]
+    Idle,
+    Working,
+    Finished,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentSession {
     pub agent_type: String,
@@ -51,6 +63,10 @@ pub struct AgentSession {
     /// `None` for Tier-2 adapters (Codex/Gemini) that do not parse JSONL.
     #[serde(default)]
     pub last_user_prompt: Option<String>,
+    /// What the agent is doing right now (idle / working / finished).
+    /// Tier-1 adapters derive this from JSONL; Tier-2 defaults to Idle.
+    #[serde(default)]
+    pub working_state: WorkingState,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

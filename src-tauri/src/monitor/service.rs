@@ -119,7 +119,7 @@ impl<R: Runtime> MonitorService<R> {
 
         for id in new_ids.intersection(&old_ids) {
             if let Some(session) = detected.get(id) {
-                let old_status = state.sessions.get(id).map(|s| s.status);
+                let old_working_state = state.sessions.get(id).map(|s| s.working_state);
                 state
                     .sessions
                     .insert(id.clone(), session.clone());
@@ -131,9 +131,9 @@ impl<R: Runtime> MonitorService<R> {
                     }),
                 );
 
-                // Turn-end semantic: Active → Idle/Completed.
+                // Turn-end semantic: Working → Finished.
                 // Notification fires here, NOT on `removed` (kill -9 must stay silent).
-                let is_turn_end = is_turn_end_transition(old_status, session.status);
+                let is_turn_end = is_turn_end_transition(old_working_state, session.working_state);
                 if is_turn_end && Self::should_notify(&mut state, &session.session_id) {
                     let title = session.title.clone();
                     let body = format!("[{}] {}", session.agent_type, title);
@@ -206,11 +206,11 @@ impl<R: Runtime> MonitorService<R> {
     }
 }
 
-/// Pure transition predicate. Active → Idle/Completed counts as a turn-end.
-/// Anything else (including Active → Ended from a kill) does not.
-fn is_turn_end_transition(old: Option<SessionStatus>, new: SessionStatus) -> bool {
-    matches!(old, Some(SessionStatus::Active))
-        && matches!(new, SessionStatus::Idle | SessionStatus::Completed)
+/// Pure transition predicate. Working → Finished counts as a turn-end.
+/// Anything else (including Working → Ended from a kill) does not.
+fn is_turn_end_transition(old: Option<WorkingState>, new: WorkingState) -> bool {
+    matches!(old, Some(WorkingState::Working))
+        && matches!(new, WorkingState::Finished)
 }
 
 /// Cooldown + enabled gate for turn-end notifications. Pure on `state`.
@@ -243,42 +243,34 @@ mod tests {
     }
 
     #[test]
-    fn turn_end_active_to_idle_is_true() {
+    fn turn_end_working_to_finished_is_true() {
         assert!(is_turn_end_transition(
-            Some(SessionStatus::Active),
-            SessionStatus::Idle,
+            Some(WorkingState::Working),
+            WorkingState::Finished,
         ));
     }
 
-    #[test]
-    fn turn_end_active_to_completed_is_true() {
-        assert!(is_turn_end_transition(
-            Some(SessionStatus::Active),
-            SessionStatus::Completed,
-        ));
-    }
-
-    /// Regression: kill -9 (Active → Ended via removed branch) must NOT count
+    /// Regression: kill -9 (Working → Ended via removed branch) must NOT count
     /// as turn-end. Defends against Issue #4 (kill misclassified as completion).
     #[test]
-    fn turn_end_active_to_ended_is_false() {
+    fn turn_end_working_to_idle_is_false() {
         assert!(!is_turn_end_transition(
-            Some(SessionStatus::Active),
-            SessionStatus::Ended,
+            Some(WorkingState::Working),
+            WorkingState::Idle,
         ));
     }
 
     #[test]
     fn turn_end_no_prior_state_is_false() {
         // First sighting (added) is not a turn-end.
-        assert!(!is_turn_end_transition(None, SessionStatus::Idle));
+        assert!(!is_turn_end_transition(None, WorkingState::Finished));
     }
 
     #[test]
-    fn turn_end_idle_to_idle_is_false() {
+    fn turn_end_idle_to_finished_is_false() {
         assert!(!is_turn_end_transition(
-            Some(SessionStatus::Idle),
-            SessionStatus::Idle,
+            Some(WorkingState::Idle),
+            WorkingState::Finished,
         ));
     }
 
