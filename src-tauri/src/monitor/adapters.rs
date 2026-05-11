@@ -137,7 +137,24 @@ impl KiroAdapter {
                 if kind != "AssistantMessage" {
                     continue;
                 }
-                // Try content.text field first
+                // Kiro format: {"kind":"AssistantMessage","data":{"content":[{"kind":"text","data":"..."}]}}
+                if let Some(content_arr) = json
+                    .get("data")
+                    .and_then(|d| d.get("content"))
+                    .and_then(|c| c.as_array())
+                {
+                    for block in content_arr.iter().rev() {
+                        if block.get("kind").and_then(|k| k.as_str()) == Some("text") {
+                            if let Some(text) = block.get("data").and_then(|d| d.as_str()) {
+                                let trimmed = text.trim();
+                                if !trimmed.is_empty() {
+                                    return Some(truncate_preview(trimmed));
+                                }
+                            }
+                        }
+                    }
+                }
+                // Fallback: flat format content.text
                 if let Some(text) = json
                     .get("content")
                     .and_then(|c| c.get("text"))
@@ -148,7 +165,7 @@ impl KiroAdapter {
                         return Some(truncate_preview(trimmed));
                     }
                 }
-                // Fallback: content might be a string directly
+                // Fallback: content as string
                 if let Some(text) = json
                     .get("content")
                     .and_then(|c| c.as_str())

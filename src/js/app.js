@@ -1908,6 +1908,9 @@ args = ["mcp-server-time"]
                 el.innerHTML = `<p class="text-gray-500 text-sm p-3">${i.t('monitor.empty')}</p>`;
                 return;
             }
+            if (!this.selectedMonitorAgent || !withSessions.some(g => g.id === this.selectedMonitorAgent)) {
+                this.selectedMonitorAgent = withSessions[0].id;
+            }
             el.innerHTML = withSessions.map(g => {
                 const count = activeSessions.filter(s => s.agent_type === g.id).length;
                 const active = this.selectedMonitorAgent === g.id;
@@ -2674,6 +2677,7 @@ args = ["mcp-server-time"]
             console.error('Failed to load monitor data:', err);
             this.monitorSessions = [];
         }
+        this.render();
     }
 
     startMonitorListener() {
