@@ -47,30 +47,10 @@ function normalizeDownloadEventKind(value) {
     return '';
 }
 
-function formatBytes(bytes) {
-    if (!Number.isFinite(bytes) || bytes < 0) return '--';
-    if (bytes < 1024) return `${Math.round(bytes)} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-}
-
 function formatInt(value) {
     const n = Number(value);
     if (!Number.isFinite(n)) return '--';
     return Math.round(n).toLocaleString();
-}
-
-function formatDuration(seconds) {
-    if (!Number.isFinite(seconds) || seconds < 0) return '--';
-    const total = Math.round(seconds);
-    if (total < 60) return `${total}s`;
-    const minutes = Math.floor(total / 60);
-    const secs = total % 60;
-    if (minutes < 60) return `${minutes}m ${secs}s`;
-    const hours = Math.floor(minutes / 60);
-    const mins = minutes % 60;
-    return `${hours}h ${mins}m`;
 }
 
 function parseDownloadProgressEvent(event) {
@@ -431,11 +411,9 @@ class App {
         const i = this.i18n;
         const update = this.update;
         const transition = i.tWith('update.transition', { current: update.currentVersion, latest: update.version });
-        const bodyHtml = update.body ? `<div class="text-sm text-gray-400 mb-4 max-h-32 overflow-y-auto whitespace-pre-wrap">${esc(update.body)}</div>` : '';
         const html = `<div class="p-5">
-            <h2 class="text-lg font-bold text-yellow-400 mb-3">${i.t('update.title')}</h2>
-            <p class="text-sm text-green-400 font-mono mb-3">${transition}</p>
-            ${bodyHtml}
+            <h2 class="text-lg font-bold text-yellow-400 mb-4">${i.t('update.title')}</h2>
+            <p class="text-sm text-green-400 font-mono mb-4">${transition}</p>
             <div id="update-status" class="text-sm text-gray-500 mb-3"></div>
             <div id="update-progress-wrap" class="mb-3 hidden">
                 <div style="height:6px;background:#111827;border-radius:9999px;overflow:hidden;border:1px solid #374151;">
@@ -443,7 +421,7 @@ class App {
                 </div>
                 <div id="update-progress-text" class="text-xs text-gray-500 mt-1"></div>
             </div>
-            <div class="flex gap-3 justify-end">
+            <div id="update-actions" class="flex gap-3 justify-end">
                 <button class="px-4 py-2 bg-green-700 hover:bg-green-600 rounded text-sm cursor-pointer update-confirm-btn">${i.t('update.confirm')}</button>
                 <button class="px-4 py-2 text-gray-400 hover:text-white text-sm cursor-pointer modal-cancel">${i.t('action.cancel')}</button>
             </div>
@@ -459,107 +437,32 @@ class App {
         const progressWrapEl = document.getElementById('update-progress-wrap');
         const progressBarEl = document.getElementById('update-progress-bar');
         const progressTextEl = document.getElementById('update-progress-text');
+        const actionsEl = document.getElementById('update-actions');
         const confirmBtn = this.modalEl().querySelector('.update-confirm-btn');
         const cancelBtn = this.modalEl().querySelector('.modal-cancel');
-        const progress = {
-            downloadedBytes: 0,
-            totalBytes: null,
-            percent: 0,
-            speedBps: 0,
-            lastProgressAt: 0,
-            lastDownloadedBytes: 0,
-            attempt: 1,
-            resumedFrom: 0,
-        };
-        const maxAttempts = 4;
-        const indeterminate = {
-            timer: null,
-            step: 0,
-        };
-        const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+        const DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+        let percent = 0;
+        let downloadTimer = null;
 
-        const stopIndeterminate = () => {
-            if (indeterminate.timer) {
-                clearInterval(indeterminate.timer);
-                indeterminate.timer = null;
+        const setProgressPercent = (p) => {
+            percent = Math.max(0, Math.min(100, p));
+            if (progressBarEl) progressBarEl.style.width = `${percent.toFixed(1)}%`;
+            if (progressTextEl) progressTextEl.textContent = `${Math.round(percent)}%`;
+        };
+
+        const showRetry = (errorMsg) => {
+            statusEl.textContent = errorMsg;
+            if (actionsEl) {
+                actionsEl.innerHTML = `<button class="px-4 py-2 bg-green-700 hover:bg-green-600 rounded text-sm cursor-pointer update-retry-btn">${i.t('update.retry')}</button>
+                <button class="px-4 py-2 text-gray-400 hover:text-white text-sm cursor-pointer modal-cancel">${i.t('action.cancel')}</button>`;
+                actionsEl.querySelector('.update-retry-btn').addEventListener('click', () => {
+                    actionsEl.innerHTML = `<button class="px-4 py-2 bg-green-700 hover:bg-green-600 rounded text-sm cursor-pointer update-confirm-btn opacity-50" disabled>${i.t('update.confirm')}</button>
+                    <button class="px-4 py-2 text-gray-400 hover:text-white text-sm cursor-pointer modal-cancel">${i.t('action.cancel')}</button>`;
+                    actionsEl.querySelector('.modal-cancel').addEventListener('click', () => this.closeModal());
+                    this.doUpdate();
+                });
+                actionsEl.querySelector('.modal-cancel').addEventListener('click', () => this.closeModal());
             }
-            if (progressBarEl) progressBarEl.style.opacity = '1';
-        };
-
-        const startIndeterminate = () => {
-            if (!progressBarEl || indeterminate.timer) return;
-            indeterminate.step = 0;
-            progressBarEl.style.opacity = '0.85';
-            indeterminate.timer = setInterval(() => {
-                indeterminate.step = (indeterminate.step + 1) % 100;
-                const width = 8 + indeterminate.step * 0.9;
-                progressBarEl.style.width = `${width.toFixed(1)}%`;
-            }, 160);
-        };
-
-        const setProgressPercent = (percent) => {
-            const normalized = Math.max(0, Math.min(100, Number(percent) || 0));
-            progress.percent = normalized;
-            if (progressBarEl) progressBarEl.style.width = `${normalized.toFixed(1)}%`;
-        };
-
-        const renderProgress = () => {
-            const hasTotal = Number.isFinite(progress.totalBytes) && progress.totalBytes > 0;
-            if (hasTotal) {
-                stopIndeterminate();
-                const raw = (progress.downloadedBytes / progress.totalBytes) * 100;
-                setProgressPercent(raw);
-                const remainingBytes = Math.max(progress.totalBytes - progress.downloadedBytes, 0);
-                const etaSeconds = progress.speedBps > 0 ? remainingBytes / progress.speedBps : null;
-                if (progressTextEl) {
-                    if (progress.speedBps > 0 && etaSeconds !== null) {
-                        progressTextEl.textContent = i.tWith('update.progress_detail_with_speed', {
-                            percent: progress.percent.toFixed(1),
-                            downloaded: formatBytes(progress.downloadedBytes),
-                            total: formatBytes(progress.totalBytes),
-                            speed: formatBytes(progress.speedBps),
-                            eta: formatDuration(etaSeconds),
-                        });
-                    } else {
-                        progressTextEl.textContent = i.tWith('update.progress_detail', {
-                            percent: progress.percent.toFixed(1),
-                            downloaded: formatBytes(progress.downloadedBytes),
-                            total: formatBytes(progress.totalBytes)
-                        });
-                    }
-                }
-            } else {
-                if (progress.downloadedBytes > 0) {
-                    startIndeterminate();
-                } else {
-                    stopIndeterminate();
-                    setProgressPercent(0);
-                }
-                if (progressTextEl) {
-                    if (progress.speedBps > 0) {
-                        progressTextEl.textContent = i.tWith('update.progress_detail_unknown_with_speed', {
-                            downloaded: formatBytes(progress.downloadedBytes),
-                            speed: formatBytes(progress.speedBps),
-                        });
-                    } else {
-                        progressTextEl.textContent = i.tWith('update.progress_detail_unknown', {
-                            downloaded: formatBytes(progress.downloadedBytes)
-                        });
-                    }
-                }
-            }
-        };
-
-        const resetProgress = () => {
-            progress.downloadedBytes = 0;
-            progress.totalBytes = null;
-            progress.speedBps = 0;
-            progress.lastProgressAt = 0;
-            progress.lastDownloadedBytes = 0;
-            progress.resumedFrom = 0;
-            stopIndeterminate();
-            setProgressPercent(0);
-            renderProgress();
         };
 
         try {
@@ -571,142 +474,49 @@ class App {
             confirmBtn.classList.add('opacity-50');
             cancelBtn.classList.add('hidden');
             progressWrapEl?.classList.remove('hidden');
-            let unknownProgressEventCount = 0;
+            setProgressPercent(0);
+            statusEl.textContent = i.t('update.downloading');
 
             const onProgress = (event) => {
                 const parsed = parseDownloadProgressEvent(event);
-                if (!parsed.kind) {
-                    if (unknownProgressEventCount < 5) {
-                        console.debug('Unknown update progress event payload:', event);
-                        unknownProgressEventCount += 1;
-                    }
-                    return;
-                }
-                const now = Date.now();
+                if (!parsed.kind) return;
                 if (parsed.kind === 'started') {
-                    progress.totalBytes = parsed.total ?? parsed.contentLength;
-                    const startedDownloaded = parsed.downloaded ?? parsed.resumedFrom ?? 0;
-                    const shouldRestartFromZero = progress.attempt > 1
-                        && startedDownloaded === 0
-                        && (parsed.resumedFrom ?? 0) === 0;
-                    progress.downloadedBytes = shouldRestartFromZero
-                        ? 0
-                        : Math.max(progress.downloadedBytes, startedDownloaded);
-                    progress.resumedFrom = parsed.resumedFrom ?? 0;
-                    progress.speedBps = 0;
-                    progress.lastProgressAt = now;
-                    progress.lastDownloadedBytes = progress.downloadedBytes;
-                    renderProgress();
-                    statusEl.textContent = progress.resumedFrom > 0
-                        ? i.tWith('update.resuming_attempt', {
-                            current: progress.attempt,
-                            total: maxAttempts,
-                            resumed: formatBytes(progress.resumedFrom),
-                        })
-                        : i.tWith('update.downloading_attempt', {
-                            current: progress.attempt,
-                            total: maxAttempts,
-                        });
+                    const total = parsed.total ?? parsed.contentLength;
+                    if (total && total > 0) {
+                        setProgressPercent(0);
+                    }
                 } else if (parsed.kind === 'progress') {
-                    if (parsed.total !== null) progress.totalBytes = parsed.total;
-                    if (parsed.downloaded !== null) {
-                        progress.downloadedBytes = Math.max(progress.downloadedBytes, parsed.downloaded);
-                    } else if (parsed.chunkLength !== null) {
-                        progress.downloadedBytes += parsed.chunkLength;
+                    const total = parsed.total ?? null;
+                    if (total && total > 0) {
+                        const dl = parsed.downloaded ?? 0;
+                        setProgressPercent((dl / total) * 100);
                     }
-                    if (Number.isFinite(progress.totalBytes) && progress.downloadedBytes > progress.totalBytes) {
-                        progress.downloadedBytes = progress.totalBytes;
-                    }
-                    if (progress.lastProgressAt > 0 && now > progress.lastProgressAt) {
-                        const dt = (now - progress.lastProgressAt) / 1000;
-                        const db = progress.downloadedBytes - progress.lastDownloadedBytes;
-                        if (dt > 0 && db >= 0) {
-                            const instant = db / dt;
-                            progress.speedBps = progress.speedBps > 0
-                                ? (progress.speedBps * 0.75 + instant * 0.25)
-                                : instant;
-                        }
-                    }
-                    progress.lastProgressAt = now;
-                    progress.lastDownloadedBytes = progress.downloadedBytes;
-                    renderProgress();
-                    statusEl.textContent = progress.resumedFrom > 0
-                        ? i.tWith('update.resuming_attempt', {
-                            current: progress.attempt,
-                            total: maxAttempts,
-                            resumed: formatBytes(progress.resumedFrom),
-                        })
-                        : i.tWith('update.downloading_attempt', {
-                            current: progress.attempt,
-                            total: maxAttempts,
-                        });
                 } else if (parsed.kind === 'finished') {
-                    stopIndeterminate();
-                    if (parsed.total !== null) {
-                        progress.totalBytes = parsed.total;
-                    }
-                    if (parsed.downloaded !== null) {
-                        progress.downloadedBytes = Math.max(progress.downloadedBytes, parsed.downloaded);
-                    }
-                    if (Number.isFinite(progress.totalBytes)) {
-                        progress.downloadedBytes = Math.max(progress.downloadedBytes, progress.totalBytes);
-                        setProgressPercent(100);
-                        renderProgress();
-                    }
+                    setProgressPercent(100);
                     statusEl.textContent = i.t('update.installing');
                 }
             };
 
-            let installed = false;
-            let lastError = null;
-            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-                progress.attempt = attempt;
-                if (attempt === 1) {
-                    resetProgress();
-                } else {
-                    progress.speedBps = 0;
-                    progress.lastProgressAt = 0;
-                    progress.lastDownloadedBytes = progress.downloadedBytes;
-                }
-                if (attempt > 1) {
-                    statusEl.textContent = i.tWith('update.retrying', {
-                        current: attempt,
-                        total: maxAttempts,
-                    });
-                    await sleep(800 * (attempt - 1));
-                } else {
-                    statusEl.textContent = i.tWith('update.downloading_attempt', {
-                        current: attempt,
-                        total: maxAttempts,
-                    });
-                }
-                try {
-                    await downloadAndInstallUpdateResumable(updateRid, onProgress);
-                    installed = true;
-                    break;
-                } catch (err) {
-                    lastError = err;
-                }
-            }
+            // 5-minute timeout
+            const timeoutPromise = new Promise((_, reject) => {
+                downloadTimer = setTimeout(() => {
+                    reject(new Error(i.t('update.timeout_error')));
+                }, DOWNLOAD_TIMEOUT_MS);
+            });
 
-            if (!installed) {
-                throw lastError || new Error('Update failed after retries');
-            }
+            await Promise.race([
+                downloadAndInstallUpdateResumable(updateRid, onProgress),
+                timeoutPromise,
+            ]);
 
-            stopIndeterminate();
-            if (Number.isFinite(progress.totalBytes)) {
-                progress.downloadedBytes = progress.totalBytes;
-                setProgressPercent(100);
-                renderProgress();
-            }
+            clearTimeout(downloadTimer);
+            setProgressPercent(100);
             statusEl.textContent = i.t('update.installing');
             await relaunchApp();
         } catch (e) {
-            stopIndeterminate();
-            statusEl.textContent = i.tWith('update.error', { error: getErrorMessage(e) });
-            confirmBtn.disabled = false;
-            confirmBtn.classList.remove('opacity-50');
-            cancelBtn.classList.remove('hidden');
+            if (downloadTimer) clearTimeout(downloadTimer);
+            const msg = getErrorMessage(e);
+            showRetry(i.tWith('update.error', { error: msg }));
         }
     }
 

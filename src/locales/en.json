@@ -168,16 +168,10 @@
     "transition": "{current} → {latest}",
     "confirm": "Update",
     "downloading": "Downloading...",
-    "downloading_attempt": "Downloading (attempt {current}/{total})...",
-    "resuming_attempt": "Resuming download (attempt {current}/{total}, resumed {resumed})...",
-    "retrying": "Download failed, retrying (attempt {current}/{total})...",
-    "progress": "{percent}%",
-    "progress_detail": "{percent}% ({downloaded} / {total})",
-    "progress_detail_with_speed": "{percent}% ({downloaded} / {total}) · {speed}/s · ETA {eta}",
-    "progress_detail_unknown": "Downloaded {downloaded}",
-    "progress_detail_unknown_with_speed": "Downloaded {downloaded} · {speed}/s",
     "error": "Update failed: {error}",
-    "installing": "Installing..."
+    "installing": "Installing...",
+    "retry": "Retry",
+    "timeout_error": "Download timed out (5 min)"
   },
   "scan_invalid": {
     "title": "Found {count} invalid skill(s)",
