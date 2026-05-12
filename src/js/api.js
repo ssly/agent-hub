@@ -166,3 +166,15 @@ export async function setMonitorPolling(enabled) {
 export async function forcePollMonitor() {
     return invoke('force_poll_monitor');
 }
+
+export async function configureHooks(agentType) {
+    return invoke('configure_hooks', { agentType });
+}
+
+export async function removeHooks(agentType) {
+    return invoke('remove_hooks', { agentType });
+}
+
+export async function getHooksStatus() {
+    return invoke('get_hooks_status');
+}

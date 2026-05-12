@@ -2,6 +2,7 @@ use super::types::*;
 use chrono::Utc;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Runtime};
@@ -9,8 +10,11 @@ use tauri_plugin_notification::NotificationExt;
 
 pub struct MonitorService<R: Runtime> {
     state: Arc<Mutex<MonitorState>>,
+    sys: Arc<Mutex<sysinfo::System>>,
     adapters: Vec<Box<dyn AgentMonitor>>,
     _watcher: Option<RecommendedWatcher>,
+    _hooks_watcher: Option<RecommendedWatcher>,
+    hooks_dir: PathBuf,
     app: AppHandle<R>,
     pub polling_enabled: Arc<AtomicBool>,
 }
@@ -18,6 +22,7 @@ pub struct MonitorService<R: Runtime> {
 impl<R: Runtime> MonitorService<R> {
     pub fn new(app: AppHandle<R>, config: MonitorConfig) -> Self {
         let state = Arc::new(Mutex::new(MonitorState::new(config)));
+        let sys = Arc::new(Mutex::new(sysinfo::System::new_all()));
         let adapters: Vec<Box<dyn AgentMonitor>> = vec![
             Box::new(super::adapters::KiroAdapter::new()),
             Box::new(super::adapters::ClaudeCodeAdapter::new()),
@@ -25,30 +30,41 @@ impl<R: Runtime> MonitorService<R> {
             Box::new(super::adapters::GeminiAdapter::new()),
         ];
 
+        let hooks_dir = dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("/"))
+            .join(".agent-hub/hooks");
+        let _ = std::fs::create_dir_all(&hooks_dir);
+
         let polling_enabled = Arc::new(AtomicBool::new(false));
 
         let mut service = Self {
             state,
+            sys,
             adapters,
             _watcher: None,
+            _hooks_watcher: None,
+            hooks_dir,
             app,
             polling_enabled,
         };
 
         service.init_watcher();
+        service.init_hooks_watcher();
         // Defer initial scan — will run on first poll or first get_active_sessions call
         service
     }
 
     fn init_watcher(&mut self) {
         let state = self.state.clone();
+        let sys = self.sys.clone();
         let app = self.app.clone();
 
         let mut watcher = match RecommendedWatcher::new(
             move |_res: Result<notify::Event, notify::Error>| {
                 let state = state.clone();
+                let sys = sys.clone();
                 let app = app.clone();
-                Self::detect_and_emit(&state, &app);
+                Self::detect_and_emit(&state, &sys, &app);
             },
             notify::Config::default(),
         ) {
@@ -72,30 +88,160 @@ impl<R: Runtime> MonitorService<R> {
         self._watcher = Some(watcher);
     }
 
-    /// Detect all sessions (lock-free), then briefly lock state to diff + emit.
-    ///
-    /// Stale-snapshot policy: `sysinfo::System::new_all()` is rebuilt every call,
-    /// and `MonitorState::new` starts with an empty session map, so there is no
-    /// cross-restart cache that can go stale. When Tier-1 fingerprint caching
-    /// (jsonl size+mtime+inode) is added, this function must reset that cache on
-    /// app start so a restarted agent's first poll sees an "added" event, not an
-    /// "updated" one against a stale fingerprint.
-    fn detect_and_emit(state: &Arc<Mutex<MonitorState>>, app: &AppHandle<R>) {
-        let sys = sysinfo::System::new_all();
-        let adapters: Vec<Box<dyn AgentMonitor>> = vec![
-            Box::new(super::adapters::KiroAdapter::new()),
-            Box::new(super::adapters::ClaudeCodeAdapter::new()),
-            Box::new(super::adapters::CodexAdapter::new()),
-            Box::new(super::adapters::GeminiAdapter::new()),
-        ];
+    fn init_hooks_watcher(&mut self) {
+        let state = self.state.clone();
+        let app = self.app.clone();
+        let hooks_dir = self.hooks_dir.clone();
 
-        // Phase 1: detect all sessions (no lock held)
-        let mut detected = HashMap::new();
-        for adapter in &adapters {
-            for session in adapter.detect_sessions(&sys) {
-                detected.insert(session.session_id.clone(), session);
+        let mut watcher = match RecommendedWatcher::new(
+            move |res: Result<notify::Event, notify::Error>| {
+                if let Ok(event) = res {
+                    if !event.kind.is_create() && !event.kind.is_modify() {
+                        return;
+                    }
+                    for path in event.paths {
+                        if path.extension().and_then(|e| e.to_str()) == Some("done") {
+                            let state = state.clone();
+                            let app = app.clone();
+                            Self::process_hook_marker(&state, &app, &path);
+                        }
+                    }
+                }
+            },
+            notify::Config::default(),
+        ) {
+            Ok(w) => w,
+            Err(e) => {
+                log::warn!("Failed to create hooks watcher: {e}");
+                return;
+            }
+        };
+
+        if let Err(e) = watcher.watch(&hooks_dir, RecursiveMode::NonRecursive) {
+            log::warn!("Failed to watch hooks dir {:?}: {e}", hooks_dir);
+        } else {
+            log::info!("Watching hooks dir {:?}", hooks_dir);
+        }
+
+        self._hooks_watcher = Some(watcher);
+    }
+
+    fn process_hook_marker(state: &Arc<Mutex<MonitorState>>, app: &AppHandle<R>, path: &std::path::Path) {
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(e) => {
+                log::warn!("Failed to read hook marker {:?}: {e}", path);
+                return;
+            }
+        };
+
+        let marker: serde_json::Value = match serde_json::from_str(&content) {
+            Ok(v) => v,
+            Err(e) => {
+                log::warn!("Invalid hook marker JSON {:?}: {e}", path);
+                let _ = std::fs::remove_file(path);
+                return;
+            }
+        };
+
+        let agent_type = marker
+            .get("agent_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let session_id = marker
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        log::info!("Hook completion marker: agent={agent_type} session={session_id:?}");
+
+        let mut state = state.lock().unwrap();
+
+        // Find target session
+        let target_id = if let Some(ref sid) = session_id {
+            if state.sessions.contains_key(sid) {
+                Some(sid.clone())
+            } else {
+                None
+            }
+        } else {
+            state
+                .sessions
+                .iter()
+                .filter(|(_, s)| s.agent_type == agent_type && s.working_state == WorkingState::Working)
+                .map(|(id, _)| id.clone())
+                .next()
+        };
+
+        if let Some(id) = target_id {
+            if let Some(session) = state.sessions.get_mut(&id) {
+                let old_state = session.working_state;
+                session.working_state = WorkingState::Finished;
+                let title = session.title.clone();
+                let body = format!("[{}] {}", session.agent_type, title);
+
+                let _ = app.emit(
+                    "monitor:state-changed",
+                    serde_json::json!({
+                        "change": "updated",
+                        "session": session,
+                    }),
+                );
+
+                if matches!(old_state, WorkingState::Working)
+                    && Self::should_notify(&mut state, &id)
+                {
+                    let granted = app
+                        .notification()
+                        .permission_state()
+                        .map(|s| matches!(s, tauri_plugin_notification::PermissionState::Granted))
+                        .unwrap_or(false);
+                    if granted {
+                        let _ = app
+                            .notification()
+                            .builder()
+                            .title("Agent 任务完成")
+                            .body(body)
+                            .show();
+                    }
+                }
             }
         }
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// Detect all sessions, then diff + emit events.
+    ///
+    /// Uses `refresh_processes()` on a shared `System` instance instead of
+    /// `System::new_all()`. This only updates the process list (CPU, memory,
+    /// disks, networks are skipped), reducing overhead significantly.
+    fn detect_and_emit(
+        state: &Arc<Mutex<MonitorState>>,
+        sys: &Arc<Mutex<sysinfo::System>>,
+        app: &AppHandle<R>,
+    ) {
+        // Phase 1: refresh processes + detect all sessions
+        let detected = {
+            let mut system = sys.lock().unwrap();
+            system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+
+            let adapters: Vec<Box<dyn AgentMonitor>> = vec![
+                Box::new(super::adapters::KiroAdapter::new()),
+                Box::new(super::adapters::ClaudeCodeAdapter::new()),
+                Box::new(super::adapters::CodexAdapter::new()),
+                Box::new(super::adapters::GeminiAdapter::new()),
+            ];
+
+            let mut detected = HashMap::new();
+            for adapter in &adapters {
+                for session in adapter.detect_sessions(&system) {
+                    detected.insert(session.session_id.clone(), session);
+                }
+            }
+            detected
+        };
 
         // Phase 2: brief lock to diff + emit events
         let mut state = state.lock().unwrap();
@@ -137,12 +283,19 @@ impl<R: Runtime> MonitorService<R> {
                 if is_turn_end && Self::should_notify(&mut state, &session.session_id) {
                     let title = session.title.clone();
                     let body = format!("[{}] {}", session.agent_type, title);
-                    let _ = app
+                    let granted = app
                         .notification()
-                        .builder()
-                        .title("Agent 任务完成")
-                        .body(body)
-                        .show();
+                        .permission_state()
+                        .map(|s| matches!(s, tauri_plugin_notification::PermissionState::Granted))
+                        .unwrap_or(false);
+                    if granted {
+                        let _ = app
+                            .notification()
+                            .builder()
+                            .title("Agent 任务完成")
+                            .body(body)
+                            .show();
+                    }
                 }
             }
         }
@@ -164,7 +317,7 @@ impl<R: Runtime> MonitorService<R> {
     }
 
     pub fn poll(&self) {
-        Self::detect_and_emit(&self.state, &self.app);
+        Self::detect_and_emit(&self.state, &self.sys, &self.app);
     }
 
     /// Ensure at least one scan has been done. Called by get_active_sessions
@@ -192,6 +345,336 @@ impl<R: Runtime> MonitorService<R> {
     pub fn set_config(&self, new_config: MonitorConfig) {
         let mut state = self.state.lock().unwrap();
         state.config = new_config;
+    }
+
+    pub fn hooks_dir(&self) -> &std::path::Path {
+        &self.hooks_dir
+    }
+
+    pub fn configure_hooks(&self, agent_type: &str) -> Result<(), String> {
+        let home = dirs::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
+        let hooks_dir = &self.hooks_dir;
+
+        let hook_script = format!(
+            r#"#!/bin/bash
+mkdir -p "{hooks_dir}"
+SESSION_ID=$(cat | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null)
+echo '{{"agent_type":"{agent_type}","session_id":"'"$SESSION_ID"'","timestamp":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}}' > "{hooks_dir}/{agent_type}_$$_$(date +%s).done"
+"#,
+            hooks_dir = hooks_dir.display(),
+            agent_type = agent_type
+        );
+
+        match agent_type {
+            "claude-code" => {
+                let settings_path = home.join(".claude/settings.json");
+                let mut settings: serde_json::Value = if settings_path.exists() {
+                    serde_json::from_str(&std::fs::read_to_string(&settings_path)
+                        .map_err(|e| format!("Failed to read settings: {e}"))?)
+                        .unwrap_or(serde_json::json!({}))
+                } else {
+                    serde_json::json!({})
+                };
+
+                let hooks = settings
+                    .as_object_mut()
+                    .unwrap()
+                    .entry("hooks")
+                    .or_insert_with(|| serde_json::json!({}))
+                    .as_object_mut()
+                    .unwrap();
+
+                let stop_hooks = hooks
+                    .entry("Stop")
+                    .or_insert_with(|| serde_json::json!([]))
+                    .as_array_mut()
+                    .unwrap();
+
+                // Remove existing agent-hub hook if present
+                stop_hooks.retain(|h| {
+                    h.get("hooks")
+                        .and_then(|arr| arr.as_array())
+                        .map(|arr| !arr.iter().any(|hh| {
+                            hh.get("command")
+                                .and_then(|c| c.as_str())
+                                .map(|c| c.contains("agent-hub"))
+                                .unwrap_or(false)
+                        }))
+                        .unwrap_or(true)
+                });
+
+                // Add our hook
+                stop_hooks.push(serde_json::json!({
+                    "matcher": "",
+                    "hooks": [{
+                        "type": "command",
+                        "command": hook_script
+                    }]
+                }));
+
+                if let Some(parent) = settings_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                std::fs::write(
+                    &settings_path,
+                    serde_json::to_string_pretty(&settings).unwrap(),
+                )
+                .map_err(|e| format!("Failed to write settings: {e}"))?;
+
+                log::info!("Configured Claude Code hooks in {:?}", settings_path);
+            }
+            "codex" => {
+                let config_path = home.join(".codex/config.toml");
+                let mut content = if config_path.exists() {
+                    std::fs::read_to_string(&config_path)
+                        .map_err(|e| format!("Failed to read config: {e}"))?
+                } else {
+                    String::new()
+                };
+
+                // Remove existing agent-hub hook
+                content = Self::remove_toml_hook_section(&content, "agent-hub");
+
+                // Add stop hook
+                content.push_str(&format!(
+                    "\n[hooks.stop]\ncommand = \"{hook_script}\"\n",
+                    hook_script = hook_script.replace('"', "\\\"")
+                ));
+
+                if let Some(parent) = config_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                std::fs::write(&config_path, content)
+                    .map_err(|e| format!("Failed to write config: {e}"))?;
+
+                log::info!("Configured Codex hooks in {:?}", config_path);
+            }
+            "kiro" => {
+                let config_path = home.join(".kiro/agents/kiro-monitored.json");
+                let mut config: serde_json::Value = if config_path.exists() {
+                    serde_json::from_str(&std::fs::read_to_string(&config_path)
+                        .map_err(|e| format!("Failed to read config: {e}"))?)
+                        .map_err(|e| format!("Failed to parse config: {e}"))?
+                } else {
+                    serde_json::json!({
+                        "name": "kiro-monitored",
+                        "description": "Default agent with agent-hub completion hooks",
+                        "tools": ["*"],
+                        "hooks": {}
+                    })
+                };
+
+                let kiro_hook_script = format!(
+                    r#"#!/bin/bash
+mkdir -p "{hooks_dir}"
+echo '{{"agent_type":"kiro","timestamp":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}}' > "{hooks_dir}/kiro_$$_$(date +%s).done"
+"#,
+                    hooks_dir = hooks_dir.display()
+                );
+
+                let hooks = config
+                    .as_object_mut()
+                    .unwrap()
+                    .entry("hooks")
+                    .or_insert_with(|| serde_json::json!({}))
+                    .as_object_mut()
+                    .unwrap();
+
+                hooks.insert(
+                    "stop".to_string(),
+                    serde_json::json!([{ "command": kiro_hook_script }]),
+                );
+
+                if let Some(parent) = config_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                std::fs::write(
+                    &config_path,
+                    serde_json::to_string_pretty(&config).unwrap(),
+                )
+                .map_err(|e| format!("Failed to write config: {e}"))?;
+
+                log::info!("Configured Kiro hooks in {:?}", config_path);
+            }
+            _ => return Err(format!("Unsupported agent type: {agent_type}")),
+        }
+
+        Ok(())
+    }
+
+    pub fn remove_hooks(&self, agent_type: &str) -> Result<(), String> {
+        let home = dirs::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
+
+        match agent_type {
+            "claude-code" => {
+                let settings_path = home.join(".claude/settings.json");
+                if !settings_path.exists() {
+                    return Ok(());
+                }
+                let mut settings: serde_json::Value =
+                    serde_json::from_str(&std::fs::read_to_string(&settings_path)
+                        .map_err(|e| format!("Failed to read settings: {e}"))?)
+                        .map_err(|e| format!("Failed to parse settings: {e}"))?;
+
+                if let Some(hooks) = settings.get_mut("hooks").and_then(|h| h.as_object_mut()) {
+                    if let Some(stop) = hooks.get_mut("Stop").and_then(|s| s.as_array_mut()) {
+                        stop.retain(|h| {
+                            h.get("hooks")
+                                .and_then(|arr| arr.as_array())
+                                .map(|arr| !arr.iter().any(|hh| {
+                                    hh.get("command")
+                                        .and_then(|c| c.as_str())
+                                        .map(|c| c.contains("agent-hub"))
+                                        .unwrap_or(false)
+                                }))
+                                .unwrap_or(true)
+                        });
+                        if stop.is_empty() {
+                            hooks.remove("Stop");
+                        }
+                    }
+                    if hooks.is_empty() {
+                        settings.as_object_mut().unwrap().remove("hooks");
+                    }
+                }
+
+                std::fs::write(
+                    &settings_path,
+                    serde_json::to_string_pretty(&settings).unwrap(),
+                )
+                .map_err(|e| format!("Failed to write settings: {e}"))?;
+
+                log::info!("Removed Claude Code hooks from {:?}", settings_path);
+            }
+            "codex" => {
+                let config_path = home.join(".codex/config.toml");
+                if !config_path.exists() {
+                    return Ok(());
+                }
+                let content = std::fs::read_to_string(&config_path)
+                    .map_err(|e| format!("Failed to read config: {e}"))?;
+                let cleaned = Self::remove_toml_hook_section(&content, "agent-hub");
+                std::fs::write(&config_path, cleaned)
+                    .map_err(|e| format!("Failed to write config: {e}"))?;
+
+                log::info!("Removed Codex hooks from {:?}", config_path);
+            }
+            "kiro" => {
+                let config_path = home.join(".kiro/agents/kiro-monitored.json");
+                if !config_path.exists() {
+                    return Ok(());
+                }
+                let mut config: serde_json::Value =
+                    serde_json::from_str(&std::fs::read_to_string(&config_path)
+                        .map_err(|e| format!("Failed to read config: {e}"))?)
+                        .map_err(|e| format!("Failed to parse config: {e}"))?;
+
+                if let Some(hooks) = config.get_mut("hooks").and_then(|h| h.as_object_mut()) {
+                    hooks.remove("stop");
+                }
+
+                std::fs::write(
+                    &config_path,
+                    serde_json::to_string_pretty(&config).unwrap(),
+                )
+                .map_err(|e| format!("Failed to write config: {e}"))?;
+
+                log::info!("Removed Kiro hooks from {:?}", config_path);
+            }
+            _ => return Err(format!("Unsupported agent type: {agent_type}")),
+        }
+
+        Ok(())
+    }
+
+    pub fn hooks_status(&self) -> HashMap<String, bool> {
+        let home = match dirs::home_dir() {
+            Some(h) => h,
+            None => return HashMap::new(),
+        };
+
+        let mut status = HashMap::new();
+
+        // Claude Code
+        let cc_settings = home.join(".claude/settings.json");
+        let cc_configured = if cc_settings.exists() {
+            std::fs::read_to_string(&cc_settings)
+                .ok()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                .map(|v| {
+                    v.get("hooks")
+                        .and_then(|h| h.get("Stop"))
+                        .and_then(|s| s.as_array())
+                        .map(|arr| arr.iter().any(|h| {
+                            h.get("hooks")
+                                .and_then(|hh| hh.as_array())
+                                .map(|hh| hh.iter().any(|cmd| {
+                                    cmd.get("command")
+                                        .and_then(|c| c.as_str())
+                                        .map(|c| c.contains("agent-hub"))
+                                        .unwrap_or(false)
+                                }))
+                                .unwrap_or(false)
+                        }))
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false)
+        } else {
+            false
+        };
+        status.insert("claude-code".to_string(), cc_configured);
+
+        // Codex
+        let codex_config = home.join(".codex/config.toml");
+        let codex_configured = if codex_config.exists() {
+            std::fs::read_to_string(&codex_config)
+                .ok()
+                .map(|s| s.contains("agent-hub"))
+                .unwrap_or(false)
+        } else {
+            false
+        };
+        status.insert("codex".to_string(), codex_configured);
+
+        // Kiro
+        let kiro_config = home.join(".kiro/agents/kiro-monitored.json");
+        let kiro_configured = if kiro_config.exists() {
+            std::fs::read_to_string(&kiro_config)
+                .ok()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                .map(|v| {
+                    v.get("hooks")
+                        .and_then(|h| h.get("stop"))
+                        .and_then(|s| s.as_array())
+                        .map(|arr| !arr.is_empty())
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false)
+        } else {
+            false
+        };
+        status.insert("kiro".to_string(), kiro_configured);
+
+        status
+    }
+
+    fn remove_toml_hook_section(content: &str, marker: &str) -> String {
+        let mut result = String::new();
+        let mut in_hook_section = false;
+        for line in content.lines() {
+            if line.contains(marker) {
+                in_hook_section = true;
+                continue;
+            }
+            if in_hook_section && line.trim().starts_with('[') {
+                in_hook_section = false;
+            }
+            if !in_hook_section {
+                result.push_str(line);
+                result.push('\n');
+            }
+        }
+        result.trim_end().to_string()
     }
 
     /// Returns true if a turn-end notification should fire for this session_id,

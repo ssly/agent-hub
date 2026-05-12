@@ -1100,3 +1100,26 @@ pub fn set_monitor_polling(
 pub fn force_poll_monitor(monitor: tauri::State<'_, MonitorStateHandle>) {
     monitor.poll();
 }
+
+#[tauri::command]
+pub fn configure_hooks(
+    monitor: tauri::State<'_, MonitorStateHandle>,
+    agent_type: String,
+) -> Result<(), CommandError> {
+    monitor.configure_hooks(&agent_type).map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn remove_hooks(
+    monitor: tauri::State<'_, MonitorStateHandle>,
+    agent_type: String,
+) -> Result<(), CommandError> {
+    monitor.remove_hooks(&agent_type).map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn get_hooks_status(
+    monitor: tauri::State<'_, MonitorStateHandle>,
+) -> std::collections::HashMap<String, bool> {
+    monitor.hooks_status()
+}

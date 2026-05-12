@@ -224,8 +224,9 @@ class App {
         // Monitor state
         this.monitorSessions = [];
         this.monitorConfig = null;
-        this.selectedMonitorAgent = null;
+        this.selectedMonitorAgent = 'all';
         this.monitorUnlisten = null;
+        this.hooksStatus = {};
         // Trash state
         this.trashCount = 0;
         // Update state
@@ -804,9 +805,8 @@ class App {
         }
         if (tab === 'monitor') {
             Api.setMonitorPolling(true);
-            this.refreshMonitor();
             this.startMonitorListener();
-            this.render();
+            this.refreshMonitor().finally(() => this.render());
             return;
         }
         this.stopMonitorListener();
@@ -1896,6 +1896,7 @@ args = ["mcp-server-time"]
 
         if (this.currentTab === 'monitor') {
             searchEl.classList.add('hidden');
+            console.log('[Monitor] renderSidebar, hooksStatus:', this.hooksStatus);
             const activeSessions = this.monitorSessions.filter(s => s.status !== 'ended');
             const groups = [
                 { id: 'kiro', name: 'Kiro' },
@@ -1904,14 +1905,19 @@ args = ["mcp-server-time"]
                 { id: 'gemini', name: 'Gemini' },
             ];
             const withSessions = groups.filter(g => activeSessions.some(s => s.agent_type === g.id));
-            if (withSessions.length === 0) {
-                el.innerHTML = `<p class="text-gray-500 text-sm p-3">${i.t('monitor.empty')}</p>`;
-                return;
-            }
-            if (!this.selectedMonitorAgent || !withSessions.some(g => g.id === this.selectedMonitorAgent)) {
-                this.selectedMonitorAgent = withSessions[0].id;
-            }
-            el.innerHTML = withSessions.map(g => {
+            const totalCount = activeSessions.length;
+            let html = '';
+            // "All" option
+            const allActive = this.selectedMonitorAgent === 'all';
+            html += `<button class="w-full text-left px-3 py-2 rounded cursor-pointer ${allActive ? 'bg-gray-700 text-green-400 font-bold' : 'text-gray-300 hover:bg-gray-700/50'}"
+                data-monitor-agent="all">
+                <div class="flex items-center justify-between">
+                    <span class="text-sm">${i.t('monitor.all_agents')}</span>
+                    <span class="text-xs ${allActive ? 'text-green-400' : 'text-gray-500'}">${totalCount}</span>
+                </div>
+            </button>`;
+            // Individual agents
+            html += withSessions.map(g => {
                 const count = activeSessions.filter(s => s.agent_type === g.id).length;
                 const active = this.selectedMonitorAgent === g.id;
                 return `<button class="w-full text-left px-3 py-2 rounded cursor-pointer ${active ? 'bg-gray-700 text-green-400 font-bold' : 'text-gray-300 hover:bg-gray-700/50'}"
@@ -1922,9 +1928,62 @@ args = ["mcp-server-time"]
                     </div>
                 </button>`;
             }).join('');
+            el.innerHTML = html;
             el.querySelectorAll('button[data-monitor-agent]').forEach(btn => {
                 btn.addEventListener('click', () => {
                     this.selectedMonitorAgent = btn.dataset.monitorAgent;
+                    this.render();
+                });
+            });
+
+            // Hooks configuration section
+            const hooksAgents = [
+                { id: 'claude-code', name: 'Claude Code' },
+                { id: 'codex', name: 'Codex' },
+                { id: 'kiro', name: 'Kiro' },
+            ];
+            const hs = this.hooksStatus || {};
+            const hooksHtml = hooksAgents.map(a => {
+                const configured = hs[a.id] || false;
+                const btnClass = configured
+                    ? 'text-xs px-2 py-0.5 rounded bg-red-900/30 text-red-400 hover:bg-red-900/50 cursor-pointer'
+                    : 'text-xs px-2 py-0.5 rounded bg-green-900/30 text-green-400 hover:bg-green-900/50 cursor-pointer';
+                const btnText = configured ? i.t('monitor.hooks_remove') : i.t('monitor.hooks_configure');
+                const dot = configured
+                    ? '<span class="w-1.5 h-1.5 rounded-full bg-green-500 inline-block"></span>'
+                    : '<span class="w-1.5 h-1.5 rounded-full bg-gray-600 inline-block"></span>';
+                return `<div class="flex items-center justify-between px-3 py-1.5">
+                    <div class="flex items-center gap-1.5">
+                        ${dot}
+                        <span class="text-xs text-gray-400">${esc(a.name)}</span>
+                    </div>
+                    <button class="${btnClass}" data-hooks-agent="${a.id}">${btnText}</button>
+                </div>`;
+            }).join('');
+
+            el.insertAdjacentHTML('beforeend', `<div class="mt-4 pt-3 border-t border-gray-700">
+                <div class="px-3 pb-1.5 text-xs text-gray-500 font-medium">${i.t('monitor.hooks_title')}</div>
+                ${hooksHtml}
+            </div>`);
+
+            el.querySelectorAll('button[data-hooks-agent]').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const agentId = btn.dataset.hooksAgent;
+                    const configured = this.hooksStatus[agentId] || false;
+                    btn.disabled = true;
+                    btn.textContent = '...';
+                    try {
+                        if (configured) {
+                            await Api.removeHooks(agentId);
+                            this.showToast(i.t('monitor.hooks_removed'), 'success');
+                        } else {
+                            await Api.configureHooks(agentId);
+                            this.showToast(i.t('monitor.hooks_configured'), 'success');
+                        }
+                        this.hooksStatus = await Api.getHooksStatus();
+                    } catch (err) {
+                        this.showToast(err.message || err.General || String(err), 'error');
+                    }
                     this.render();
                 });
             });
@@ -2004,6 +2063,12 @@ args = ["mcp-server-time"]
                 toggle.addEventListener('change', async (e) => {
                     try {
                         this.monitorConfig = await Api.setMonitorConfig({ notification_enabled: e.target.checked });
+                        if (e.target.checked) {
+                            const anyConfigured = Object.values(this.hooksStatus || {}).some(v => v);
+                            if (!anyConfigured) {
+                                this.showToast(i.t('monitor.hooks_needed_hint'), 'warning');
+                            }
+                        }
                     } catch (err) {
                         console.error('Failed to update monitor config:', err);
                         e.target.checked = !e.target.checked;
@@ -2677,7 +2742,13 @@ args = ["mcp-server-time"]
             console.error('Failed to load monitor data:', err);
             this.monitorSessions = [];
         }
-        this.render();
+        // Fetch hooks status separately so it doesn't block main data
+        try {
+            this.hooksStatus = await Api.getHooksStatus();
+        } catch (err) {
+            console.warn('Failed to load hooks status:', err);
+            this.hooksStatus = {};
+        }
     }
 
     startMonitorListener() {
@@ -2747,7 +2818,9 @@ args = ["mcp-server-time"]
             return;
         }
 
-        const sessions = activeSessions.filter(s => s.agent_type === this.selectedMonitorAgent);
+        const sessions = this.selectedMonitorAgent === 'all'
+            ? activeSessions
+            : activeSessions.filter(s => s.agent_type === this.selectedMonitorAgent);
         if (sessions.length === 0) {
             el.innerHTML = `<p class="text-gray-500 text-sm">${i.t('monitor.empty')}</p>`;
             return;
