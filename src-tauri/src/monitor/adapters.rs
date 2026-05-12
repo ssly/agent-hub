@@ -596,16 +596,19 @@ impl ClaudeCodeAdapter {
     fn detect_from_processes(&self, sys: &sysinfo::System) -> Vec<AgentSession> {
         let mut sessions = Vec::new();
         for (_, proc) in sys.processes() {
+            let name = proc.name().to_string_lossy().to_string();
             let exe = proc
                 .exe()
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_default();
 
-            let exe_basename = std::path::Path::new(&exe)
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
-            if exe_basename != "claude" {
+            // Match "claude" by process name (argv[0]) or exe path.
+            // proc.name() is reliable even when claude is a symlink to a
+            // versioned binary (e.g. ~/.local/share/claude/versions/2.1.128).
+            let is_claude = name == "claude"
+                || exe.split('/').last().map(|b| b == "claude").unwrap_or(false)
+                || exe.contains("/claude");
+            if !is_claude {
                 continue;
             }
 

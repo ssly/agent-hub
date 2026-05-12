@@ -13,6 +13,8 @@ mod trash;
 
 use state::AppState;
 use tauri::Manager;
+#[cfg(desktop)]
+use tauri_plugin_notification::NotificationExt;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -26,6 +28,11 @@ pub fn run() {
             app.handle().plugin(tauri_plugin_process::init())?;
             #[cfg(desktop)]
             app.handle().plugin(tauri_plugin_notification::init())?;
+            // Request macOS notification permission at startup
+            #[cfg(desktop)]
+            {
+                let _ = app.notification().request_permission();
+            }
 
             // Initialize monitor service
             let config = {
@@ -93,6 +100,9 @@ pub fn run() {
             commands::set_monitor_config,
             commands::set_monitor_polling,
             commands::force_poll_monitor,
+            commands::configure_hooks,
+            commands::remove_hooks,
+            commands::get_hooks_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running agent-hub");
