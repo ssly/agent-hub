@@ -124,6 +124,17 @@ impl<R: Runtime> MonitorService<R> {
         }
 
         self._hooks_watcher = Some(watcher);
+
+        // Process any stale .done files left from previous sessions
+        if let Ok(entries) = std::fs::read_dir(&hooks_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("done") {
+                    log::info!("Cleaning stale hook marker: {:?}", path);
+                    let _ = std::fs::remove_file(&path);
+                }
+            }
+        }
     }
 
     fn process_hook_marker(state: &Arc<Mutex<MonitorState>>, app: &AppHandle<R>, path: &std::path::Path) {
@@ -355,15 +366,37 @@ impl<R: Runtime> MonitorService<R> {
         let home = dirs::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
         let hooks_dir = &self.hooks_dir;
 
-        let hook_script = format!(
-            r#"#!/bin/bash
-mkdir -p "{hooks_dir}"
-SESSION_ID=$(cat | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null)
-echo '{{"agent_type":"{agent_type}","session_id":"'"$SESSION_ID"'","timestamp":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}}' > "{hooks_dir}/{agent_type}_$$_$(date +%s).done"
-"#,
-            hooks_dir = hooks_dir.display(),
-            agent_type = agent_type
-        );
+        // Write the hook script to a file so configs only reference the path
+        std::fs::create_dir_all(hooks_dir)
+            .map_err(|e| format!("Failed to create hooks dir: {e}"))?;
+
+        let script_path = hooks_dir.join(format!("{agent_type}-hook.sh"));
+
+        let script_content = match agent_type {
+            "claude-code" => format!(
+                "#!/bin/bash\nmkdir -p \"{d}\"\nSID=$(cat | python3 -c \"import sys,json; print(json.load(sys.stdin).get('session_id',''))\" 2>/dev/null)\necho '{{\"agent_type\":\"claude-code\",\"session_id\":\"'\"$SID\"'\",\"timestamp\":\"'\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"'\"}}' > \"{d}/claude-code_$$_$(date +%s).done\"\n",
+                d = hooks_dir.display()
+            ),
+            "codex" => format!(
+                "#!/bin/bash\nmkdir -p \"{d}\"\necho '{{\"agent_type\":\"codex\",\"timestamp\":\"'\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"'\"}}' > \"{d}/codex_$$_$(date +%s).done\"\n",
+                d = hooks_dir.display()
+            ),
+            "kiro" => format!(
+                "#!/bin/bash\nmkdir -p \"{d}\"\necho '{{\"agent_type\":\"kiro\",\"timestamp\":\"'\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"'\"}}' > \"{d}/kiro_$$_$(date +%s).done\"\n",
+                d = hooks_dir.display()
+            ),
+            _ => return Err(format!("Unsupported agent type: {agent_type}")),
+        };
+
+        std::fs::write(&script_path, &script_content)
+            .map_err(|e| format!("Failed to write hook script: {e}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755));
+        }
+
+        let script_path_str = script_path.to_string_lossy().to_string();
 
         match agent_type {
             "claude-code" => {
@@ -403,18 +436,14 @@ echo '{{"agent_type":"{agent_type}","session_id":"'"$SESSION_ID"'","timestamp":"
                         .unwrap_or(true)
                 });
 
-                // Add our hook
                 stop_hooks.push(serde_json::json!({
                     "matcher": "",
                     "hooks": [{
                         "type": "command",
-                        "command": hook_script
+                        "command": script_path_str
                     }]
                 }));
 
-                if let Some(parent) = settings_path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
                 std::fs::write(
                     &settings_path,
                     serde_json::to_string_pretty(&settings).unwrap(),
@@ -432,13 +461,13 @@ echo '{{"agent_type":"{agent_type}","session_id":"'"$SESSION_ID"'","timestamp":"
                     String::new()
                 };
 
-                // Remove existing agent-hub hook
+                // Remove existing agent-hub hook section
                 content = Self::remove_toml_hook_section(&content, "agent-hub");
 
-                // Add stop hook
+                // Add stop hook — script_path has no special chars, safe for TOML
                 content.push_str(&format!(
-                    "\n[hooks.stop]\ncommand = \"{hook_script}\"\n",
-                    hook_script = hook_script.replace('"', "\\\"")
+                    "\n# agent-hub completion hook\n[hooks.stop]\ncommand = \"{}\"\n",
+                    script_path_str
                 ));
 
                 if let Some(parent) = config_path.parent() {
@@ -464,14 +493,6 @@ echo '{{"agent_type":"{agent_type}","session_id":"'"$SESSION_ID"'","timestamp":"
                     })
                 };
 
-                let kiro_hook_script = format!(
-                    r#"#!/bin/bash
-mkdir -p "{hooks_dir}"
-echo '{{"agent_type":"kiro","timestamp":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}}' > "{hooks_dir}/kiro_$$_$(date +%s).done"
-"#,
-                    hooks_dir = hooks_dir.display()
-                );
-
                 let hooks = config
                     .as_object_mut()
                     .unwrap()
@@ -482,7 +503,7 @@ echo '{{"agent_type":"kiro","timestamp":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}}' 
 
                 hooks.insert(
                     "stop".to_string(),
-                    serde_json::json!([{ "command": kiro_hook_script }]),
+                    serde_json::json!([{ "command": script_path_str }]),
                 );
 
                 if let Some(parent) = config_path.parent() {
@@ -622,10 +643,13 @@ echo '{{"agent_type":"kiro","timestamp":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}}' 
         } else {
             false
         };
-        status.insert("claude-code".to_string(), cc_configured);
+        // Also verify the script file exists
+        let cc_script_exists = self.hooks_dir.join("claude-code-hook.sh").exists();
+        status.insert("claude-code".to_string(), cc_configured && cc_script_exists);
 
         // Codex
         let codex_config = home.join(".codex/config.toml");
+        let codex_script_exists = self.hooks_dir.join("codex-hook.sh").exists();
         let codex_configured = if codex_config.exists() {
             std::fs::read_to_string(&codex_config)
                 .ok()
@@ -634,7 +658,7 @@ echo '{{"agent_type":"kiro","timestamp":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}}' 
         } else {
             false
         };
-        status.insert("codex".to_string(), codex_configured);
+        status.insert("codex".to_string(), codex_configured && codex_script_exists);
 
         // Kiro
         let kiro_config = home.join(".kiro/agents/kiro-monitored.json");
@@ -653,7 +677,8 @@ echo '{{"agent_type":"kiro","timestamp":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}}' 
         } else {
             false
         };
-        status.insert("kiro".to_string(), kiro_configured);
+        let kiro_script_exists = self.hooks_dir.join("kiro-hook.sh").exists();
+        status.insert("kiro".to_string(), kiro_configured && kiro_script_exists);
 
         status
     }
