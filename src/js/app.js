@@ -3,14 +3,56 @@ import * as Api from './api.js';
 
 // --- Tauri Updater helpers (no bundler) ---
 const tauriInvoke = window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);
+const transformCallback = window.__TAURI_INTERNALS__.transformCallback.bind(window.__TAURI_INTERNALS__);
 
-function createTauriChannel(onMessage) {
-    const id = window.__TAURI_INTERNALS__.transformCallback((msg) => {
-        onMessage?.(msg);
-    });
-    return {
-        __TAURI_TO_IPC_KEY__: () => `__CHANNEL__:${id}`
-    };
+class TauriChannel {
+    constructor() {
+        this._onmessage = () => {};
+        this._nextIndex = 0;
+        this._pending = {};
+        this._endIndex = undefined;
+        this.id = transformCallback((raw) => {
+            const idx = raw.index;
+            if ('end' in raw) {
+                if (idx === this._nextIndex) {
+                    this._cleanup();
+                } else {
+                    this._endIndex = idx;
+                }
+                return;
+            }
+            const msg = raw.message;
+            if (idx === this._nextIndex) {
+                this._onmessage(msg);
+                this._nextIndex++;
+                while (this._nextIndex in this._pending) {
+                    this._onmessage(this._pending[this._nextIndex]);
+                    delete this._pending[this._nextIndex];
+                    this._nextIndex++;
+                }
+                if (this._nextIndex === this._endIndex) {
+                    this._cleanup();
+                }
+            } else {
+                this._pending[idx] = msg;
+            }
+        });
+    }
+    _cleanup() {
+        window.__TAURI_INTERNALS__.unregisterCallback?.(this.id);
+    }
+    set onmessage(handler) {
+        this._onmessage = handler;
+    }
+    get onmessage() {
+        return this._onmessage;
+    }
+    __TAURI_TO_IPC_KEY__() {
+        return `__CHANNEL__:${this.id}`;
+    }
+    toJSON() {
+        return this.__TAURI_TO_IPC_KEY__();
+    }
 }
 
 async function checkUpdate() {
@@ -19,9 +61,12 @@ async function checkUpdate() {
     } catch { return null; }
 }
 
-async function downloadAndInstallUpdateResumable(rid, onProgress) {
-    const channel = createTauriChannel(onProgress);
-    await tauriInvoke('download_and_install_update_resumable', { rid, onEvent: channel });
+async function downloadAndInstall(rid, onProgress) {
+    const channel = new TauriChannel();
+    if (onProgress) {
+        channel.onmessage = onProgress;
+    }
+    await tauriInvoke('plugin:updater|download_and_install', { rid, onEvent: channel });
 }
 
 function getErrorMessage(error) {
@@ -505,7 +550,7 @@ class App {
             });
 
             await Promise.race([
-                downloadAndInstallUpdateResumable(updateRid, onProgress),
+                downloadAndInstall(updateRid, onProgress),
                 timeoutPromise,
             ]);
 
