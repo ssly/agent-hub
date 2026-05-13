@@ -1246,12 +1246,12 @@ class App {
     async showMcpAdd() {
         const i = this.i18n;
         const placeholderDemo = `# Codex / TOML style:
-[model]
-provider = "openai"
-
-[mcp.servers.mcp-server-time]
+[mcp_servers.mcp-server-time]
 command = "uvx"
 args = ["mcp-server-time"]
+
+[mcp_servers.mcp-server-time.env]
+API_KEY = "your-key"
 
 # Other Agent / JSON style:
 {
@@ -2350,8 +2350,14 @@ args = ["mcp-server-time"]
                 // Validate and unwrap
                 let saveText;
                 if (detail.format === 'toml') {
-                    // Strip [mcp_servers.xxx] header if present
-                    saveText = text.replace(/^\[mcp_servers\.[^\]]+\]\s*\n?/, '');
+                    // The backend accepts either a server fragment or a full [mcp_servers.*] block.
+                    // If the displayed fragment has local subtables like [env], strip the wrapper so
+                    // those subtables stay inside the edited server config.
+                    const startsWithMcpWrapper = /^\s*\[mcp_servers\.[^\]]+\]\s*\n?/.test(text);
+                    const hasLocalSubtable = /\n\s*\[(?!mcp_servers\.)[^\]]+\]/.test(text);
+                    saveText = startsWithMcpWrapper && hasLocalSubtable
+                        ? text.replace(/^\s*\[mcp_servers\.[^\]]+\]\s*\n?/, '')
+                        : text;
                     if (!saveText.trim()) {
                         this.showToast('Empty config', 'warning');
                         ta.value = originalText;
