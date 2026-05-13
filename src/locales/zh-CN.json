@@ -165,13 +165,16 @@
   "update": {
     "badge": "发现新版本",
     "title": "发现新版本",
-    "transition": "{current} → {latest}",
+    "transition": "v{current} → v{latest}",
     "confirm": "更新",
-    "downloading": "下载中...",
-    "error": "更新失败: {error}",
-    "installing": "安装中...",
     "retry": "重试",
-    "timeout_error": "下载超时（5分钟）"
+    "timeout_error": "下载超时（5 分钟）",
+    "failed_with_reason": "更新失败（{reason}）：{error}",
+    "reason_network": "网络异常",
+    "reason_signature": "签名校验失败",
+    "reason_timeout": "下载超时",
+    "reason_http": "服务器错误",
+    "reason_other": "未知错误"
   },
   "scan_invalid": {
     "title": "发现 {count} 个不合法的 Skill",

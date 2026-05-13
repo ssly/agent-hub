@@ -61,17 +61,85 @@ async function checkUpdate() {
     } catch { return null; }
 }
 
+// Use the custom backend command (download_and_install_update_resumable) so we
+// receive fine-grained progress events that include `total` and `downloaded`
+// on every Progress event. The built-in `plugin:updater|download_and_install`
+// only emits `chunkLength`, which is not enough to show a real progress bar.
 async function downloadAndInstall(rid, onProgress) {
     const channel = new TauriChannel();
     if (onProgress) {
         channel.onmessage = onProgress;
     }
-    await tauriInvoke('plugin:updater|download_and_install', { rid, onEvent: channel });
+    await tauriInvoke('download_and_install_update_resumable', { rid, onEvent: channel });
 }
 
 function getErrorMessage(error) {
-    if (!error) return 'Unknown error';
-    return error.message || String(error);
+    if (error == null) return 'Unknown error';
+    if (typeof error === 'string') return error;
+    if (error instanceof Error) {
+        return error.message || String(error);
+    }
+    if (typeof error === 'object') {
+        // Tauri CommandError is serialized as externally-tagged enum,
+        // e.g. { SyncError: "..." } / { NotFound: "..." } / { General: "..." }.
+        for (const key of Object.keys(error)) {
+            const value = error[key];
+            if (typeof value === 'string' && value.length > 0) {
+                return value;
+            }
+        }
+        // Common shapes that other libraries may produce.
+        if (typeof error.message === 'string') return error.message;
+        if (typeof error.error === 'string') return error.error;
+        try {
+            return JSON.stringify(error);
+        } catch {
+            return String(error);
+        }
+    }
+    return String(error);
+}
+
+function classifyUpdateError(rawError) {
+    const msg = String(rawError ?? '').toLowerCase();
+    if (!msg) return 'other';
+    if (msg.includes('timeout') || msg.includes('timed out') || msg.includes('超时')) {
+        return 'timeout';
+    }
+    if (msg.includes('signature') || msg.includes('minisign') || msg.includes('签名')) {
+        return 'signature';
+    }
+    if (
+        msg.includes('dns') ||
+        msg.includes('getaddrinfo') ||
+        msg.includes('connection') ||
+        msg.includes('connect ') ||
+        msg.includes('connect:') ||
+        msg.includes('unreachable') ||
+        msg.includes('tls') ||
+        msg.includes('ssl') ||
+        msg.includes('certificate') ||
+        msg.includes('offline') ||
+        msg.includes('error sending request') ||
+        msg.includes('network')
+    ) {
+        return 'network';
+    }
+    if (msg.includes('status:') || msg.includes('http')) {
+        return 'http';
+    }
+    return 'other';
+}
+
+function formatBytes(bytes) {
+    if (!Number.isFinite(bytes) || bytes < 0) return '0 B';
+    if (bytes < 1024) return `${bytes} B`;
+    const kb = bytes / 1024;
+    if (kb < 1024) return `${kb.toFixed(1)} KB`;
+    const mb = kb / 1024;
+    if (mb < 1024) return `${mb.toFixed(1)} MB`;
+    const gb = mb / 1024;
+    return `${gb.toFixed(2)} GB`;
 }
 
 function parseNonNegativeNumber(value) {
@@ -457,56 +525,99 @@ class App {
         const update = this.update;
         const transition = i.tWith('update.transition', { current: update.currentVersion, latest: update.version });
         const html = `<div class="p-5">
-            <h2 class="text-lg font-bold text-yellow-400 mb-4">${i.t('update.title')}</h2>
-            <p class="text-sm text-green-400 font-mono mb-4">${transition}</p>
-            <div id="update-status" class="text-sm text-gray-500 mb-3"></div>
-            <div id="update-progress-wrap" class="mb-3 hidden">
-                <div style="height:6px;background:#111827;border-radius:9999px;overflow:hidden;border:1px solid #374151;">
+            <h2 class="text-lg font-bold text-yellow-400 mb-1">${i.t('update.title')}</h2>
+            <p class="text-sm text-green-400 font-mono mb-4">${esc(transition)}</p>
+            <div id="update-progress-wrap" class="mb-4 hidden">
+                <div style="height:8px;background:#111827;border-radius:9999px;overflow:hidden;border:1px solid #374151;">
                     <div id="update-progress-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#34d399,#10b981);transition:width .2s ease;"></div>
                 </div>
-                <div id="update-progress-text" class="text-xs text-gray-500 mt-1"></div>
+                <div id="update-progress-text" class="text-xs text-gray-400 mt-2 font-mono">0%</div>
             </div>
+            <div id="update-error" class="text-sm text-red-400 mb-3 hidden whitespace-pre-wrap break-words"></div>
             <div id="update-actions" class="flex gap-3 justify-end">
                 <button class="px-4 py-2 bg-green-700 hover:bg-green-600 rounded text-sm cursor-pointer update-confirm-btn">${i.t('update.confirm')}</button>
-                <button class="px-4 py-2 text-gray-400 hover:text-white text-sm cursor-pointer modal-cancel">${i.t('action.cancel')}</button>
+                <button class="px-4 py-2 text-gray-400 hover:text-white text-sm cursor-pointer update-close-btn">${i.t('action.cancel')}</button>
             </div>
         </div>`;
         this.openModal(html);
-        this.modalEl().querySelector('.update-confirm-btn').addEventListener('click', () => this.doUpdate());
-        this.modalEl().querySelector('.modal-cancel').addEventListener('click', () => this.closeModal());
+        this.bindUpdateConfirm();
+        this.bindUpdateClose();
+    }
+
+    bindUpdateConfirm() {
+        const btn = this.modalEl().querySelector('.update-confirm-btn');
+        if (btn) btn.addEventListener('click', () => this.doUpdate());
+    }
+
+    bindUpdateClose() {
+        const btn = this.modalEl().querySelector('.update-close-btn');
+        if (btn) btn.addEventListener('click', () => this.closeModal());
     }
 
     async doUpdate() {
         const i = this.i18n;
-        const statusEl = document.getElementById('update-status');
         const progressWrapEl = document.getElementById('update-progress-wrap');
         const progressBarEl = document.getElementById('update-progress-bar');
         const progressTextEl = document.getElementById('update-progress-text');
+        const errorEl = document.getElementById('update-error');
         const actionsEl = document.getElementById('update-actions');
         const confirmBtn = this.modalEl().querySelector('.update-confirm-btn');
-        const cancelBtn = this.modalEl().querySelector('.modal-cancel');
+        const closeBtn = this.modalEl().querySelector('.update-close-btn');
         const DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
-        let percent = 0;
         let downloadTimer = null;
+        let totalBytes = 0;
 
-        const setProgressPercent = (p) => {
-            percent = Math.max(0, Math.min(100, p));
-            if (progressBarEl) progressBarEl.style.width = `${percent.toFixed(1)}%`;
-            if (progressTextEl) progressTextEl.textContent = `${Math.round(percent)}%`;
+        const setProgress = (percent, downloaded, total) => {
+            const p = Math.max(0, Math.min(100, percent));
+            if (progressBarEl) progressBarEl.style.width = `${p.toFixed(1)}%`;
+            if (!progressTextEl) return;
+            if (Number.isFinite(total) && total > 0) {
+                progressTextEl.textContent = `${p.toFixed(1)}%  ${formatBytes(downloaded)} / ${formatBytes(total)}`;
+            } else if (Number.isFinite(downloaded) && downloaded > 0) {
+                progressTextEl.textContent = formatBytes(downloaded);
+            } else {
+                progressTextEl.textContent = `${p.toFixed(1)}%`;
+            }
         };
 
-        const showRetry = (errorMsg) => {
-            statusEl.textContent = errorMsg;
+        const showError = (rawError) => {
+            const baseMsg = getErrorMessage(rawError);
+            const category = classifyUpdateError(baseMsg);
+            const reasonKey = {
+                network: 'update.reason_network',
+                signature: 'update.reason_signature',
+                timeout: 'update.reason_timeout',
+                http: 'update.reason_http',
+                other: 'update.reason_other',
+            }[category] || 'update.reason_other';
+            const friendlyMsg = i.tWith('update.failed_with_reason', {
+                reason: i.t(reasonKey),
+                error: baseMsg,
+            });
+            if (errorEl) {
+                errorEl.textContent = friendlyMsg;
+                errorEl.classList.remove('hidden');
+            }
+            if (progressTextEl) {
+                progressTextEl.textContent = '';
+            }
             if (actionsEl) {
-                actionsEl.innerHTML = `<button class="px-4 py-2 bg-green-700 hover:bg-green-600 rounded text-sm cursor-pointer update-retry-btn">${i.t('update.retry')}</button>
-                <button class="px-4 py-2 text-gray-400 hover:text-white text-sm cursor-pointer modal-cancel">${i.t('action.cancel')}</button>`;
+                actionsEl.innerHTML = `
+                    <button class="px-4 py-2 bg-green-700 hover:bg-green-600 rounded text-sm cursor-pointer update-retry-btn">${i.t('update.retry')}</button>
+                    <button class="px-4 py-2 text-gray-400 hover:text-white text-sm cursor-pointer update-close-btn">${i.t('action.close')}</button>`;
                 actionsEl.querySelector('.update-retry-btn').addEventListener('click', () => {
-                    actionsEl.innerHTML = `<button class="px-4 py-2 bg-green-700 hover:bg-green-600 rounded text-sm cursor-pointer update-confirm-btn opacity-50" disabled>${i.t('update.confirm')}</button>
-                    <button class="px-4 py-2 text-gray-400 hover:text-white text-sm cursor-pointer modal-cancel">${i.t('action.cancel')}</button>`;
-                    actionsEl.querySelector('.modal-cancel').addEventListener('click', () => this.closeModal());
+                    // Reset UI state and kick off the download again.
+                    if (errorEl) {
+                        errorEl.textContent = '';
+                        errorEl.classList.add('hidden');
+                    }
+                    actionsEl.innerHTML = `
+                        <button class="px-4 py-2 bg-green-700 hover:bg-green-600 rounded text-sm cursor-pointer update-confirm-btn opacity-60" disabled>${i.t('update.confirm')}</button>
+                        <button class="px-4 py-2 text-gray-400 hover:text-white text-sm cursor-pointer update-close-btn">${i.t('action.close')}</button>`;
+                    this.bindUpdateClose();
                     this.doUpdate();
                 });
-                actionsEl.querySelector('.modal-cancel').addEventListener('click', () => this.closeModal());
+                this.bindUpdateClose();
             }
         };
 
@@ -515,34 +626,43 @@ class App {
             if (typeof updateRid !== 'number') {
                 throw new Error('Missing update rid from updater check result');
             }
-            confirmBtn.disabled = true;
-            confirmBtn.classList.add('opacity-50');
-            cancelBtn.classList.add('hidden');
+            if (confirmBtn) {
+                confirmBtn.disabled = true;
+                confirmBtn.classList.add('opacity-60');
+            }
+            if (closeBtn) {
+                // Disallow closing mid-download; we cannot abort the backend yet.
+                closeBtn.classList.add('hidden');
+            }
+            if (errorEl) {
+                errorEl.textContent = '';
+                errorEl.classList.add('hidden');
+            }
             progressWrapEl?.classList.remove('hidden');
-            setProgressPercent(0);
-            statusEl.textContent = i.t('update.downloading');
+            setProgress(0, 0, 0);
 
             const onProgress = (event) => {
                 const parsed = parseDownloadProgressEvent(event);
                 if (!parsed.kind) return;
                 if (parsed.kind === 'started') {
-                    const total = parsed.total ?? parsed.contentLength;
-                    if (total && total > 0) {
-                        setProgressPercent(0);
-                    }
+                    const total = parsed.total ?? parsed.contentLength ?? 0;
+                    totalBytes = total || 0;
+                    const downloaded = parsed.downloaded ?? 0;
+                    const percent = totalBytes > 0 ? (downloaded / totalBytes) * 100 : 0;
+                    setProgress(percent, downloaded, totalBytes);
                 } else if (parsed.kind === 'progress') {
-                    const total = parsed.total ?? null;
-                    if (total && total > 0) {
-                        const dl = parsed.downloaded ?? 0;
-                        setProgressPercent((dl / total) * 100);
-                    }
+                    const total = parsed.total ?? totalBytes;
+                    if (total && total > totalBytes) totalBytes = total;
+                    const downloaded = parsed.downloaded ?? 0;
+                    const percent = totalBytes > 0 ? (downloaded / totalBytes) * 100 : 0;
+                    setProgress(percent, downloaded, totalBytes);
                 } else if (parsed.kind === 'finished') {
-                    setProgressPercent(100);
-                    statusEl.textContent = i.t('update.installing');
+                    const downloaded = parsed.downloaded ?? totalBytes;
+                    setProgress(100, downloaded, totalBytes || downloaded);
                 }
             };
 
-            // 5-minute timeout
+            // 5-minute hard timeout guard.
             const timeoutPromise = new Promise((_, reject) => {
                 downloadTimer = setTimeout(() => {
                     reject(new Error(i.t('update.timeout_error')));
@@ -555,13 +675,11 @@ class App {
             ]);
 
             clearTimeout(downloadTimer);
-            setProgressPercent(100);
-            statusEl.textContent = i.t('update.installing');
+            setProgress(100, totalBytes, totalBytes);
             await relaunchApp();
         } catch (e) {
             if (downloadTimer) clearTimeout(downloadTimer);
-            const msg = getErrorMessage(e);
-            showRetry(i.tWith('update.error', { error: msg }));
+            showError(e);
         }
     }
 
