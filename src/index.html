@@ -1,71 +1,79 @@
 <!DOCTYPE html>
-<html lang="en" class="h-full">
+<html lang="zh-CN" class="h-full">
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AGENT HUB</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Newsreader:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="styles.css" />
     <link rel="stylesheet" href="theme.css" />
+    <script>
+        /* Restore persisted theme before paint to avoid flash */
+        (function() {
+            const saved = localStorage.getItem('ah-theme');
+            if (saved === 'night') document.documentElement.setAttribute('data-theme', 'night');
+        })();
+    </script>
 </head>
-<body class="h-full bg-gray-900 text-gray-100 font-sans select-none">
+<body class="h-full font-sans select-none">
     <div id="app" class="flex h-full">
         <!-- Sidebar -->
-        <aside id="sidebar" class="w-64 min-w-[16rem] bg-gray-800 border-r border-gray-700 flex flex-col">
-            <div class="p-4 border-b border-gray-700 flex items-center justify-between">
-                <h1 class="text-lg font-bold text-green-400">AGENT HUB</h1>
+        <aside id="sidebar" class="flex flex-col" style="background:var(--sunken);border-right:1px solid var(--hairline);">
+            <div class="p-4 border-b flex items-center justify-between" style="border-color:var(--hairline);">
+                <h1 class="text-lg font-bold" style="font-family:var(--font-serif);color:var(--ink);">Agent Hub</h1>
                 <div class="flex gap-1 items-center">
-                    <button id="btn-lang" class="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 cursor-pointer px-1.5 py-0.5 rounded transition-colors">
+                    <button id="btn-lang" class="flex items-center gap-1 cursor-pointer px-1.5 py-0.5 rounded transition-colors" style="font-size:12px;color:var(--ink-3);">
                         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
-                        <span id="btn-lang-label">EN</span>
+                        <span id="btn-lang-label">中文</span>
                     </button>
-                    <button id="btn-refresh" class="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 cursor-pointer px-1.5 py-0.5 rounded transition-colors">
+                    <button id="btn-theme-toggle" title="切换主题" class="cursor-pointer" aria-label="Toggle theme">☾</button>
+                    <button id="btn-refresh" class="flex items-center cursor-pointer px-1.5 py-0.5 rounded transition-colors" style="color:var(--ink-3);">
                         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
                     </button>
-                    <button id="btn-sidebar-toggle" class="flex items-center text-xs text-gray-500 hover:text-gray-300 cursor-pointer px-1.5 py-0.5 rounded transition-colors" title="Toggle sidebar">
+                    <button id="btn-sidebar-toggle" class="flex items-center cursor-pointer px-1.5 py-0.5 rounded transition-colors" title="Toggle sidebar" style="color:var(--ink-3);">
                         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
                     </button>
                 </div>
             </div>
             <div id="sidebar-content" class="flex-1 flex flex-col overflow-hidden">
-                <div id="tab-bar" class="flex border-b border-gray-700">
-                <button id="tab-skills" class="flex-1 py-2 text-sm text-center text-gray-300 hover:text-white cursor-pointer border-b-2 border-cyan-500">Skills</button>
-                <button id="tab-mcp" class="flex-1 py-2 text-sm text-center text-gray-400 hover:text-white cursor-pointer border-b-2 border-transparent">MCP</button>
-                <button id="tab-sessions" class="flex-1 py-2 text-sm text-center text-gray-400 hover:text-white cursor-pointer border-b-2 border-transparent">Sessions</button>
-                <button id="tab-monitor" class="flex-1 py-2 text-sm text-center text-gray-400 hover:text-white cursor-pointer border-b-2 border-transparent">Monitor</button>
-            </div>
-            <div id="platform-list" class="flex-1 overflow-y-auto p-2 space-y-0.5"></div>
-            <div class="p-3 border-t border-gray-700">
-                <input id="search-input" type="text"
-                    class="w-full bg-gray-700 text-sm text-gray-200 rounded px-3 py-1.5 placeholder-gray-500 outline-none focus:ring-1 focus:ring-cyan-500"
-                    placeholder="Search skills..." />
-            </div>
-            <div id="trash-bin" class="hidden border-t border-gray-700 cursor-pointer hover:bg-gray-700/50"></div>
-            <div id="update-badge" class="hidden"></div>
-            <div id="version-display" class="px-3 py-2 border-t border-gray-700 text-center">
-                <span id="version-label" class="text-xs text-gray-600">v0.6.0</span>
-            </div>
+                <div id="tab-bar" class="flex" style="border-bottom:1px solid var(--hairline);">
+                    <button id="tab-skills" class="py-2 text-sm text-center cursor-pointer border-b-2 border-cyan-500" style="flex:none;padding-left:16px;padding-right:16px;">技能</button>
+                    <button id="tab-mcp" class="py-2 text-sm text-center cursor-pointer border-b-2 border-transparent" style="flex:none;padding-left:16px;padding-right:16px;">MCP</button>
+                    <button id="tab-sessions" class="py-2 text-sm text-center cursor-pointer border-b-2 border-transparent" style="flex:none;padding-left:16px;padding-right:16px;">会话</button>
+                    <button id="tab-monitor" class="py-2 text-sm text-center cursor-pointer border-b-2 border-transparent" style="flex:none;padding-left:16px;padding-right:16px;">监控</button>
+                </div>
+                <div id="platform-list" class="flex-1 overflow-y-auto p-2 space-y-0.5"></div>
+                <div class="p-3 border-t" style="border-color:var(--hairline);">
+                    <input id="search-input" type="text"
+                        class="w-full rounded outline-none"
+                        placeholder="搜索技能..." />
+                </div>
+                <div id="trash-bin" class="hidden border-t cursor-pointer" style="border-color:var(--hairline);"></div>
+                <div id="update-badge" class="hidden"></div>
+                <div id="version-display" class="px-3 py-2 border-t text-center" style="border-color:var(--hairline);">
+                    <span id="version-label" class="text-xs" style="color:var(--ink-4);">v0.6.0</span>
+                </div>
             </div>
         </aside>
 
         <!-- Main Content -->
         <main class="flex-1 flex flex-col overflow-hidden">
             <!-- Toolbar -->
-            <div id="toolbar" class="flex items-center gap-2 px-4 py-2 bg-gray-800 border-b border-gray-700">
-                <button id="btn-back" class="hidden text-sm text-gray-400 hover:text-white cursor-pointer flex items-center gap-1">
+            <div id="toolbar" class="flex items-center gap-2">
+                <button id="btn-back" class="hidden cursor-pointer flex items-center gap-1">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
-                    Back
+                    返回
                 </button>
-                <span id="breadcrumb" class="text-sm text-gray-400"></span>
+                <span id="breadcrumb" class="text-sm"></span>
                 <div class="flex-1"></div>
-                <button id="btn-scan-invalid" class="px-3 py-1 text-xs bg-yellow-700 hover:bg-yellow-600 rounded cursor-pointer flex items-center gap-1">
+                <button id="btn-scan-invalid" class="cursor-pointer flex items-center gap-1">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-                    <span id="btn-scan-invalid-label">Check</span>
+                    <span id="btn-scan-invalid-label">检查</span>
                 </button>
-                <button id="btn-diff" class="hidden px-3 py-1 text-xs bg-purple-700 hover:bg-purple-600 rounded cursor-pointer">Diff</button>
-                <button id="btn-sync" class="hidden px-3 py-1 text-xs bg-cyan-700 hover:bg-cyan-600 rounded cursor-pointer">Sync</button>
+                <button id="btn-diff" class="hidden cursor-pointer">对比</button>
+                <button id="btn-sync" class="hidden cursor-pointer">同步</button>
             </div>
 
             <!-- Views -->
@@ -80,12 +88,32 @@
     </div>
 
     <!-- Modal Overlay -->
-    <div id="modal-overlay" class="fixed inset-0 bg-black/60 hidden items-center justify-center z-50" style="display:none;">
-        <div id="modal-content" class="bg-gray-800 rounded-lg shadow-xl w-[48rem] max-w-[90vw] max-h-[85vh] overflow-y-auto"></div>
+    <div id="modal-overlay" class="fixed inset-0 hidden items-center justify-center z-50" style="display:none;">
+        <div id="modal-content" class="w-[48rem] max-w-[90vw] max-h-[85vh] overflow-y-auto"></div>
     </div>
 
     <div id="toast-container"></div>
 
     <script type="module" src="js/app.js"></script>
+    <script>
+        /* Theme toggle */
+        document.getElementById('btn-theme-toggle').addEventListener('click', function() {
+            const root = document.documentElement;
+            const current = root.getAttribute('data-theme');
+            if (current === 'night') {
+                root.removeAttribute('data-theme');
+                this.textContent = '☾';
+                localStorage.setItem('ah-theme', 'light');
+            } else {
+                root.setAttribute('data-theme', 'night');
+                this.textContent = '☀';
+                localStorage.setItem('ah-theme', 'night');
+            }
+        });
+        /* Sync icon on load */
+        if (localStorage.getItem('ah-theme') === 'night') {
+            document.getElementById('btn-theme-toggle').textContent = '☀';
+        }
+    </script>
 </body>
 </html>

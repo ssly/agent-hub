@@ -32,8 +32,7 @@ pub enum StateChange {
 }
 
 /// WorkingState represents what the agent is *doing* right now within a turn.
-/// Tier-1 adapters (Kiro, Claude Code) derive this from JSONL parsing.
-/// Tier-2 adapters (Codex, Gemini) leave it at Idle since they don't parse logs.
+/// Adapters derive this from local session streams when possible.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum WorkingState {
@@ -59,8 +58,12 @@ pub struct AgentSession {
     #[allow(dead_code)]
     pub pid: Option<u32>,
     pub last_message_preview: Option<String>,
+    /// Timestamp of the last assistant reply when the adapter can infer it.
+    /// Used by the UI to sort the "All" monitor view by newest reply first.
+    #[serde(default)]
+    pub last_reply_at: Option<DateTime<Utc>>,
     /// Last user prompt text (Q in the Q-prompt-A-reply pairing).
-    /// `None` for Tier-2 adapters (Codex/Gemini) that do not parse JSONL.
+    /// `None` when the adapter cannot resolve the current turn's prompt.
     #[serde(default)]
     pub last_user_prompt: Option<String>,
     /// What the agent is doing right now (idle / working / finished).

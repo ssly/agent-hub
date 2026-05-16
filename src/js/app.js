@@ -1869,13 +1869,11 @@ API_KEY = "your-key"
 
         if (this.currentTab === 'monitor') {
             searchEl.classList.add('hidden');
-            console.log('[Monitor] renderSidebar, hooksStatus:', this.hooksStatus);
             const activeSessions = this.monitorSessions.filter(s => s.status !== 'ended');
             const groups = [
                 { id: 'kiro', name: 'Kiro' },
                 { id: 'claude-code', name: 'Claude Code' },
                 { id: 'codex', name: 'Codex' },
-                { id: 'gemini', name: 'Gemini' },
             ];
             const withSessions = groups.filter(g => activeSessions.some(s => s.agent_type === g.id));
             const totalCount = activeSessions.length;
@@ -1921,7 +1919,7 @@ API_KEY = "your-key"
                 const btnClass = configured
                     ? 'text-xs px-2 py-0.5 rounded bg-red-900/30 text-red-400 hover:bg-red-900/50 cursor-pointer'
                     : 'text-xs px-2 py-0.5 rounded bg-green-900/30 text-green-400 hover:bg-green-900/50 cursor-pointer';
-                const btnText = configured ? i.t('monitor.hooks_remove') : i.t('monitor.hooks_configure');
+                const btnText = configured ? i.t('monitor.hooks_clear') : i.t('monitor.hooks_import');
                 const dot = configured
                     ? '<span class="w-1.5 h-1.5 rounded-full bg-green-500 inline-block"></span>'
                     : '<span class="w-1.5 h-1.5 rounded-full bg-gray-600 inline-block"></span>';
@@ -2773,6 +2771,21 @@ API_KEY = "your-key"
         }
     }
 
+    monitorSortValue(session) {
+        const value = session?.last_reply_at || session?.last_activity || session?.started_at;
+        if (!value) return 0;
+        if (typeof value === 'number') return value < 1e12 ? value * 1000 : value;
+        const parsed = Date.parse(value);
+        return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    formatMonitorTime(value) {
+        const ms = this.monitorSortValue({ last_reply_at: value });
+        if (!ms) return '-';
+        const locale = this.i18n.locale === 'zh-CN' ? 'zh-CN' : 'en-US';
+        return new Date(ms).toLocaleString(locale);
+    }
+
     renderMonitorView() {
         const el = document.getElementById('view-monitor');
         const i = this.i18n;
@@ -2800,6 +2813,7 @@ API_KEY = "your-key"
         const sessions = this.selectedMonitorAgent === 'all'
             ? activeSessions
             : activeSessions.filter(s => s.agent_type === this.selectedMonitorAgent);
+        sessions.sort((a, b) => this.monitorSortValue(b) - this.monitorSortValue(a));
         if (sessions.length === 0) {
             el.innerHTML = `<p class="text-gray-500 text-sm">${i.t('monitor.empty')}</p>`;
             return;
@@ -2836,8 +2850,7 @@ API_KEY = "your-key"
             idle: { color: 'bg-gray-400', pulse: false, text: i.t('monitor.working_state.idle') },
             finished: { color: 'bg-blue-500', pulse: false, text: i.t('monitor.working_state.finished') },
         };
-        // Tier-1 adapters (Kiro, Claude Code) have real working_state;
-        // Tier-2 (Codex, Gemini) fall back to the coarse session.status.
+        // Adapters with stream data expose real working_state; otherwise fall back to status.
         const ws = session.working_state || 'idle';
         const st = (!session.data_limited && wsMap[ws]) || statusMap[session.status] || statusMap.idle;
         const sourceStyle = session.source_tag === 'CLI'
@@ -2859,25 +2872,20 @@ API_KEY = "your-key"
             : '';
         const pidStr = session.pid ? i.tWith('monitor.pid', { pid: session.pid }) : '';
         const preview = session.last_message_preview || '';
+        const replyTime = session.last_reply_at ? this.formatMonitorTime(session.last_reply_at) : '';
         const previewId = `preview-${session.session_id.replace(/[^a-zA-Z0-9-]/g, '_')}`;
         // Q-prompt-A-reply: headline = last user prompt. Falls back to project title
-        // when no JSONL data is available (Tier-2 adapters Codex/Gemini).
+        // when no local conversation data is available.
         const userPrompt = (session.last_user_prompt || '').trim();
         const headline = userPrompt || session.title || session.session_id;
         const projectTag = userPrompt ? (session.title || '') : '';
 
-        // Subtitle driven by working_state for Tier-1 adapters.
-        let subtitle = '';
-        if (!session.data_limited) {
-            if (session.working_state === 'working') {
-                subtitle = i.t('monitor.working_state.working');
-            } else if (session.working_state === 'idle') {
-                subtitle = i.t('monitor.working_state.idle');
-            } else {
-                subtitle = preview;
-            }
-        } else {
-            subtitle = preview;
+        // Prefer the agent's last reply; fall back to the current working state.
+        let subtitle = preview;
+        if (!subtitle && !session.data_limited) {
+            subtitle = session.working_state === 'working'
+                ? i.t('monitor.working_state.working')
+                : i.t('monitor.working_state.idle');
         }
 
         return `<div class="bg-gray-800 rounded-lg border border-gray-700 p-3">
@@ -2895,6 +2903,7 @@ API_KEY = "your-key"
                         <span>${esc(session.model)}</span>
                         ${cwdShort ? `<span class="truncate" title="${esc(session.cwd)}">${esc(cwdShort)}</span>` : ''}
                         ${duration ? `<span>${esc(duration)}</span>` : ''}
+                        ${replyTime ? `<span>${i.tWith('monitor.reply_time', { time: replyTime })}</span>` : ''}
                     </div>
                     ${subtitle ? `<div id="${previewId}" class="text-xs text-gray-500 mt-2 cursor-pointer hover:text-gray-300 transition-colors" style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:pre-wrap;word-break:break-word;" onclick="app.showMonitorPreview('${previewId}','${esc(session.session_id)}')">${esc(subtitle)}</div>` : ''}
                 </div>

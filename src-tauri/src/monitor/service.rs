@@ -27,7 +27,6 @@ impl<R: Runtime> MonitorService<R> {
             Box::new(super::adapters::KiroAdapter::new()),
             Box::new(super::adapters::ClaudeCodeAdapter::new()),
             Box::new(super::adapters::CodexAdapter::new()),
-            Box::new(super::adapters::GeminiAdapter::new()),
         ];
 
         let hooks_dir = dirs::home_dir()
@@ -137,7 +136,11 @@ impl<R: Runtime> MonitorService<R> {
         }
     }
 
-    fn process_hook_marker(state: &Arc<Mutex<MonitorState>>, app: &AppHandle<R>, path: &std::path::Path) {
+    fn process_hook_marker(
+        state: &Arc<Mutex<MonitorState>>,
+        app: &AppHandle<R>,
+        path: &std::path::Path,
+    ) {
         let content = match std::fs::read_to_string(path) {
             Ok(c) => c,
             Err(e) => {
@@ -162,8 +165,19 @@ impl<R: Runtime> MonitorService<R> {
             .to_string();
         let session_id = marker
             .get("session_id")
+            .or_else(|| marker.get("thread_id"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        let marker_event = marker
+            .get("event")
+            .and_then(|v| v.as_str())
+            .unwrap_or("end");
+        let marker_time = marker
+            .get("timestamp")
+            .and_then(|v| v.as_str())
+            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+            .map(|datetime| datetime.to_utc())
+            .unwrap_or_else(Utc::now);
 
         log::info!("Hook completion marker: agent={agent_type} session={session_id:?}");
 
@@ -180,17 +194,31 @@ impl<R: Runtime> MonitorService<R> {
             state
                 .sessions
                 .iter()
-                .filter(|(_, s)| s.agent_type == agent_type && s.working_state == WorkingState::Working)
+                .filter(|(_, s)| {
+                    s.agent_type == agent_type && s.working_state == WorkingState::Working
+                })
+                .max_by_key(|(_, s)| s.last_activity)
                 .map(|(id, _)| id.clone())
-                .next()
+                .or_else(|| {
+                    state
+                        .sessions
+                        .iter()
+                        .filter(|(_, s)| s.agent_type == agent_type)
+                        .max_by_key(|(_, s)| s.last_activity)
+                        .map(|(id, _)| id.clone())
+                })
         };
 
         if let Some(id) = target_id {
             if let Some(session) = state.sessions.get_mut(&id) {
                 let old_state = session.working_state;
                 session.working_state = WorkingState::Finished;
-                let title = session.title.clone();
-                let body = format!("[{}] {}", session.agent_type, title);
+                session.status = SessionStatus::Active;
+                session.last_activity = marker_time;
+                if session.last_reply_at.is_none() {
+                    session.last_reply_at = Some(marker_time);
+                }
+                let body = Self::notification_body(session);
 
                 let _ = app.emit(
                     "monitor:state-changed",
@@ -200,7 +228,9 @@ impl<R: Runtime> MonitorService<R> {
                     }),
                 );
 
-                if matches!(old_state, WorkingState::Working)
+                let explicit_end = marker_event == "end" || marker_event == "done";
+                if (matches!(old_state, WorkingState::Working)
+                    || (explicit_end && !matches!(old_state, WorkingState::Finished)))
                     && Self::should_notify(&mut state, &id)
                 {
                     let granted = app
@@ -242,7 +272,6 @@ impl<R: Runtime> MonitorService<R> {
                 Box::new(super::adapters::KiroAdapter::new()),
                 Box::new(super::adapters::ClaudeCodeAdapter::new()),
                 Box::new(super::adapters::CodexAdapter::new()),
-                Box::new(super::adapters::GeminiAdapter::new()),
             ];
 
             let mut detected = HashMap::new();
@@ -261,9 +290,7 @@ impl<R: Runtime> MonitorService<R> {
 
         for id in new_ids.difference(&old_ids) {
             if let Some(session) = detected.get(id) {
-                state
-                    .sessions
-                    .insert(id.clone(), session.clone());
+                state.sessions.insert(id.clone(), session.clone());
                 let _ = app.emit(
                     "monitor:state-changed",
                     serde_json::json!({
@@ -277,9 +304,7 @@ impl<R: Runtime> MonitorService<R> {
         for id in new_ids.intersection(&old_ids) {
             if let Some(session) = detected.get(id) {
                 let old_working_state = state.sessions.get(id).map(|s| s.working_state);
-                state
-                    .sessions
-                    .insert(id.clone(), session.clone());
+                state.sessions.insert(id.clone(), session.clone());
                 let _ = app.emit(
                     "monitor:state-changed",
                     serde_json::json!({
@@ -292,8 +317,7 @@ impl<R: Runtime> MonitorService<R> {
                 // Notification fires here, NOT on `removed` (kill -9 must stay silent).
                 let is_turn_end = is_turn_end_transition(old_working_state, session.working_state);
                 if is_turn_end && Self::should_notify(&mut state, &session.session_id) {
-                    let title = session.title.clone();
-                    let body = format!("[{}] {}", session.agent_type, title);
+                    let body = Self::notification_body(session);
                     let granted = app
                         .notification()
                         .permission_state()
@@ -345,7 +369,14 @@ impl<R: Runtime> MonitorService<R> {
 
     pub fn get_sessions(&self) -> Vec<AgentSession> {
         let state = self.state.lock().unwrap();
-        state.sessions.values().cloned().collect()
+        let mut sessions: Vec<AgentSession> = state.sessions.values().cloned().collect();
+        sessions.sort_by(|left, right| {
+            right
+                .last_reply_at
+                .unwrap_or(right.last_activity)
+                .cmp(&left.last_reply_at.unwrap_or(left.last_activity))
+        });
+        sessions
     }
 
     pub fn get_config(&self) -> MonitorConfig {
@@ -356,10 +387,6 @@ impl<R: Runtime> MonitorService<R> {
     pub fn set_config(&self, new_config: MonitorConfig) {
         let mut state = self.state.lock().unwrap();
         state.config = new_config;
-    }
-
-    pub fn hooks_dir(&self) -> &std::path::Path {
-        &self.hooks_dir
     }
 
     pub fn configure_hooks(&self, agent_type: &str) -> Result<(), String> {
@@ -373,17 +400,49 @@ impl<R: Runtime> MonitorService<R> {
         let script_path = hooks_dir.join(format!("{agent_type}-hook.sh"));
 
         let script_content = match agent_type {
-            "claude-code" => format!(
-                "#!/bin/bash\nmkdir -p \"{d}\"\nSID=$(cat | python3 -c \"import sys,json; print(json.load(sys.stdin).get('session_id',''))\" 2>/dev/null)\necho '{{\"agent_type\":\"claude-code\",\"session_id\":\"'\"$SID\"'\",\"timestamp\":\"'\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"'\"}}' > \"{d}/claude-code_$$_$(date +%s).done\"\n",
-                d = hooks_dir.display()
-            ),
-            "codex" => format!(
-                "#!/bin/bash\nmkdir -p \"{d}\"\necho '{{\"agent_type\":\"codex\",\"timestamp\":\"'\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"'\"}}' > \"{d}/codex_$$_$(date +%s).done\"\n",
-                d = hooks_dir.display()
-            ),
-            "kiro" => format!(
-                "#!/bin/bash\nmkdir -p \"{d}\"\necho '{{\"agent_type\":\"kiro\",\"timestamp\":\"'\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"'\"}}' > \"{d}/kiro_$$_$(date +%s).done\"\n",
-                d = hooks_dir.display()
+            "claude-code" | "codex" | "kiro" => format!(
+                r#"#!/bin/bash
+set -u
+HOOK_DIR="{d}"
+AGENT_TYPE="{agent}"
+EVENT="${{1:-end}}"
+PAYLOAD="$(cat 2>/dev/null || true)"
+mkdir -p "$HOOK_DIR"
+OUT="$HOOK_DIR/${{AGENT_TYPE}}_$$_$(date +%s).done"
+AGENT_HUB_PAYLOAD="$PAYLOAD" AGENT_HUB_EVENT="$EVENT" AGENT_HUB_AGENT="$AGENT_TYPE" python3 - <<'PY' > "$OUT"
+import datetime
+import json
+import os
+
+payload = os.environ.get("AGENT_HUB_PAYLOAD", "")
+try:
+    data = json.loads(payload) if payload.strip() else {{}}
+except Exception:
+    data = {{}}
+
+def pick(*keys):
+    for key in keys:
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+marker = {{
+    "agent_type": os.environ.get("AGENT_HUB_AGENT", "unknown"),
+    "event": os.environ.get("AGENT_HUB_EVENT", "end"),
+    "timestamp": datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+}}
+session_id = pick("session_id", "sessionId", "thread_id", "threadId", "conversation_id", "conversationId")
+cwd = pick("cwd", "workdir", "working_dir", "workspace", "workspaceRoot")
+if session_id:
+    marker["session_id"] = session_id
+if cwd:
+    marker["cwd"] = cwd
+print(json.dumps(marker, ensure_ascii=False, separators=(",", ":")))
+PY
+"#,
+                d = hooks_dir.display(),
+                agent = agent_type,
             ),
             _ => return Err(format!("Unsupported agent type: {agent_type}")),
         };
@@ -402,9 +461,11 @@ impl<R: Runtime> MonitorService<R> {
             "claude-code" => {
                 let settings_path = home.join(".claude/settings.json");
                 let mut settings: serde_json::Value = if settings_path.exists() {
-                    serde_json::from_str(&std::fs::read_to_string(&settings_path)
-                        .map_err(|e| format!("Failed to read settings: {e}"))?)
-                        .unwrap_or(serde_json::json!({}))
+                    serde_json::from_str(
+                        &std::fs::read_to_string(&settings_path)
+                            .map_err(|e| format!("Failed to read settings: {e}"))?,
+                    )
+                    .unwrap_or(serde_json::json!({}))
                 } else {
                     serde_json::json!({})
                 };
@@ -427,12 +488,14 @@ impl<R: Runtime> MonitorService<R> {
                 stop_hooks.retain(|h| {
                     h.get("hooks")
                         .and_then(|arr| arr.as_array())
-                        .map(|arr| !arr.iter().any(|hh| {
-                            hh.get("command")
-                                .and_then(|c| c.as_str())
-                                .map(|c| c.contains("agent-hub"))
-                                .unwrap_or(false)
-                        }))
+                        .map(|arr| {
+                            !arr.iter().any(|hh| {
+                                hh.get("command")
+                                    .and_then(|c| c.as_str())
+                                    .map(|c| c.contains("agent-hub"))
+                                    .unwrap_or(false)
+                            })
+                        })
                         .unwrap_or(true)
                 });
 
@@ -440,7 +503,33 @@ impl<R: Runtime> MonitorService<R> {
                     "matcher": "",
                     "hooks": [{
                         "type": "command",
-                        "command": script_path_str
+                        "command": format!("{} end", script_path_str)
+                    }]
+                }));
+
+                let start_hooks = hooks
+                    .entry("UserPromptSubmit")
+                    .or_insert_with(|| serde_json::json!([]))
+                    .as_array_mut()
+                    .unwrap();
+                start_hooks.retain(|h| {
+                    h.get("hooks")
+                        .and_then(|arr| arr.as_array())
+                        .map(|arr| {
+                            !arr.iter().any(|hh| {
+                                hh.get("command")
+                                    .and_then(|c| c.as_str())
+                                    .map(|c| c.contains("agent-hub"))
+                                    .unwrap_or(false)
+                            })
+                        })
+                        .unwrap_or(true)
+                });
+                start_hooks.push(serde_json::json!({
+                    "matcher": "",
+                    "hooks": [{
+                        "type": "command",
+                        "command": format!("{} start", script_path_str)
                     }]
                 }));
 
@@ -461,13 +550,13 @@ impl<R: Runtime> MonitorService<R> {
                     String::new()
                 };
 
-                // Remove existing agent-hub hook section
-                content = Self::remove_toml_hook_section(&content, "agent-hub");
+                // Remove existing managed hook section
+                content = Self::remove_toml_hook_section(&content, "codex-hook.sh");
 
-                // Add stop hook — script_path has no special chars, safe for TOML
+                // Add stop hook. Codex turn start/end is also inferred from rollout events.
                 content.push_str(&format!(
-                    "\n# agent-hub completion hook\n[hooks.stop]\ncommand = \"{}\"\n",
-                    script_path_str
+                    "\n# agent-hub hooks begin\n[hooks.stop]\ncommand = \"{} end\"\n# agent-hub hooks end\n",
+                    Self::toml_escape(&script_path_str)
                 ));
 
                 if let Some(parent) = config_path.parent() {
@@ -481,9 +570,11 @@ impl<R: Runtime> MonitorService<R> {
             "kiro" => {
                 let config_path = home.join(".kiro/agents/kiro-monitored.json");
                 let mut config: serde_json::Value = if config_path.exists() {
-                    serde_json::from_str(&std::fs::read_to_string(&config_path)
-                        .map_err(|e| format!("Failed to read config: {e}"))?)
-                        .map_err(|e| format!("Failed to parse config: {e}"))?
+                    serde_json::from_str(
+                        &std::fs::read_to_string(&config_path)
+                            .map_err(|e| format!("Failed to read config: {e}"))?,
+                    )
+                    .map_err(|e| format!("Failed to parse config: {e}"))?
                 } else {
                     serde_json::json!({
                         "name": "kiro-monitored",
@@ -503,17 +594,14 @@ impl<R: Runtime> MonitorService<R> {
 
                 hooks.insert(
                     "stop".to_string(),
-                    serde_json::json!([{ "command": script_path_str }]),
+                    serde_json::json!([{ "command": format!("{} end", script_path_str) }]),
                 );
 
                 if let Some(parent) = config_path.parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
-                std::fs::write(
-                    &config_path,
-                    serde_json::to_string_pretty(&config).unwrap(),
-                )
-                .map_err(|e| format!("Failed to write config: {e}"))?;
+                std::fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap())
+                    .map_err(|e| format!("Failed to write config: {e}"))?;
 
                 log::info!("Configured Kiro hooks in {:?}", config_path);
             }
@@ -532,26 +620,33 @@ impl<R: Runtime> MonitorService<R> {
                 if !settings_path.exists() {
                     return Ok(());
                 }
-                let mut settings: serde_json::Value =
-                    serde_json::from_str(&std::fs::read_to_string(&settings_path)
-                        .map_err(|e| format!("Failed to read settings: {e}"))?)
-                        .map_err(|e| format!("Failed to parse settings: {e}"))?;
+                let mut settings: serde_json::Value = serde_json::from_str(
+                    &std::fs::read_to_string(&settings_path)
+                        .map_err(|e| format!("Failed to read settings: {e}"))?,
+                )
+                .map_err(|e| format!("Failed to parse settings: {e}"))?;
 
                 if let Some(hooks) = settings.get_mut("hooks").and_then(|h| h.as_object_mut()) {
-                    if let Some(stop) = hooks.get_mut("Stop").and_then(|s| s.as_array_mut()) {
-                        stop.retain(|h| {
-                            h.get("hooks")
-                                .and_then(|arr| arr.as_array())
-                                .map(|arr| !arr.iter().any(|hh| {
-                                    hh.get("command")
-                                        .and_then(|c| c.as_str())
-                                        .map(|c| c.contains("agent-hub"))
-                                        .unwrap_or(false)
-                                }))
-                                .unwrap_or(true)
-                        });
-                        if stop.is_empty() {
-                            hooks.remove("Stop");
+                    for event_name in ["Stop", "UserPromptSubmit"] {
+                        if let Some(event_hooks) =
+                            hooks.get_mut(event_name).and_then(|s| s.as_array_mut())
+                        {
+                            event_hooks.retain(|h| {
+                                h.get("hooks")
+                                    .and_then(|arr| arr.as_array())
+                                    .map(|arr| {
+                                        !arr.iter().any(|hh| {
+                                            hh.get("command")
+                                                .and_then(|c| c.as_str())
+                                                .map(|c| c.contains("agent-hub"))
+                                                .unwrap_or(false)
+                                        })
+                                    })
+                                    .unwrap_or(true)
+                            });
+                            if event_hooks.is_empty() {
+                                hooks.remove(event_name);
+                            }
                         }
                     }
                     if hooks.is_empty() {
@@ -574,7 +669,7 @@ impl<R: Runtime> MonitorService<R> {
                 }
                 let content = std::fs::read_to_string(&config_path)
                     .map_err(|e| format!("Failed to read config: {e}"))?;
-                let cleaned = Self::remove_toml_hook_section(&content, "agent-hub");
+                let cleaned = Self::remove_toml_hook_section(&content, "codex-hook.sh");
                 std::fs::write(&config_path, cleaned)
                     .map_err(|e| format!("Failed to write config: {e}"))?;
 
@@ -585,20 +680,18 @@ impl<R: Runtime> MonitorService<R> {
                 if !config_path.exists() {
                     return Ok(());
                 }
-                let mut config: serde_json::Value =
-                    serde_json::from_str(&std::fs::read_to_string(&config_path)
-                        .map_err(|e| format!("Failed to read config: {e}"))?)
-                        .map_err(|e| format!("Failed to parse config: {e}"))?;
+                let mut config: serde_json::Value = serde_json::from_str(
+                    &std::fs::read_to_string(&config_path)
+                        .map_err(|e| format!("Failed to read config: {e}"))?,
+                )
+                .map_err(|e| format!("Failed to parse config: {e}"))?;
 
                 if let Some(hooks) = config.get_mut("hooks").and_then(|h| h.as_object_mut()) {
                     hooks.remove("stop");
                 }
 
-                std::fs::write(
-                    &config_path,
-                    serde_json::to_string_pretty(&config).unwrap(),
-                )
-                .map_err(|e| format!("Failed to write config: {e}"))?;
+                std::fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap())
+                    .map_err(|e| format!("Failed to write config: {e}"))?;
 
                 log::info!("Removed Kiro hooks from {:?}", config_path);
             }
@@ -626,17 +719,21 @@ impl<R: Runtime> MonitorService<R> {
                     v.get("hooks")
                         .and_then(|h| h.get("Stop"))
                         .and_then(|s| s.as_array())
-                        .map(|arr| arr.iter().any(|h| {
-                            h.get("hooks")
-                                .and_then(|hh| hh.as_array())
-                                .map(|hh| hh.iter().any(|cmd| {
-                                    cmd.get("command")
-                                        .and_then(|c| c.as_str())
-                                        .map(|c| c.contains("agent-hub"))
-                                        .unwrap_or(false)
-                                }))
-                                .unwrap_or(false)
-                        }))
+                        .map(|arr| {
+                            arr.iter().any(|h| {
+                                h.get("hooks")
+                                    .and_then(|hh| hh.as_array())
+                                    .map(|hh| {
+                                        hh.iter().any(|cmd| {
+                                            cmd.get("command")
+                                                .and_then(|c| c.as_str())
+                                                .map(|c| c.contains("agent-hub"))
+                                                .unwrap_or(false)
+                                        })
+                                    })
+                                    .unwrap_or(false)
+                            })
+                        })
                         .unwrap_or(false)
                 })
                 .unwrap_or(false)
@@ -653,7 +750,7 @@ impl<R: Runtime> MonitorService<R> {
         let codex_configured = if codex_config.exists() {
             std::fs::read_to_string(&codex_config)
                 .ok()
-                .map(|s| s.contains("agent-hub"))
+                .map(|s| s.contains(".agent-hub/hooks") && s.contains("codex-hook.sh"))
                 .unwrap_or(false)
         } else {
             false
@@ -670,7 +767,17 @@ impl<R: Runtime> MonitorService<R> {
                     v.get("hooks")
                         .and_then(|h| h.get("stop"))
                         .and_then(|s| s.as_array())
-                        .map(|arr| !arr.is_empty())
+                        .map(|arr| {
+                            arr.iter().any(|hook| {
+                                hook.get("command")
+                                    .and_then(|command| command.as_str())
+                                    .map(|command| {
+                                        command.contains(".agent-hub/hooks")
+                                            && command.contains("kiro-hook.sh")
+                                    })
+                                    .unwrap_or(false)
+                            })
+                        })
                         .unwrap_or(false)
                 })
                 .unwrap_or(false)
@@ -684,22 +791,59 @@ impl<R: Runtime> MonitorService<R> {
     }
 
     fn remove_toml_hook_section(content: &str, marker: &str) -> String {
-        let mut result = String::new();
-        let mut in_hook_section = false;
-        for line in content.lines() {
-            if line.contains(marker) {
-                in_hook_section = true;
+        let lines: Vec<&str> = content.lines().collect();
+        let mut result = Vec::new();
+        let mut index = 0usize;
+
+        while index < lines.len() {
+            let line = lines[index];
+            if line.contains("# agent-hub hooks begin") {
+                index += 1;
+                while index < lines.len() && !lines[index].contains("# agent-hub hooks end") {
+                    index += 1;
+                }
+                index = index.saturating_add(1);
                 continue;
             }
-            if in_hook_section && line.trim().starts_with('[') {
-                in_hook_section = false;
+
+            if line.contains("# agent-hub completion hook") || line.contains(marker) {
+                index += 1;
+                if index < lines.len() && lines[index].trim_start().starts_with("[hooks.") {
+                    index += 1;
+                    while index < lines.len() && !lines[index].trim_start().starts_with('[') {
+                        index += 1;
+                    }
+                }
+                continue;
             }
-            if !in_hook_section {
-                result.push_str(line);
-                result.push('\n');
+
+            if line.trim_start().starts_with("[hooks.") {
+                let section_start = index;
+                index += 1;
+                while index < lines.len()
+                    && !lines[index].trim_start().starts_with('[')
+                    && !lines[index].contains("# agent-hub hooks begin")
+                    && !lines[index].contains("# agent-hub completion hook")
+                {
+                    index += 1;
+                }
+                let section = lines[section_start..index].join("\n");
+                if section.contains(marker) || section.contains(".agent-hub/hooks") {
+                    continue;
+                }
+                result.extend_from_slice(&lines[section_start..index]);
+                continue;
             }
+
+            result.push(line);
+            index += 1;
         }
-        result.trim_end().to_string()
+
+        result.join("\n").trim_end().to_string()
+    }
+
+    fn toml_escape(value: &str) -> String {
+        value.replace('\\', "\\\\").replace('"', "\\\"")
     }
 
     /// Returns true if a turn-end notification should fire for this session_id,
@@ -712,13 +856,24 @@ impl<R: Runtime> MonitorService<R> {
     fn should_notify(state: &mut MonitorState, session_id: &str) -> bool {
         should_notify_impl(state, session_id)
     }
+
+    fn notification_body(session: &AgentSession) -> String {
+        let headline = session
+            .last_user_prompt
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(&session.title);
+        format!(
+            "[{} {}] {}",
+            session.agent_type, session.source_tag, headline
+        )
+    }
 }
 
 /// Pure transition predicate. Working → Finished counts as a turn-end.
 /// Anything else (including Working → Ended from a kill) does not.
 fn is_turn_end_transition(old: Option<WorkingState>, new: WorkingState) -> bool {
-    matches!(old, Some(WorkingState::Working))
-        && matches!(new, WorkingState::Finished)
+    matches!(old, Some(WorkingState::Working)) && matches!(new, WorkingState::Finished)
 }
 
 /// Cooldown + enabled gate for turn-end notifications. Pure on `state`.
@@ -827,5 +982,41 @@ mod tests {
             Utc::now() - chrono::Duration::seconds(1),
         );
         assert!(should_notify_impl(&mut s, "sess-1"));
+    }
+
+    #[test]
+    fn remove_toml_hook_section_removes_legacy_codex_hook() {
+        let input = r#"model = "gpt-5"
+
+# agent-hub completion hook
+[hooks.stop]
+command = "/Users/me/.agent-hub/hooks/codex-hook.sh"
+
+[plugins.browser]
+enabled = true
+"#;
+        let cleaned =
+            MonitorService::<tauri::Wry>::remove_toml_hook_section(input, "codex-hook.sh");
+        assert!(cleaned.contains("model = \"gpt-5\""));
+        assert!(cleaned.contains("[plugins.browser]"));
+        assert!(!cleaned.contains("codex-hook.sh"));
+        assert!(!cleaned.contains("[hooks.stop]"));
+    }
+
+    #[test]
+    fn remove_toml_hook_section_preserves_unrelated_hooks() {
+        let input = r#"[hooks.stop]
+command = "/Users/me/bin/other-hook.sh"
+
+# agent-hub hooks begin
+[hooks.stop]
+command = "/Users/me/.agent-hub/hooks/codex-hook.sh end"
+# agent-hub hooks end
+"#;
+        let cleaned =
+            MonitorService::<tauri::Wry>::remove_toml_hook_section(input, "codex-hook.sh");
+        assert!(cleaned.contains("other-hook.sh"));
+        assert!(!cleaned.contains(".agent-hub/hooks"));
+        assert!(!cleaned.contains("agent-hub hooks begin"));
     }
 }
