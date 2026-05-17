@@ -228,9 +228,12 @@ impl<R: Runtime> MonitorService<R> {
                     }),
                 );
 
+                // An explicit end/done hook is the authoritative turn-end
+                // signal, so it always notifies — even when polling already
+                // moved the session to Finished. should_notify's cooldown
+                // dedupes against any notification the poller fired.
                 let explicit_end = marker_event == "end" || marker_event == "done";
-                if (matches!(old_state, WorkingState::Working)
-                    || (explicit_end && !matches!(old_state, WorkingState::Finished)))
+                if (matches!(old_state, WorkingState::Working) || explicit_end)
                     && Self::should_notify(&mut state, &id)
                 {
                     let granted = app

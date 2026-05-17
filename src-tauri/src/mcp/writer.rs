@@ -2,8 +2,24 @@ use std::fs;
 
 use serde_json::Value;
 
-use super::parser::{apply_json_server, apply_toml_server, parse_server_config_input};
+use super::parser::{apply_json_server, apply_toml_server, build_sync_config, parse_server_config_input};
 use super::registry::{find_mcp_platform, McpFormat};
+
+/// Cross-platform sync write: extracts universal core fields from `source_config`,
+/// merges them into the existing target entry (preserving platform-specific fields),
+/// and writes only if something actually changed. Returns Ok(true) if written,
+/// Ok(false) if no-op (nothing changed).
+pub fn sync_mcp_server(
+    source_config: &Value,
+    target_platform_id: &str,
+    name: &str,
+) -> Result<bool, String> {
+    let Some(merged) = build_sync_config(source_config, target_platform_id, name)? else {
+        return Ok(false); // no-op
+    };
+    save_mcp_server(target_platform_id, name, merged)?;
+    Ok(true)
+}
 
 pub fn save_mcp_server(platform_id: &str, name: &str, config: Value) -> Result<(), String> {
     let def = find_mcp_platform(platform_id).ok_or("Platform not found")?;
