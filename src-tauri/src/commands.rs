@@ -1036,9 +1036,9 @@ pub fn sync_mcp_server_cmd(
 ) -> Result<String, CommandError> {
     let server = crate::mcp::read_mcp_server(&source_platform_id, &server_name)
         .map_err(|e| CommandError::NotFound(e))?;
-    crate::mcp::save_mcp_server(&target_platform_id, &server_name, server.config)
+    let written = crate::mcp::sync_mcp_server(&server.config, &target_platform_id, &server_name)
         .map_err(|e| CommandError::SyncError(e))?;
-    Ok("ok".to_string())
+    Ok(if written { "ok" } else { "no-op" }.to_string())
 }
 
 // --- Monitor Commands ---

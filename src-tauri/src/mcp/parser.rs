@@ -139,6 +139,62 @@ pub fn config_to_display(config: &Value, format: McpFormat) -> String {
     }
 }
 
+// --- Sync Core Extraction ---
+
+/// Extracts the universal core fields for cross-platform sync:
+/// `command`, `args`, and `env` (only when non-empty).
+/// All platform-specific fields (type, cwd, timeout, startup_timeout_sec, etc.) are dropped.
+pub fn extract_sync_core(config: &Value) -> Value {
+    let mut core = serde_json::Map::new();
+    if let Some(obj) = config.as_object() {
+        for key in ["command", "args", "env"] {
+            if let Some(val) = obj.get(key) {
+                if key == "env" && val.as_object().map(|m| m.is_empty()).unwrap_or(false) {
+                    continue;
+                }
+                core.insert(key.to_string(), val.clone());
+            }
+        }
+    }
+    Value::Object(core)
+}
+
+/// Builds the effective config to write during sync:
+/// extract core from source, then overlay onto the existing target config
+/// (if any) so that platform-specific fields in the target are preserved.
+/// Returns `None` if the merged result equals the existing target entry
+/// (no-op: nothing would change).
+pub fn build_sync_config(
+    source_config: &Value,
+    target_platform_id: &str,
+    server_name: &str,
+) -> Result<Option<Value>, String> {
+    let core = extract_sync_core(source_config);
+
+    // If the target already has this server, merge core into its existing config.
+    let merged = match read_mcp_server(target_platform_id, server_name) {
+        Ok(existing) => {
+            let mut base = existing.config.clone();
+            if let (Some(base_obj), Some(core_obj)) = (base.as_object_mut(), core.as_object()) {
+                for (k, v) in core_obj {
+                    base_obj.insert(k.clone(), v.clone());
+                }
+            }
+            base
+        }
+        Err(_) => core,
+    };
+
+    // No-op: if the merged config equals what's already in the target, skip write.
+    if let Ok(existing) = read_mcp_server(target_platform_id, server_name) {
+        if existing.config == merged {
+            return Ok(None);
+        }
+    }
+
+    Ok(Some(merged))
+}
+
 // --- MCP Sync Preview ---
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -167,6 +223,12 @@ pub fn preview_mcp_sync(
     let target_def = find_mcp_platform(target_platform_id).ok_or("Target platform not found")?;
     let has_conflict = read_mcp_server(target_platform_id, server_name).is_ok();
 
+    // Build the effective sync payload: core fields merged into the existing
+    // target entry (if any) so platform-specific fields are preserved in the preview.
+    let sync_config =
+        build_sync_config(&source_server.config, target_platform_id, server_name)?
+            .unwrap_or_else(|| extract_sync_core(&source_server.config));
+
     let before_text = if target_def.config_path.exists() {
         fs::read_to_string(&target_def.config_path).unwrap_or_default()
     } else {
@@ -181,13 +243,13 @@ pub fn preview_mcp_sync(
             &before_text,
             &target_def.mcp_key,
             server_name,
-            &source_server.config,
+            &sync_config,
         ),
         McpFormat::Toml => apply_toml_server(
             &before_text,
             &target_def.mcp_key,
             server_name,
-            &source_server.config,
+            &sync_config,
         ),
     }?;
 
@@ -1191,6 +1253,90 @@ name = "keep"
             parsed["mcp_servers"]["context7"]["command"].as_str(),
             Some("new")
         );
+    }
+
+    // --- extract_sync_core tests ---
+
+    #[test]
+    fn test_extract_sync_core_strips_type_and_empty_env() {
+        let claude_code = serde_json::json!({
+            "type": "stdio",
+            "command": "npx",
+            "args": ["-y", "@upstash/context7-mcp", "--api-key", "ctx7sk-abc"],
+            "env": {}
+        });
+        let core = extract_sync_core(&claude_code);
+        let obj = core.as_object().unwrap();
+        assert!(!obj.contains_key("type"), "type should be stripped");
+        assert!(!obj.contains_key("env"), "empty env should be stripped");
+        assert_eq!(core["command"], "npx");
+        assert_eq!(core["args"][2], "--api-key");
+        assert_eq!(core["args"][3], "ctx7sk-abc", "api-key in args must be preserved");
+    }
+
+    #[test]
+    fn test_extract_sync_core_strips_codex_specific_fields() {
+        let codex = serde_json::json!({
+            "command": "npx",
+            "args": ["-y", "@upstash/context7-mcp", "--api-key", "ctx7sk-abc"],
+            "startup_timeout_sec": 20,
+            "enabled": true,
+            "required": false
+        });
+        let core = extract_sync_core(&codex);
+        let obj = core.as_object().unwrap();
+        assert!(!obj.contains_key("startup_timeout_sec"));
+        assert!(!obj.contains_key("enabled"));
+        assert!(!obj.contains_key("required"));
+        assert_eq!(core["command"], "npx");
+    }
+
+    #[test]
+    fn test_extract_sync_core_strips_gemini_specific_fields() {
+        let gemini = serde_json::json!({
+            "command": "npx",
+            "args": ["-y", "my-mcp"],
+            "timeout": 30000,
+            "trust": true,
+            "description": "My server",
+            "includeTools": ["tool_a"]
+        });
+        let core = extract_sync_core(&gemini);
+        let obj = core.as_object().unwrap();
+        assert!(!obj.contains_key("timeout"));
+        assert!(!obj.contains_key("trust"));
+        assert!(!obj.contains_key("description"));
+        assert!(!obj.contains_key("includeTools"));
+        assert_eq!(core["command"], "npx");
+    }
+
+    #[test]
+    fn test_extract_sync_core_preserves_non_empty_env() {
+        let config = serde_json::json!({
+            "command": "npx",
+            "args": ["-y", "my-mcp"],
+            "env": {"API_KEY": "secret123"},
+            "type": "stdio"
+        });
+        let core = extract_sync_core(&config);
+        assert_eq!(core["env"]["API_KEY"], "secret123", "non-empty env must be preserved");
+        assert!(!core.as_object().unwrap().contains_key("type"));
+    }
+
+    #[test]
+    fn test_extract_sync_core_only_three_keys() {
+        let config = serde_json::json!({
+            "command": "node",
+            "args": ["server.js"],
+            "env": {"KEY": "val"},
+            "type": "stdio",
+            "cwd": "/home/user",
+            "timeout": 5000,
+            "startup_timeout_sec": 30
+        });
+        let core = extract_sync_core(&config);
+        let obj = core.as_object().unwrap();
+        assert_eq!(obj.len(), 3, "core must have exactly command+args+env");
     }
 }
 
