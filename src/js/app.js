@@ -269,7 +269,39 @@ const Icons = {
     diff: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>',
     globe: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>',
     download: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
+    // v1.1 icons
+    grid22: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>',
+    code22: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>',
+    clock22: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
+    cube22: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>',
+    tag18: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>',
+    cube18: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>',
+    layers18: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>',
+    folder18: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>',
+    file18: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
+    fileSmall: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
+    moreVert: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="19" r="1" fill="currentColor"/></svg>',
+    sortAsc: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>',
+    sortDesc: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>',
+    sortBoth: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 8 12 2 6 8"/><polyline points="6 16 12 22 18 16"/></svg>',
+    code32: '<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>',
 };
+
+function avatarToneFromName(name) {
+    const s = (name || '').toLowerCase();
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < s.length; i++) {
+        h ^= s.charCodeAt(i);
+        h = Math.imul(h, 16777619) >>> 0;
+    }
+    return ((h % 8) + 1);
+}
+
+function skillIconSvg(name) {
+    const n = (name || '').toLowerCase();
+    if (n.includes('code') || n.includes('dev') || n.includes('program')) return Icons.code32;
+    return `<span style="font-size:15px;font-weight:700;line-height:1">${esc((name||'?').charAt(0).toUpperCase())}</span>`;
+}
 
 class App {
     constructor() {
@@ -314,6 +346,12 @@ class App {
         this.sessionDeleteConfirmTimer = null;
         this.deletingSessionId = null;
         this.sidebarCollapsed = false;
+        // Skill table state (v1.1)
+        this.skillPage = 0;
+        this.skillPageSize = 10;
+        this.skillSortBy = 'size';
+        this.skillSortDir = 'desc';
+        this.openKebabRow = null; // name of skill with open kebab menu
         // Monitor state
         this.monitorSessions = [];
         this.monitorConfig = null;
@@ -391,6 +429,7 @@ class App {
         this.selectedSkillName = null;
         this.selectedFolder = '';
         this.currentView = 'skills';
+        this.skillPage = 0;
         this.loadSkills().then(() => this.render());
     }
 
@@ -755,6 +794,8 @@ class App {
     }
 
     switchTab(tab) {
+        // Monitor tab is currently disabled — ignore activation requests.
+        if (tab === 'monitor') return;
         this.currentTab = tab;
         if (tab === 'mcp') {
             this.stopMonitorListener();
@@ -1804,13 +1845,11 @@ API_KEY = "your-key"
         const mcpTab = document.getElementById('tab-mcp');
         const sessionsTab = document.getElementById('tab-sessions');
         const monitorTab = document.getElementById('tab-monitor');
+        // Monitor tab disabled — keep hidden defensively
+        if (monitorTab) { monitorTab.hidden = true; monitorTab.style.display = 'none'; }
         skillsTab.textContent = i.t('ui.skills_tab');
         mcpTab.textContent = i.t('ui.mcp_tab');
         sessionsTab.textContent = i.t('ui.sessions_tab');
-        const activeCount = this.monitorSessions.filter(s => s.status !== 'ended').length;
-        monitorTab.innerHTML = activeCount > 0
-            ? `${i.t('ui.monitor_tab')} <span class="ml-0.5 px-1.5 py-0.5 text-[10px] font-bold rounded-full bg-green-500 text-white">${activeCount}</span>`
-            : i.t('ui.monitor_tab');
         skillsTab.className = `flex-1 py-2 text-sm text-center cursor-pointer border-b-2 ${this.currentTab === 'skills' ? 'text-gray-300 border-cyan-500' : 'text-gray-500 hover:text-white border-transparent'}`;
         mcpTab.className = `flex-1 py-2 text-sm text-center cursor-pointer border-b-2 ${this.currentTab === 'mcp' ? 'text-gray-300 border-cyan-500' : 'text-gray-500 hover:text-white border-transparent'}`;
         sessionsTab.className = `flex-1 py-2 text-sm text-center cursor-pointer border-b-2 ${this.currentTab === 'sessions' ? 'text-gray-300 border-cyan-500' : 'text-gray-500 hover:text-white border-transparent'}`;
@@ -2476,86 +2515,260 @@ API_KEY = "your-key"
             return;
         }
 
-        // Group skills by folder
+        const platform = this.platforms.find(p => p.id === this.selectedPlatformId);
+        const platformName = platform ? platform.display_name : (this.selectedPlatformId || '');
+
+        // KPI computed values
+        const totalSkills = this.skills.length;
+        const enabledSkills = this.skills.filter(s => s.version || s.description).length;
+        const totalBytes = this.skills.reduce((acc, s) => acc + (s.total_size || 0), 0);
+        const totalSizeStr = formatBytes(totalBytes);
+
+        // Group by folder (root="" first, then folders in encounter order)
         const groups = new Map();
+        groups.set('', []);
         for (const s of this.skills) {
-            const folder = s.folder || '';
-            if (!groups.has(folder)) groups.set(folder, []);
-            groups.get(folder).push(s);
+            const key = s.folder || '';
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(s);
+        }
+        if (groups.get('').length === 0) groups.delete('');
+
+        // Sort within each group
+        const sortFn = (a, b) => this.skillSortDir === 'desc'
+            ? (b.total_size || 0) - (a.total_size || 0)
+            : (a.total_size || 0) - (b.total_size || 0);
+        if (this.skillSortBy === 'size') {
+            for (const arr of groups.values()) arr.sort(sortFn);
         }
 
-        let html = '<div class="space-y-0.5">';
+        const sortIcon = this.skillSortDir === 'asc' ? Icons.sortAsc : Icons.sortDesc;
+        const sizeSortClass = this.skillSortBy === 'size' ? 'sorted' : '';
 
-        // Root-level skills first
-        if (groups.has('')) {
-            for (const s of groups.get('')) {
-                html += this.renderSkillItem(s);
-            }
-            groups.delete('');
-        }
-
-        // Folder groups
-        for (const [folder, folderSkills] of groups) {
-            const count = folderSkills.length;
-            const collapsed = this.collapsedFolders.has(folder);
-            html += `<div class="mt-2">
-                <div class="flex items-center">
-                    <button class="flex-1 text-left px-2 py-1.5 text-sm text-gray-400 hover:text-gray-200 cursor-pointer folder-header flex items-center gap-1"
-                        data-folder="${esc(folder)}">
-                        <span class="flex-shrink-0 text-gray-500 transition-transform duration-200 ${collapsed ? '' : 'rotate-90'}">${Icons.arrowRight}</span>
-                        <span class="text-yellow-500">${esc(folder)}</span>
-                        <span class="text-gray-600 text-xs ml-1">(${count})</span>
-                    </button>
-                    <button class="flex items-center gap-1 text-xs text-gray-500 hover:text-cyan-400 px-2 py-1 cursor-pointer folder-sync-btn transition-colors"
-                        data-folder="${esc(folder)}" data-count="${count}" title="Sync all in folder">${Icons.sync}</button>
+        const renderRow = (s) => {
+            const tone = avatarToneFromName(s.name);
+            const initial = (s.name || '?').charAt(0).toUpperCase();
+            const sizeStr = s.total_size < 1024 ? `${s.total_size} B`
+                : s.total_size < 1048576 ? `${(s.total_size / 1024).toFixed(1)} KB`
+                : `${(s.total_size / 1048576).toFixed(1)} MB`;
+            const versionChip = s.version
+                ? `<span class="ah-version-chip">v${esc(s.version)}</span>` : '';
+            const linkMark = s.is_symlink
+                ? `<span class="ah-row__symlink" title="→ ${esc(s.symlink_target || '')}">${Icons.symlink}</span>`
+                : '';
+            const desc = s.description ? esc(s.description) : '';
+            return `<div class="ah-row" data-name="${esc(s.name)}" data-folder="${esc(s.folder || '')}">
+                <div class="ah-row__name">
+                    <div class="ah-avatar" data-tone="${tone}">${initial}</div>
+                    <div class="ah-row__name-text">
+                        <span class="ah-row__skill-name">${esc(s.name)}</span>
+                        ${versionChip}${linkMark}
+                    </div>
                 </div>
-                <div class="pl-3 ${collapsed ? 'hidden' : ''}" data-folder-content="${esc(folder)}">`;
-            for (const s of folderSkills) {
-                html += this.renderSkillItem(s);
+                <div class="ah-row__desc">${desc}</div>
+                <div class="ah-row__size">${sizeStr}</div>
+                <div class="ah-row__actions">
+                    <button class="ah-kebab ah-kebab-trigger" data-name="${esc(s.name)}" data-folder="${esc(s.folder || '')}" title="更多操作">${Icons.moreVert}</button>
+                </div>
+            </div>`;
+        };
+
+        // Folder symlink detection (any child symlink → mark folder)
+        const folderSymlinkInfo = (items) => {
+            const s = items.find(x => x.is_symlink);
+            return s ? { is_symlink: true, target: s.symlink_target || '' } : { is_symlink: false };
+        };
+
+        // Build grouped rows html (root group first, no header)
+        let groupsHtml = '';
+        for (const [folder, items] of groups) {
+            if (folder === '') {
+                groupsHtml += `<div class="ah-rows-group">${items.map(renderRow).join('')}</div>`;
+            } else {
+                const collapsed = this.collapsedFolders.has(folder);
+                const linkInfo = folderSymlinkInfo(items);
+                const symlinkBadge = linkInfo.is_symlink
+                    ? `<span class="ah-symlink-badge" title="→ ${esc(linkInfo.target)}">${Icons.symlink}<span>软链接</span></span>`
+                    : '';
+                groupsHtml += `<section class="ah-folder-section">
+                    <button class="ah-folder-header" data-folder="${esc(folder)}">
+                        <span class="ah-folder-arrow">${collapsed ? '▶' : '▼'}</span>
+                        <span class="ah-folder-name">${esc(folder)}</span>
+                        <span class="ah-folder-count">(${items.length})</span>
+                        ${symlinkBadge}
+                    </button>
+                    <div class="ah-folder-content" data-folder-content="${esc(folder)}" ${collapsed ? 'hidden' : ''}>
+                        ${items.map(renderRow).join('')}
+                    </div>
+                </section>`;
             }
-            html += `</div></div>`;
         }
 
-        html += '</div>';
-        el.innerHTML = html;
+        el.innerHTML = `
+            <div class="ah-page-header">
+                <h1 class="ah-page-title">${esc(platformName)}</h1>
+            </div>
+            <div class="ah-kpi-row">
+                <article class="ah-kpi">
+                    <div class="ah-kpi__chip" data-tone="accent">${Icons.grid22}</div>
+                    <div class="ah-kpi__body">
+                        <p class="ah-kpi__label">技能总数</p>
+                        <p class="ah-kpi__value"><span class="ah-kpi__num">${totalSkills}</span><span class="ah-kpi__unit">个技能</span></p>
+                    </div>
+                </article>
+                <article class="ah-kpi">
+                    <div class="ah-kpi__chip" data-tone="success">${Icons.code22}</div>
+                    <div class="ah-kpi__body">
+                        <p class="ah-kpi__label">启用中</p>
+                        <p class="ah-kpi__value"><span class="ah-kpi__num">${enabledSkills}</span><span class="ah-kpi__unit">个技能</span></p>
+                    </div>
+                </article>
+                <article class="ah-kpi">
+                    <div class="ah-kpi__chip" data-tone="warning">${Icons.clock22}</div>
+                    <div class="ah-kpi__body">
+                        <p class="ah-kpi__label">最近更新</p>
+                        <p class="ah-kpi__value"><span class="ah-kpi__num" style="font-size:18px">—</span></p>
+                    </div>
+                </article>
+                <article class="ah-kpi">
+                    <div class="ah-kpi__chip" data-tone="highlight">${Icons.cube22}</div>
+                    <div class="ah-kpi__body">
+                        <p class="ah-kpi__label">总大小</p>
+                        <p class="ah-kpi__value"><span class="ah-kpi__num" style="font-size:20px">${esc(totalSizeStr)}</span></p>
+                    </div>
+                </article>
+            </div>
+            <div class="ah-table-wrap">
+                <div class="ah-thead">
+                    <div class="ah-th">技能名称</div>
+                    <div class="ah-th">描述</div>
+                    <div class="ah-th ah-th--size sortable ${sizeSortClass}" id="ah-sort-size">
+                        大小 <span class="ah-sort-icon">${sizeSortClass ? sortIcon : Icons.sortBoth}</span>
+                    </div>
+                    <div class="ah-th"></div>
+                </div>
+                ${groupsHtml}
+            </div>`;
 
-        // Bind skill item clicks
-        el.querySelectorAll('.skill-item').forEach(btn => {
-            btn.addEventListener('click', () => this.selectSkill(btn.dataset.name, btn.dataset.folder));
-        });
-
-        // Bind skill delete buttons
-        el.querySelectorAll('.skill-delete-btn').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                this.deleteSkill(btn.dataset.name, btn.dataset.folder, btn);
+        // Row click → detail
+        el.querySelectorAll('.ah-row').forEach(row => {
+            row.addEventListener('click', (e) => {
+                if (e.target.closest('.ah-kebab-trigger')) return;
+                this.selectSkill(row.dataset.name, row.dataset.folder);
             });
         });
 
-        // Bind folder toggle
-        el.querySelectorAll('.folder-header').forEach(btn => {
-            btn.addEventListener('click', () => this.toggleFolder(btn.dataset.folder));
+        // Sort by size
+        const sortSizeBtn = el.querySelector('#ah-sort-size');
+        if (sortSizeBtn) {
+            sortSizeBtn.addEventListener('click', () => {
+                if (this.skillSortBy === 'size') {
+                    this.skillSortDir = this.skillSortDir === 'desc' ? 'asc' : 'desc';
+                } else {
+                    this.skillSortBy = 'size';
+                    this.skillSortDir = 'desc';
+                }
+                this.renderSkillList();
+            });
+        }
+
+        // Folder toggle
+        el.querySelectorAll('.ah-folder-header').forEach(btn => {
+            btn.addEventListener('click', () => {
+                this.toggleFolder(btn.dataset.folder);
+            });
         });
 
-        // Bind folder sync
-        el.querySelectorAll('.folder-sync-btn').forEach(btn => {
+        // Kebab menus
+        el.querySelectorAll('.ah-kebab-trigger').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                this.showFolderSyncModal(btn.dataset.folder, parseInt(btn.dataset.count));
+                this._toggleKebab(btn, btn.dataset.name, btn.dataset.folder);
+            });
+        });
+
+        // Close kebab on outside click
+        document.addEventListener('click', this._kebabOutsideHandler = () => {
+            document.querySelectorAll('.ah-kebab-menu').forEach(m => m.remove());
+            document.removeEventListener('click', this._kebabOutsideHandler);
+        }, { once: true });
+    }
+
+    _renderPagination(total, page, pageCount) {
+        if (pageCount <= 1) return '';
+        const prev = page > 0;
+        const next = page < pageCount - 1;
+
+        let pageNums = '';
+        const addPage = (p) => {
+            const active = p === page ? 'is-active' : '';
+            pageNums += `<li><button class="ah-page-btn ${active}" data-page="${p}">${p + 1}</button></li>`;
+        };
+        const addEllipsis = () => { pageNums += `<li><span class="ah-page-ellipsis">…</span></li>`; };
+
+        if (pageCount <= 7) {
+            for (let p = 0; p < pageCount; p++) addPage(p);
+        } else {
+            addPage(0);
+            if (page > 2) addEllipsis();
+            for (let p = Math.max(1, page - 1); p <= Math.min(pageCount - 2, page + 1); p++) addPage(p);
+            if (page < pageCount - 3) addEllipsis();
+            addPage(pageCount - 1);
+        }
+
+        return `<nav class="ah-pagination">
+            <span class="ah-pagination__total">共 ${total} 项</span>
+            <ul class="ah-pagination__pages">
+                <li><button class="ah-page-btn" data-page="${page - 1}" ${prev ? '' : 'disabled'}>‹</button></li>
+                ${pageNums}
+                <li><button class="ah-page-btn" data-page="${page + 1}" ${next ? '' : 'disabled'}>›</button></li>
+            </ul>
+            <div class="ah-pagination__size">
+                <select id="ah-page-size">
+                    ${[10, 20, 50].map(n => `<option value="${n}" ${n === this.skillPageSize ? 'selected' : ''}>${n} 条/页</option>`).join('')}
+                </select>
+            </div>
+        </nav>`;
+    }
+
+    _toggleKebab(triggerBtn, name, folder) {
+        document.querySelectorAll('.ah-kebab-menu').forEach(m => m.remove());
+        const i = this.i18n;
+        const menu = document.createElement('div');
+        menu.className = 'ah-kebab-menu';
+        menu.innerHTML = `
+            <button class="ah-kebab-item" data-action="open">${i.t('action.diff') || '对比'}</button>
+            <button class="ah-kebab-item" data-action="sync">${i.t('action.sync') || '同步'}</button>
+            <button class="ah-kebab-item danger" data-action="delete">${i.t('skill.delete') || '删除'}</button>`;
+
+        const rect = triggerBtn.getBoundingClientRect();
+        menu.style.top = `${rect.bottom + 4}px`;
+        menu.style.right = `${window.innerWidth - rect.right}px`;
+        document.body.appendChild(menu);
+
+        menu.querySelectorAll('[data-action]').forEach(item => {
+            item.addEventListener('click', (e) => {
+                e.stopPropagation();
+                menu.remove();
+                const action = item.dataset.action;
+                if (action === 'delete') this.deleteSkill(name, folder, triggerBtn);
+                else if (action === 'open') this.selectSkill(name, folder);
+                else if (action === 'sync') {
+                    this.selectSkill(name, folder).then(() => { /* sync modal */ });
+                }
             });
         });
     }
 
     renderSkillItem(s) {
+        // Legacy fallback — not used in skills tab anymore, kept for search results
         const i = this.i18n;
         const version = s.version ? `<span class="text-gray-500 text-xs ml-2">v${esc(s.version)}</span>` : '';
-        const symlink = s.is_symlink ? `<span class="text-cyan-500 text-xs ml-1 inline-flex align-middle">${Icons.symlink}</span>` : '';
         const desc = s.description ? `<span class="text-gray-500 text-sm ml-2">${esc(truncate(s.description, 60))}</span>` : '';
-        const size = s.total_size > 1024 ? `<span class="text-gray-600 text-xs ml-2">${(s.total_size / 1024).toFixed(0)}KB</span>` : '';
         return `<div class="flex items-center rounded hover:bg-gray-800 group">
             <button class="flex-1 text-left px-3 py-2 text-gray-200 cursor-pointer skill-item"
                 data-name="${esc(s.name)}" data-folder="${esc(s.folder)}">
-                <span class="text-cyan-400">${esc(s.name)}</span>${version}${desc}${symlink}${size}
+                <span class="text-cyan-400">${esc(s.name)}</span>${version}${desc}
             </button>
             <button class="text-xs text-red-600 hover:text-red-400 px-2 py-1 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity skill-delete-btn"
                 data-name="${esc(s.name)}" data-folder="${esc(s.folder)}">${i.t('skill.delete')}</button>
@@ -2576,61 +2789,124 @@ API_KEY = "your-key"
         const i = this.i18n;
         try {
             const detail = await Api.getSkillDetail(this.selectedPlatformId, this.selectedSkillName, this.selectedFolder);
-            const version = detail.version ? `<div class="mb-1"><span class="text-yellow-400">${i.t('skill.version')}:</span> ${esc(detail.version)}</div>` : '';
             const sizeStr = detail.total_size < 1024 ? `${detail.total_size} B`
                 : detail.total_size < 1048576 ? `${(detail.total_size / 1024).toFixed(1)} KB`
                 : `${(detail.total_size / 1048576).toFixed(1)} MB`;
-            const symlink = detail.is_symlink
-                ? `<div class="text-cyan-400 flex items-center gap-1">${Icons.symlink} ${i.tWith('skill.symlink_to', { target: detail.symlink_target || '?' })}</div>` : '';
-            const filesList = detail.files.map(f =>
-                `<div class="text-cyan-400 hover:text-cyan-300 text-sm pl-4 cursor-pointer file-item" data-file="${esc(f)}">${esc(f)}</div>`
-            ).join('');
 
-            el.innerHTML = `
-                <h2 class="text-2xl font-bold text-green-400 mb-4">${esc(detail.name)}</h2>
-                <div class="space-y-2 mb-6">
-                    <div><span class="text-yellow-400">${i.t('skill.platform')}:</span> ${esc(detail.platform_id)}</div>
-                    <div><span class="text-yellow-400">Path:</span> <span class="text-gray-400 text-sm" title="${esc(detail.path)}">${esc(detail.path)}</span></div>
-                    ${version}
-                    <div><span class="text-yellow-400">${i.t('skill.size')}:</span> ${sizeStr}</div>
-                    ${symlink}
-                    <div><span class="text-yellow-400">${i.t('skill.files')}:</span> ${i.tWith('skill.total_files', { count: detail.files.length })}</div>
-                    ${filesList}
-                </div>
-                ${detail.description ? `<div class="mb-4"><span class="text-yellow-400">${i.t('skill.description')}:</span><div class="mt-1 text-gray-300">${esc(detail.description)}</div></div>` : ''}
-                <div id="file-viewer" class="hidden mb-4">
-                    <div class="flex items-center justify-between mb-2">
-                        <span id="file-viewer-path" class="text-sm text-purple-400 font-bold"></span>
-                        <button id="file-viewer-close" class="text-xs text-gray-400 hover:text-white cursor-pointer">Close</button>
+            const tone = avatarToneFromName(detail.name);
+
+            // Hero
+            const heroHtml = `
+                <header class="ah-hero">
+                    <div class="ah-hero__icon" data-tone="${tone}">${skillIconSvg(detail.name)}</div>
+                    <div class="ah-hero__text">
+                        <h1 class="ah-hero__title">${esc(detail.name)}</h1>
+                        ${detail.description ? `<p class="ah-hero__subtitle">${esc(detail.description)}</p>` : ''}
                     </div>
-                    <pre id="file-viewer-content" class="text-sm text-gray-300 whitespace-pre-wrap font-mono bg-gray-950 rounded-lg p-4 overflow-x-auto max-h-[40vh]"></pre>
-                </div>
-                <div class="border-t border-gray-700 pt-4">
-                    <pre class="text-sm text-gray-300 whitespace-pre-wrap font-mono bg-gray-950 rounded-lg p-4 overflow-x-auto">${esc(detail.body)}</pre>
+                </header>`;
+
+            // Metadata row (6 cards: + 类型)
+            const shortPath = detail.path.length > 36
+                ? '…' + detail.path.slice(detail.path.length - 36)
+                : detail.path;
+            const typeLabel = detail.is_symlink ? '软链接' : '目录';
+            const typeTarget = detail.is_symlink && detail.symlink_target
+                ? (detail.symlink_target.length > 28
+                    ? '…' + detail.symlink_target.slice(detail.symlink_target.length - 28)
+                    : detail.symlink_target)
+                : '';
+            const metaHtml = `
+                <div class="ah-meta-row ah-meta-row--6">
+                    <article class="ah-meta">
+                        <div class="ah-meta__chip">${Icons.layers18}</div>
+                        <p class="ah-meta__label">平台</p>
+                        <p class="ah-meta__value">${esc(detail.platform_id)}</p>
+                    </article>
+                    <article class="ah-meta">
+                        <div class="ah-meta__chip">${Icons.folder18}</div>
+                        <p class="ah-meta__label">路径</p>
+                        <p class="ah-meta__value ah-meta__value--mono" title="${esc(detail.path)}">${esc(shortPath)}</p>
+                    </article>
+                    <article class="ah-meta">
+                        <div class="ah-meta__chip">${Icons.tag18}</div>
+                        <p class="ah-meta__label">版本</p>
+                        <p class="ah-meta__value ah-meta__value--mono">${detail.version ? esc(detail.version) : '—'}</p>
+                    </article>
+                    <article class="ah-meta">
+                        <div class="ah-meta__chip">${Icons.cube18}</div>
+                        <p class="ah-meta__label">大小</p>
+                        <p class="ah-meta__value ah-meta__value--mono">${sizeStr}</p>
+                    </article>
+                    <article class="ah-meta">
+                        <div class="ah-meta__chip">${Icons.file18}</div>
+                        <p class="ah-meta__label">文件数</p>
+                        <p class="ah-meta__value">${detail.files.length} 个文件</p>
+                    </article>
+                    <article class="ah-meta">
+                        <div class="ah-meta__chip" ${detail.is_symlink ? 'data-tone="accent"' : ''}>${Icons.symlink}</div>
+                        <p class="ah-meta__label">类型</p>
+                        <p class="ah-meta__value${detail.is_symlink ? ' ah-meta__value--mono' : ''}"
+                           ${detail.is_symlink ? `title="${esc(detail.symlink_target || '')}"` : ''}>
+                            ${esc(typeLabel)}${typeTarget ? ` <span style="color:var(--ink-4)">→ ${esc(typeTarget)}</span>` : ''}
+                        </p>
+                    </article>
                 </div>`;
 
-            // Bind file click events
-            el.querySelectorAll('.file-item').forEach(item => {
-                item.addEventListener('click', async () => {
-                    const filePath = item.dataset.file;
-                    try {
-                        const content = await Api.readSkillFile(this.selectedPlatformId, this.selectedSkillName, this.selectedFolder, filePath);
-                        document.getElementById('file-viewer-path').textContent = filePath;
-                        document.getElementById('file-viewer-content').textContent = content;
-                        document.getElementById('file-viewer').classList.remove('hidden');
-                    } catch (e) {
-                        document.getElementById('file-viewer-path').textContent = filePath;
-                        document.getElementById('file-viewer-content').textContent = `Error: ${e}`;
-                        document.getElementById('file-viewer').classList.remove('hidden');
-                    }
+            // Pick default file: SKILL.md (case-insensitive) → first file
+            const defaultFile =
+                detail.files.find(f => /(^|\/)SKILL\.md$/i.test(f))
+                || detail.files[0]
+                || null;
+
+            // File list + always-visible viewer
+            const filesHtml = detail.files.length > 0 ? `
+                <section class="ah-desc-block" style="margin-bottom:12px">
+                    <h2 class="ah-section-title">文件</h2>
+                    <div class="ah-files-list">
+                        ${detail.files.map(f => `
+                            <div class="ah-file file-item" data-file="${esc(f)}" ${f === defaultFile ? 'data-active="true"' : ''}>
+                                <span class="ah-file__icon">${Icons.fileSmall}</span>
+                                <span class="ah-file__name">${esc(f)}</span>
+                                <span class="ah-file__size"></span>
+                            </div>`).join('')}
+                    </div>
+                    <div id="file-viewer">
+                        <div class="ah-file-viewer__header">
+                            <span id="file-viewer-path"></span>
+                        </div>
+                        <pre id="file-viewer-content" class="ah-file-viewer"></pre>
+                    </div>
+                </section>` : '';
+
+            el.innerHTML = heroHtml + metaHtml + filesHtml;
+
+            // Internal: load file + update active state
+            const loadFile = async (filePath) => {
+                el.querySelectorAll('.file-item').forEach(item => {
+                    item.removeAttribute('data-active');
+                    if (item.dataset.file === filePath) item.setAttribute('data-active', 'true');
                 });
+                const pathEl = document.getElementById('file-viewer-path');
+                const contentEl = document.getElementById('file-viewer-content');
+                if (pathEl) pathEl.textContent = filePath;
+                if (contentEl) contentEl.textContent = '';
+                try {
+                    const content = await Api.readSkillFile(this.selectedPlatformId, this.selectedSkillName, this.selectedFolder, filePath);
+                    if (contentEl) contentEl.textContent = content;
+                } catch (e) {
+                    if (contentEl) contentEl.textContent = `Error: ${e}`;
+                }
+            };
+
+            // Bind file clicks
+            el.querySelectorAll('.file-item').forEach(item => {
+                item.addEventListener('click', () => loadFile(item.dataset.file));
             });
-            const closeBtn = document.getElementById('file-viewer-close');
-            if (closeBtn) closeBtn.addEventListener('click', () => {
-                document.getElementById('file-viewer').classList.add('hidden');
-            });
+
+            // Auto-load default file
+            if (defaultFile) loadFile(defaultFile);
         } catch (e) {
-            el.innerHTML = `<p class="text-red-400">Error: ${e}</p>`;
+            el.innerHTML = `<div style="padding:20px;color:var(--danger)">Error: ${esc(String(e))}</div>`;
         }
     }
 
