@@ -30,7 +30,6 @@ pub struct PlatformView {
     pub display_name: String,
     pub description: String,
     pub skill_dir: String,
-    pub skill_count: usize,
 }
 
 impl From<&Platform> for PlatformView {
@@ -40,7 +39,6 @@ impl From<&Platform> for PlatformView {
             display_name: p.display_name.clone(),
             description: p.description.clone(),
             skill_dir: p.skill_dir.display().to_string(),
-            skill_count: p.skills.len(),
         }
     }
 }
@@ -153,12 +151,28 @@ pub fn get_platform_skills(
     state: tauri::State<'_, SafeState>,
     platform_id: String,
 ) -> Vec<SkillSummary> {
-    let s = state.lock().unwrap();
-    s.platforms
-        .iter()
-        .find(|p| p.id == platform_id)
-        .map(|p| p.skills.iter().map(SkillSummary::from).collect())
-        .unwrap_or_default()
+    let mut s = state.lock().unwrap();
+    if let Some(p) = s.platforms.iter_mut().find(|p| p.id == platform_id) {
+        crate::platform::load_platform_skills(p);
+        p.skills.iter().map(SkillSummary::from).collect()
+    } else {
+        Vec::new()
+    }
+}
+
+#[tauri::command]
+pub fn refresh_platform_skills(
+    state: tauri::State<'_, SafeState>,
+    platform_id: String,
+) -> Vec<SkillSummary> {
+    let mut s = state.lock().unwrap();
+    if let Some(p) = s.platforms.iter_mut().find(|p| p.id == platform_id) {
+        crate::platform::invalidate_platform_skills(p);
+        crate::platform::load_platform_skills(p);
+        p.skills.iter().map(SkillSummary::from).collect()
+    } else {
+        Vec::new()
+    }
 }
 
 #[tauri::command]
@@ -168,12 +182,13 @@ pub fn get_skill_detail(
     skill_name: String,
     folder: String,
 ) -> Result<SkillDetail, CommandError> {
-    let s = state.lock().unwrap();
+    let mut s = state.lock().unwrap();
     let platform = s
         .platforms
-        .iter()
+        .iter_mut()
         .find(|p| p.id == platform_id)
         .ok_or_else(|| CommandError::NotFound(format!("Platform {} not found", platform_id)))?;
+    crate::platform::load_platform_skills(platform);
     let skill = find_skill(platform, &skill_name, &folder)
         .ok_or_else(|| CommandError::NotFound(format!("Skill {} not found", skill_name)))?;
     Ok(SkillDetail::from(skill))
@@ -186,7 +201,8 @@ pub fn get_diff_candidates(
     skill_name: String,
     folder: String,
 ) -> Vec<PlatformView> {
-    let s = state.lock().unwrap();
+    let mut s = state.lock().unwrap();
+    crate::platform::ensure_all_skills_loaded(&mut s.platforms);
     s.platforms
         .iter()
         .filter(|p| {
@@ -207,7 +223,12 @@ pub fn diff_skills_cmd(
     skill_name: String,
     folder: String,
 ) -> Result<crate::diff::DiffResult, CommandError> {
-    let s = state.lock().unwrap();
+    let mut s = state.lock().unwrap();
+    for id in [&source_platform_id, &target_platform_id] {
+        if let Some(p) = s.platforms.iter_mut().find(|p| &p.id == id) {
+            crate::platform::load_platform_skills(p);
+        }
+    }
     let source_platform = s
         .platforms
         .iter()
@@ -241,7 +262,8 @@ pub fn get_sync_targets(
     skill_name: String,
     folder: String,
 ) -> Vec<SyncTarget> {
-    let s = state.lock().unwrap();
+    let mut s = state.lock().unwrap();
+    crate::platform::ensure_all_skills_loaded(&mut s.platforms);
     s.platforms
         .iter()
         .filter(|p| p.id != platform_id)
@@ -266,7 +288,14 @@ pub fn sync_skill_cmd(
     overwrite: bool,
 ) -> Result<String, CommandError> {
     let (source_skill, target_platform) = {
-        let s = state.lock().unwrap();
+        let mut s = state.lock().unwrap();
+        if let Some(p) = s
+            .platforms
+            .iter_mut()
+            .find(|p| p.id == source_platform_id)
+        {
+            crate::platform::load_platform_skills(p);
+        }
         let source_platform = s
             .platforms
             .iter()
@@ -292,7 +321,13 @@ pub fn sync_skill_cmd(
     match result {
         Ok(()) => {
             let mut s = state.lock().unwrap();
-            s.platforms = crate::platform::discover_platforms(&s.config);
+            if let Some(p) = s
+                .platforms
+                .iter_mut()
+                .find(|p| p.id == target_platform_id)
+            {
+                crate::platform::invalidate_platform_skills(p);
+            }
             Ok("ok".to_string())
         }
         Err(e) => Err(CommandError::SyncError(e.to_string())),
@@ -307,7 +342,14 @@ pub fn sync_folder_cmd(
     folder: String,
 ) -> Result<serde_json::Value, CommandError> {
     let results = {
-        let s = state.lock().unwrap();
+        let mut s = state.lock().unwrap();
+        if let Some(p) = s
+            .platforms
+            .iter_mut()
+            .find(|p| p.id == source_platform_id)
+        {
+            crate::platform::load_platform_skills(p);
+        }
         let source_platform = s
             .platforms
             .iter()
@@ -338,7 +380,13 @@ pub fn sync_folder_cmd(
     };
 
     let mut s = state.lock().unwrap();
-    s.platforms = crate::platform::discover_platforms(&s.config);
+    if let Some(p) = s
+        .platforms
+        .iter_mut()
+        .find(|p| p.id == target_platform_id)
+    {
+        crate::platform::invalidate_platform_skills(p);
+    }
     Ok(results)
 }
 
@@ -370,7 +418,8 @@ pub fn set_locale(state: tauri::State<'_, SafeState>, locale: String) -> String 
 #[tauri::command]
 pub fn search_skills(state: tauri::State<'_, SafeState>, query: String) -> Vec<SearchResult> {
     let q = query.to_lowercase();
-    let s = state.lock().unwrap();
+    let mut s = state.lock().unwrap();
+    crate::platform::ensure_all_skills_loaded(&mut s.platforms);
     let mut results = Vec::new();
     for platform in &s.platforms {
         for skill in &platform.skills {
@@ -398,12 +447,13 @@ pub fn delete_skill_cmd(
     folder: String,
 ) -> Result<String, CommandError> {
     let skill_path = {
-        let s = state.lock().unwrap();
+        let mut s = state.lock().unwrap();
         let platform = s
             .platforms
-            .iter()
+            .iter_mut()
             .find(|p| p.id == platform_id)
             .ok_or_else(|| CommandError::NotFound("Platform not found".into()))?;
+        crate::platform::load_platform_skills(platform);
         let skill = find_skill(platform, &skill_name, &folder)
             .ok_or_else(|| CommandError::NotFound(format!("Skill {} not found", skill_name)))?;
         skill.path.clone()
@@ -411,7 +461,9 @@ pub fn delete_skill_cmd(
     crate::trash::move_skill_to_trash(&platform_id, &skill_name, &folder, &skill_path)
         .map_err(|e| CommandError::SyncError(e))?;
     let mut s = state.lock().unwrap();
-    s.platforms = crate::platform::discover_platforms(&s.config);
+    if let Some(p) = s.platforms.iter_mut().find(|p| p.id == platform_id) {
+        crate::platform::invalidate_platform_skills(p);
+    }
     Ok("ok".to_string())
 }
 
@@ -423,12 +475,13 @@ pub fn read_skill_file(
     folder: String,
     file_path: String,
 ) -> Result<String, CommandError> {
-    let s = state.lock().unwrap();
+    let mut s = state.lock().unwrap();
     let platform = s
         .platforms
-        .iter()
+        .iter_mut()
         .find(|p| p.id == platform_id)
         .ok_or_else(|| CommandError::NotFound(format!("Platform {} not found", platform_id)))?;
+    crate::platform::load_platform_skills(platform);
     let skill = find_skill(platform, &skill_name, &folder)
         .ok_or_else(|| CommandError::NotFound(format!("Skill {} not found", skill_name)))?;
     let full_path = skill.path.join(&file_path);
@@ -574,7 +627,9 @@ pub fn restore_trash_item_cmd(
 ) -> Result<String, CommandError> {
     crate::trash::restore_item(&id).map_err(|e| CommandError::SyncError(e))?;
     let mut s = state.lock().unwrap();
-    s.platforms = crate::platform::discover_platforms(&s.config);
+    for p in s.platforms.iter_mut() {
+        crate::platform::invalidate_platform_skills(p);
+    }
     Ok("ok".to_string())
 }
 
