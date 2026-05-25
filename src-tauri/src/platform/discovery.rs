@@ -21,28 +21,41 @@ pub fn discover_platforms(config: &Config) -> Vec<Platform> {
         });
     }
 
-    let mut platforms: Vec<Platform> = defs
-        .into_iter()
+    defs.into_iter()
         .filter(|d| d.presence_path.exists())
-        .map(|d| {
-            let skills = if d.skill_dir.exists() {
-                scan_skills(&d.skill_dir, &d.id)
-            } else {
-                Vec::new()
-            };
-            Platform {
-                id: d.id,
-                display_name: d.display_name,
-                description: d.description,
-                skill_dir: d.skill_dir,
-                installed: true,
-                skills,
-            }
+        .map(|d| Platform {
+            id: d.id,
+            display_name: d.display_name,
+            description: d.description,
+            skill_dir: d.skill_dir,
+            installed: true,
+            skills_loaded: false,
+            skills: Vec::new(),
         })
-        .collect();
+        .collect()
+}
 
-    platforms.sort_by(|a, b| b.skills.len().cmp(&a.skills.len()));
-    platforms
+pub fn load_platform_skills(platform: &mut Platform) {
+    if platform.skills_loaded {
+        return;
+    }
+    platform.skills = if platform.skill_dir.exists() {
+        scan_skills(&platform.skill_dir, &platform.id)
+    } else {
+        Vec::new()
+    };
+    platform.skills_loaded = true;
+}
+
+pub fn ensure_all_skills_loaded(platforms: &mut [Platform]) {
+    for p in platforms.iter_mut() {
+        load_platform_skills(p);
+    }
+}
+
+pub fn invalidate_platform_skills(platform: &mut Platform) {
+    platform.skills_loaded = false;
+    platform.skills.clear();
 }
 
 fn shellexpand_home(path: &str) -> std::path::PathBuf {

@@ -38,6 +38,10 @@ export async function refreshPlatforms() {
     return invoke('refresh_platforms');
 }
 
+export async function refreshPlatformSkills(platformId) {
+    return invoke('refresh_platform_skills', { platformId });
+}
+
 export async function getLocale() {
     return invoke('get_locale');
 }

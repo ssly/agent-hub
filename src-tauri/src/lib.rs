@@ -68,6 +68,7 @@ pub fn run() {
             commands::sync_skill_cmd,
             commands::sync_folder_cmd,
             commands::refresh_platforms,
+            commands::refresh_platform_skills,
             commands::get_locale,
             commands::set_locale,
             commands::search_skills,

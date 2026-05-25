@@ -314,6 +314,8 @@ class App {
         this.currentTab = 'skills'; // 'skills' | 'mcp' | 'sessions'
         this.diffResult = null;
         this.searchResults = [];
+        this.searchLoading = false;
+        this.searchQuery = '';
         this.fileViewing = null;
         this.i18n = new I18n();
         this.collapsedFolders = new Set();
@@ -522,12 +524,26 @@ class App {
         if (!query.trim()) {
             this.currentView = 'skills';
             this.searchResults = [];
+            this.searchLoading = false;
+            this.searchQuery = '';
             this.render();
             return;
         }
-        this.searchResults = await Api.searchSkills(query);
+        this.searchQuery = query;
+        this.searchLoading = true;
         this.currentView = 'search';
         this.render();
+        try {
+            const results = await Api.searchSkills(query);
+            // Ignore stale results if the user typed again while we were loading
+            if (this.searchQuery !== query) return;
+            this.searchResults = results;
+        } finally {
+            if (this.searchQuery === query) {
+                this.searchLoading = false;
+                this.render();
+            }
+        }
     }
 
     // --- Update ---
@@ -1651,7 +1667,7 @@ API_KEY = "your-key"
             <div class="space-y-1">`;
         for (const c of candidates) {
             html += `<button class="w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200 cursor-pointer diff-target" data-id="${c.id}">
-                ${c.display_name} <span class="text-gray-500">(${c.skill_count} skills)</span></button>`;
+                ${c.display_name}</button>`;
         }
         html += `</div><div class="mt-4 flex justify-end">
             <button class="px-4 py-2 text-gray-400 hover:text-white cursor-pointer modal-cancel">${i.t('action.cancel')}</button>
@@ -2014,7 +2030,6 @@ API_KEY = "your-key"
                 data-platform-id="${p.id}">
                 <div class="flex items-center justify-between">
                     <span class="text-sm">${esc(p.display_name)}</span>
-                    <span class="text-xs text-gray-500">${i.tWith('platform.skills_count', { count: p.skill_count })}</span>
                 </div>
                 ${active ? desc + dir : ''}
             </button>`;
@@ -2952,6 +2967,13 @@ API_KEY = "your-key"
     renderSearchResults() {
         const el = document.getElementById('view-search');
         const i = this.i18n;
+        if (this.searchLoading) {
+            el.innerHTML = `<div class="flex items-center justify-center py-16 text-gray-400 text-sm gap-2">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="animate-spin"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                <span>${i.t('ui.searching')}</span>
+            </div>`;
+            return;
+        }
         if (this.searchResults.length === 0) {
             el.innerHTML = this.renderEmptyState(i.t('ui.no_results'), 'search');
             return;

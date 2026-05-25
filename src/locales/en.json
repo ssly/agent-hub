@@ -12,7 +12,8 @@
     "no_skills": "No skills in this platform.",
     "search_placeholder": "Search skills...",
     "search_results": "Search Results",
-    "no_results": "No results found."
+    "no_results": "No results found.",
+    "searching": "Searching all platforms..."
   },
   "session": {
     "title": "Sessions",
@@ -54,9 +55,6 @@
     "unavailable": "Unavailable",
     "resume_started": "Resume command launched:\n{command}",
     "resume_failed": "Failed to resume: {error}"
-  },
-  "platform": {
-    "skills_count": "{count} skills"
   },
   "skill": {
     "name": "Name",
