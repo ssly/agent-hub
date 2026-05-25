@@ -311,7 +311,7 @@ class App {
         this.selectedSkillName = null;
         this.selectedFolder = '';
         this.currentView = 'skills';
-        this.currentTab = 'skills'; // 'skills' | 'mcp' | 'sessions'
+        this.currentTab = 'skills'; // 'skills' | 'mcp' | 'sessions' | 'switch'
         this.diffResult = null;
         this.searchResults = [];
         this.searchLoading = false;
@@ -360,6 +360,14 @@ class App {
         this.selectedMonitorAgent = 'all';
         this.monitorUnlisten = null;
         this.hooksStatus = {};
+        // Switch state
+        this.switchSelectedAgent = null; // 'codex' | 'claude-code'
+        this.switchProfiles = [];
+        this.switchAddFormOpen = false;
+        this.switchClearConfirmOpen = false;
+        this.switchEditingId = null;
+        this.switchEditingContentId = null;
+        this.switchContentCache = {}; // id -> json string
         // Trash state
         this.trashCount = 0;
         // Update state
@@ -775,6 +783,7 @@ class App {
         document.getElementById('tab-mcp').addEventListener('click', () => this.switchTab('mcp'));
         document.getElementById('tab-sessions').addEventListener('click', () => this.switchTab('sessions'));
         document.getElementById('tab-monitor').addEventListener('click', () => this.switchTab('monitor'));
+        document.getElementById('tab-switch').addEventListener('click', () => this.switchTab('switch'));
     }
 
     async handleRefreshClick() {
@@ -837,6 +846,17 @@ class App {
             Api.setMonitorPolling(true);
             this.startMonitorListener();
             this.refreshMonitor().finally(() => this.render());
+            return;
+        }
+        if (tab === 'switch') {
+            this.stopMonitorListener();
+            Api.setMonitorPolling(false);
+            this.switchAddFormOpen = false;
+            this.switchClearConfirmOpen = false;
+            this.switchEditingId = null;
+            this.switchEditingContentId = null;
+            this.switchContentCache = {};
+            this.render();
             return;
         }
         this.stopMonitorListener();
@@ -1860,16 +1880,19 @@ API_KEY = "your-key"
         const skillsTab = document.getElementById('tab-skills');
         const mcpTab = document.getElementById('tab-mcp');
         const sessionsTab = document.getElementById('tab-sessions');
+        const switchTab = document.getElementById('tab-switch');
         const monitorTab = document.getElementById('tab-monitor');
         // Monitor tab disabled — keep hidden defensively
         if (monitorTab) { monitorTab.hidden = true; monitorTab.style.display = 'none'; }
         skillsTab.textContent = i.t('ui.skills_tab');
         mcpTab.textContent = i.t('ui.mcp_tab');
         sessionsTab.textContent = i.t('ui.sessions_tab');
+        switchTab.textContent = i.t('ui.switch_tab');
         skillsTab.className = `flex-1 py-2 text-sm text-center cursor-pointer border-b-2 ${this.currentTab === 'skills' ? 'text-gray-300 border-cyan-500' : 'text-gray-500 hover:text-white border-transparent'}`;
         mcpTab.className = `flex-1 py-2 text-sm text-center cursor-pointer border-b-2 ${this.currentTab === 'mcp' ? 'text-gray-300 border-cyan-500' : 'text-gray-500 hover:text-white border-transparent'}`;
         sessionsTab.className = `flex-1 py-2 text-sm text-center cursor-pointer border-b-2 ${this.currentTab === 'sessions' ? 'text-gray-300 border-cyan-500' : 'text-gray-500 hover:text-white border-transparent'}`;
-        monitorTab.className = `flex-1 py-2 text-sm text-center cursor-pointer border-b-2 ${this.currentTab === 'monitor' ? 'text-gray-300 border-cyan-500' : 'text-gray-500 hover:text-white border-transparent'}`;
+        switchTab.className = `flex-1 py-2 text-sm text-center cursor-pointer border-b-2 ${this.currentTab === 'switch' ? 'text-gray-300 border-cyan-500' : 'text-gray-500 hover:text-white border-transparent'}`;
+        if (monitorTab) monitorTab.className = `flex-1 py-2 text-sm text-center cursor-pointer border-b-2 ${this.currentTab === 'monitor' ? 'text-gray-300 border-cyan-500' : 'text-gray-500 hover:text-white border-transparent'}`;
     }
 
     renderSidebar() {
@@ -2016,6 +2039,27 @@ API_KEY = "your-key"
             return;
         }
 
+        if (this.currentTab === 'switch') {
+            searchEl.classList.add('hidden');
+            const agents = [
+                { id: 'codex', name: 'Codex', count: null },
+                { id: 'claude-code', name: 'Claude Code', count: null },
+            ];
+            el.innerHTML = agents.map(a => {
+                const active = this.switchSelectedAgent === a.id;
+                return `<button class="w-full text-left px-3 py-2 rounded cursor-pointer ${active ? 'bg-gray-700 text-green-400 font-bold' : 'text-gray-300 hover:bg-gray-700/50'}"
+                    data-switch-agent="${a.id}">
+                    <div class="flex items-center justify-between">
+                        <span class="text-sm">${esc(a.name)}</span>
+                    </div>
+                </button>`;
+            }).join('');
+            el.querySelectorAll('button[data-switch-agent]').forEach(btn => {
+                btn.addEventListener('click', () => this.selectSwitchAgent(btn.dataset.switchAgent));
+            });
+            return;
+        }
+
         // Skills tab (default)
         searchEl.classList.remove('hidden');
         if (this.platforms.length === 0) {
@@ -2066,6 +2110,18 @@ API_KEY = "your-key"
             breadcrumb.textContent = this.selectedSessionPlatform
                 ? (this.sessionPlatforms.find(p => p.id === this.selectedSessionPlatform)?.display_name || '')
                 : i.t('session.title');
+            return;
+        }
+
+        if (this.currentTab === 'switch') {
+            back.classList.add('hidden');
+            diff.classList.add('hidden');
+            sync.classList.add('hidden');
+            scanInvalid.classList.add('hidden');
+            const agentNames = { codex: 'Codex', 'claude-code': 'Claude Code' };
+            breadcrumb.textContent = this.switchSelectedAgent
+                ? `${i.t('switch.title')} — ${agentNames[this.switchSelectedAgent] || ''}`
+                : i.t('switch.title');
             return;
         }
 
@@ -2125,7 +2181,7 @@ API_KEY = "your-key"
 
     renderView() {
         const skillViews = ['skills', 'detail', 'diff', 'search'];
-        const allViews = ['skills', 'detail', 'diff', 'search', 'mcp-servers', 'sessions', 'monitor'];
+        const allViews = ['skills', 'detail', 'diff', 'search', 'mcp-servers', 'sessions', 'monitor', 'switch'];
         let activeViewId = null;
 
         if (this.currentTab === 'mcp') {
@@ -2146,6 +2202,12 @@ API_KEY = "your-key"
             }
             activeViewId = 'view-monitor';
             this.renderMonitorView();
+        } else if (this.currentTab === 'switch') {
+            for (const v of allViews) {
+                document.getElementById(`view-${v}`).classList.toggle('hidden', v !== 'switch');
+            }
+            activeViewId = 'view-switch';
+            this.renderSwitchView();
         } else {
             for (const v of allViews) {
                 document.getElementById(`view-${v}`).classList.toggle('hidden', !skillViews.includes(v) || this.currentView !== v);
@@ -3222,6 +3284,327 @@ API_KEY = "your-key"
         el.style.display = 'block';
         el.style.webkitLineClamp = '';
         el.dataset.expanded = 'true';
+    }
+
+    // --- Switch (Codex account switcher) ---
+
+    async selectSwitchAgent(agentType) {
+        this.switchSelectedAgent = agentType;
+        this.switchAddFormOpen = false;
+        this.switchClearConfirmOpen = false;
+        this.switchEditingId = null;
+        this.switchEditingContentId = null;
+        this.switchContentCache = {};
+        this.switchProfiles = [];
+        this.render();
+        await this.loadSwitchProfiles();
+    }
+
+    async loadSwitchProfiles() {
+        if (!this.switchSelectedAgent) return;
+        try {
+            this.switchProfiles = await Api.listSwitchProfiles(this.switchSelectedAgent);
+        } catch (e) {
+            this.switchProfiles = [];
+        }
+        this.render();
+    }
+
+    renderSwitchView() {
+        const el = document.getElementById('view-switch');
+        const i = this.i18n;
+        if (!el) return;
+
+        if (!this.switchSelectedAgent) {
+            el.innerHTML = this.renderEmptyState(i.t('switch.select_agent'), 'search');
+            return;
+        }
+
+        let html = `<div class="max-w-2xl mx-auto">`;
+
+        // Toolbar
+        html += `<div class="flex gap-2 mb-4 flex-wrap">
+            <button id="sw-btn-save" class="px-3 py-1.5 text-sm rounded bg-cyan-900/40 text-cyan-300 hover:bg-cyan-900/60 cursor-pointer border border-cyan-800/50">
+                ${esc(i.t('switch.save_current'))}
+            </button>
+            <button id="sw-btn-add" class="px-3 py-1.5 text-sm rounded bg-gray-700 text-gray-300 hover:bg-gray-600 cursor-pointer border border-gray-600">
+                ${esc(i.t('switch.add_account'))}
+            </button>
+            <div class="flex-1"></div>
+            <button id="sw-btn-clear" class="px-3 py-1.5 text-sm rounded bg-red-900/30 text-red-400 hover:bg-red-900/50 cursor-pointer border border-red-800/40">
+                ${esc(i.t('switch.clear_active'))}
+            </button>
+        </div>`;
+
+        // Add-form (inline)
+        if (this.switchAddFormOpen) {
+            html += `<div class="mb-4 p-3 rounded-lg border border-gray-600 bg-gray-800/50">
+                <div class="mb-2 text-sm text-gray-300 font-medium">${esc(i.t('switch.add_account'))}</div>
+                <textarea id="sw-add-content" rows="6" class="w-full text-xs font-mono rounded p-2 bg-gray-900 border border-gray-600 text-gray-300 outline-none resize-none mb-2" placeholder="{ &quot;auth_mode&quot;: ... }"></textarea>
+                <input id="sw-add-note" type="text" class="w-full text-sm rounded px-2 py-1 bg-gray-900 border border-gray-600 text-gray-300 outline-none mb-2" placeholder="${esc(i.t('switch.note_placeholder'))}" />
+                <div id="sw-add-error" class="hidden text-xs text-red-400 mb-2"></div>
+                <div class="flex gap-2">
+                    <button id="sw-add-confirm" class="px-3 py-1.5 text-sm rounded bg-green-900/40 text-green-300 hover:bg-green-900/60 cursor-pointer border border-green-800/50">${esc(i.t('switch.confirm_add'))}</button>
+                    <button id="sw-add-cancel" class="px-3 py-1.5 text-sm rounded bg-gray-700 text-gray-400 hover:bg-gray-600 cursor-pointer border border-gray-600">${esc(i.t('action.cancel'))}</button>
+                </div>
+            </div>`;
+        }
+
+        // Clear-confirm panel (two-step)
+        if (this.switchClearConfirmOpen) {
+            html += `<div class="mb-4 p-3 rounded-lg border border-red-800/60 bg-red-900/20">
+                <div class="text-sm text-red-300 font-medium mb-1">${esc(i.t('switch.clear_warning_title'))}</div>
+                <div class="text-xs text-red-400 mb-3">${esc(i.t('switch.clear_warning_body'))}</div>
+                <div class="flex gap-2">
+                    <button id="sw-clear-confirm" class="px-3 py-1.5 text-sm rounded bg-red-700 text-white hover:bg-red-600 cursor-pointer">${esc(i.t('switch.confirm_clear'))}</button>
+                    <button id="sw-clear-cancel" class="px-3 py-1.5 text-sm rounded bg-gray-700 text-gray-400 hover:bg-gray-600 cursor-pointer border border-gray-600">${esc(i.t('action.cancel'))}</button>
+                </div>
+            </div>`;
+        }
+
+        // Profile list
+        if (this.switchProfiles.length === 0) {
+            html += `<div class="text-center text-gray-500 text-sm py-12">${esc(i.t('switch.empty'))}</div>`;
+        } else {
+            html += `<div class="space-y-2">`;
+            this.switchProfiles.forEach((profile, idx) => {
+                const label = profile.note || i.tWith('switch.account_fallback', { n: idx + 1 });
+                const date = profile.saved_at ? profile.saved_at.replace('T', ' ').replace('Z', ' UTC').substring(0, 19) + ' UTC' : '';
+                const isEditing = this.switchEditingId === profile.id;
+
+                html += `<div class="p-3 rounded-lg border ${profile.is_active ? 'border-cyan-700/60 bg-cyan-900/10' : 'border-gray-700 bg-gray-800/40'}">
+                    <div class="flex items-start justify-between gap-2">
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-2 mb-0.5">
+                                <span class="text-sm font-medium text-gray-200">${esc(label)}</span>
+                                ${profile.is_active ? `<span class="text-xs px-1.5 py-0.5 rounded bg-cyan-900/50 text-cyan-400 border border-cyan-700/50">${esc(i.t('switch.active_badge'))}</span>` : ''}
+                            </div>
+                            <div class="text-xs text-gray-500">${esc(date)}</div>
+                        </div>
+                        <div class="flex gap-1.5 flex-shrink-0">
+                            ${!profile.is_active ? `<button class="sw-btn-switch text-xs px-2 py-1 rounded bg-gray-700 text-gray-300 hover:bg-gray-600 cursor-pointer border border-gray-600" data-id="${esc(profile.id)}">${esc(i.t('switch.switch_btn'))}</button>` : ''}
+                            <button class="sw-btn-edit-content text-xs px-2 py-1 rounded bg-gray-700 text-gray-400 hover:bg-gray-600 cursor-pointer border border-gray-600" data-id="${esc(profile.id)}">${esc(i.t('switch.edit_content_btn'))}</button>
+                            <button class="sw-btn-note text-xs px-2 py-1 rounded bg-gray-700 text-gray-400 hover:bg-gray-600 cursor-pointer border border-gray-600" data-id="${esc(profile.id)}">${esc(i.t('switch.note_btn'))}</button>
+                            <button class="sw-btn-delete text-xs px-2 py-1 rounded bg-red-900/30 text-red-400 hover:bg-red-900/50 cursor-pointer border border-red-800/40" data-id="${esc(profile.id)}">${esc(i.t('switch.delete_btn'))}</button>
+                        </div>
+                    </div>`;
+
+                if (isEditing) {
+                    html += `<div class="mt-2 flex gap-2 items-center">
+                        <input id="sw-note-input-${esc(profile.id)}" type="text" value="${esc(profile.note)}" class="flex-1 text-sm rounded px-2 py-1 bg-gray-900 border border-gray-600 text-gray-300 outline-none" placeholder="${esc(i.t('switch.note_placeholder'))}" />
+                        <button class="sw-note-save text-xs px-2 py-1 rounded bg-green-900/40 text-green-300 hover:bg-green-900/60 cursor-pointer border border-green-800/50" data-id="${esc(profile.id)}">${esc(i.t('switch.save_note'))}</button>
+                        <button class="sw-note-cancel text-xs px-2 py-1 rounded bg-gray-700 text-gray-400 hover:bg-gray-600 cursor-pointer border border-gray-600" data-id="${esc(profile.id)}">${esc(i.t('action.cancel'))}</button>
+                    </div>`;
+                }
+
+                const isEditingContent = this.switchEditingContentId === profile.id;
+                if (isEditingContent) {
+                    const cached = this.switchContentCache[profile.id] || '';
+                    html += `<div class="mt-2">
+                        <textarea id="sw-content-input-${esc(profile.id)}" rows="10" class="w-full text-xs font-mono rounded p-2 bg-gray-900 border border-gray-600 text-gray-300 outline-none resize-y">${esc(cached)}</textarea>
+                        <div id="sw-content-error-${esc(profile.id)}" class="hidden text-xs text-red-400 mt-1"></div>
+                        <div class="flex gap-2 mt-2">
+                            <button class="sw-content-save text-xs px-2 py-1 rounded bg-green-900/40 text-green-300 hover:bg-green-900/60 cursor-pointer border border-green-800/50" data-id="${esc(profile.id)}">${esc(i.t('switch.save_content'))}</button>
+                            <button class="sw-content-cancel text-xs px-2 py-1 rounded bg-gray-700 text-gray-400 hover:bg-gray-600 cursor-pointer border border-gray-600" data-id="${esc(profile.id)}">${esc(i.t('action.cancel'))}</button>
+                        </div>
+                    </div>`;
+                }
+
+                html += `</div>`;
+            });
+            html += `</div>`;
+        }
+
+        html += `</div>`;
+        el.innerHTML = html;
+
+        // Bind toolbar buttons
+        document.getElementById('sw-btn-save')?.addEventListener('click', () => this.handleSwitchSaveCurrent());
+        document.getElementById('sw-btn-add')?.addEventListener('click', () => {
+            this.switchAddFormOpen = !this.switchAddFormOpen;
+            this.render();
+        });
+        document.getElementById('sw-btn-clear')?.addEventListener('click', () => {
+            this.switchClearConfirmOpen = true;
+            this.render();
+        });
+
+        // Add form
+        document.getElementById('sw-add-confirm')?.addEventListener('click', () => this.handleSwitchAdd());
+        document.getElementById('sw-add-cancel')?.addEventListener('click', () => {
+            this.switchAddFormOpen = false;
+            this.render();
+        });
+
+        // Clear confirm
+        document.getElementById('sw-clear-confirm')?.addEventListener('click', () => this.handleSwitchClear());
+        document.getElementById('sw-clear-cancel')?.addEventListener('click', () => {
+            this.switchClearConfirmOpen = false;
+            this.render();
+        });
+
+        // Row action buttons
+        el.querySelectorAll('.sw-btn-switch').forEach(btn => {
+            btn.addEventListener('click', () => this.handleSwitchAccount(btn.dataset.id));
+        });
+        el.querySelectorAll('.sw-btn-edit-content').forEach(btn => {
+            btn.addEventListener('click', () => this.handleOpenContentEditor(btn.dataset.id));
+        });
+        el.querySelectorAll('.sw-content-save').forEach(btn => {
+            btn.addEventListener('click', () => this.handleSwitchSaveContent(btn.dataset.id));
+        });
+        el.querySelectorAll('.sw-content-cancel').forEach(btn => {
+            btn.addEventListener('click', () => {
+                this.switchEditingContentId = null;
+                this.render();
+            });
+        });
+        el.querySelectorAll('.sw-btn-note').forEach(btn => {
+            btn.addEventListener('click', () => {
+                this.switchEditingId = this.switchEditingId === btn.dataset.id ? null : btn.dataset.id;
+                this.render();
+            });
+        });
+        el.querySelectorAll('.sw-btn-delete').forEach(btn => {
+            btn.addEventListener('click', () => this.handleSwitchDelete(btn.dataset.id));
+        });
+        el.querySelectorAll('.sw-note-save').forEach(btn => {
+            btn.addEventListener('click', () => this.handleSwitchSaveNote(btn.dataset.id));
+        });
+        el.querySelectorAll('.sw-note-cancel').forEach(btn => {
+            btn.addEventListener('click', () => {
+                this.switchEditingId = null;
+                this.render();
+            });
+        });
+    }
+
+    async handleSwitchSaveCurrent() {
+        const i = this.i18n;
+        const at = this.switchSelectedAgent;
+        try {
+            await Api.saveCurrentAuthProfile(at, '');
+            this.showToast(i.t('switch.saved_toast'), 'success');
+            await this.loadSwitchProfiles();
+        } catch (e) {
+            if (e === 'no_active_auth' || e?.message === 'no_active_auth') {
+                this.showToast(i.t('switch.no_active_auth_error'), 'error');
+            } else {
+                this.showToast(String(e?.message || e), 'error');
+            }
+        }
+    }
+
+    async handleSwitchAdd() {
+        const i = this.i18n;
+        const at = this.switchSelectedAgent;
+        const content = document.getElementById('sw-add-content')?.value?.trim() || '';
+        const note = document.getElementById('sw-add-note')?.value?.trim() || '';
+        const errEl = document.getElementById('sw-add-error');
+        try {
+            await Api.addAuthProfile(at, content, note);
+            this.switchAddFormOpen = false;
+            this.showToast(i.t('switch.added_toast'), 'success');
+            await this.loadSwitchProfiles();
+        } catch (e) {
+            if (e === 'invalid_json' || e?.message === 'invalid_json') {
+                if (errEl) { errEl.textContent = i.t('switch.invalid_json_error'); errEl.classList.remove('hidden'); }
+            } else {
+                this.showToast(String(e?.message || e), 'error');
+            }
+        }
+    }
+
+    async handleSwitchAccount(id) {
+        const i = this.i18n;
+        const at = this.switchSelectedAgent;
+        if (!confirm(i.t('switch.confirm_switch'))) return;
+        try {
+            await Api.switchAuthProfile(at, id);
+            this.showToast(i.t('switch.switched_toast'), 'success');
+            await this.loadSwitchProfiles();
+        } catch (e) {
+            this.showToast(String(e?.message || e), 'error');
+        }
+    }
+
+    async handleSwitchSaveNote(id) {
+        const at = this.switchSelectedAgent;
+        const note = document.getElementById(`sw-note-input-${id}`)?.value?.trim() || '';
+        try {
+            await Api.updateAuthProfileNote(at, id, note);
+            this.switchEditingId = null;
+            await this.loadSwitchProfiles();
+        } catch (e) {
+            this.showToast(String(e?.message || e), 'error');
+        }
+    }
+
+    async handleSwitchDelete(id) {
+        const i = this.i18n;
+        const at = this.switchSelectedAgent;
+        if (!confirm(i.t('switch.confirm_delete'))) return;
+        try {
+            await Api.deleteAuthProfile(at, id);
+            await this.loadSwitchProfiles();
+        } catch (e) {
+            this.showToast(String(e?.message || e), 'error');
+        }
+    }
+
+    async handleSwitchClear() {
+        const i = this.i18n;
+        const at = this.switchSelectedAgent;
+        try {
+            await Api.clearActiveAuth(at);
+            this.switchClearConfirmOpen = false;
+            this.showToast(i.t('switch.cleared_toast'), 'success');
+            await this.loadSwitchProfiles();
+        } catch (e) {
+            this.switchClearConfirmOpen = false;
+            if (e === 'no_active_auth' || e?.message === 'no_active_auth') {
+                this.showToast(i.t('switch.no_active_auth_error'), 'error');
+            } else {
+                this.showToast(String(e?.message || e), 'error');
+            }
+            this.render();
+        }
+    }
+
+    async handleOpenContentEditor(id) {
+        const at = this.switchSelectedAgent;
+        this.switchEditingContentId = id;
+        this.switchEditingId = null;
+        if (!this.switchContentCache[id]) {
+            try {
+                this.switchContentCache[id] = await Api.getAuthProfileContent(at, id);
+            } catch (e) {
+                this.showToast(String(e?.message || e), 'error');
+                this.switchEditingContentId = null;
+            }
+        }
+        this.render();
+    }
+
+    async handleSwitchSaveContent(id) {
+        const i = this.i18n;
+        const at = this.switchSelectedAgent;
+        const textarea = document.getElementById(`sw-content-input-${id}`);
+        const errEl = document.getElementById(`sw-content-error-${id}`);
+        const content = textarea?.value || '';
+        try {
+            await Api.updateAuthProfileContent(at, id, content);
+            this.switchContentCache[id] = content;
+            this.switchEditingContentId = null;
+            this.showToast(i.t('switch.content_saved_toast'), 'success');
+            await this.loadSwitchProfiles();
+        } catch (e) {
+            if (e === 'invalid_json' || e?.message === 'invalid_json') {
+                if (errEl) { errEl.textContent = i.t('switch.invalid_json_error'); errEl.classList.remove('hidden'); }
+            } else {
+                this.showToast(String(e?.message || e), 'error');
+            }
+        }
     }
 }
 

@@ -182,3 +182,40 @@ export async function removeHooks(agentType) {
 export async function getHooksStatus() {
     return invoke('get_hooks_status');
 }
+
+// Switch (multi-agent config switcher)
+export async function listSwitchProfiles(agentType) {
+    return invoke('list_switch_profiles', { agentType });
+}
+
+export async function saveCurrentAuthProfile(agentType, note = '') {
+    return invoke('save_current_auth_profile', { agentType, note });
+}
+
+export async function addAuthProfile(agentType, content, note = '') {
+    return invoke('add_auth_profile', { agentType, content, note });
+}
+
+export async function switchAuthProfile(agentType, id) {
+    return invoke('switch_auth_profile', { agentType, id });
+}
+
+export async function updateAuthProfileNote(agentType, id, note) {
+    return invoke('update_auth_profile_note', { agentType, id, note });
+}
+
+export async function deleteAuthProfile(agentType, id) {
+    return invoke('delete_auth_profile', { agentType, id });
+}
+
+export async function getAuthProfileContent(agentType, id) {
+    return invoke('get_auth_profile_content', { agentType, id });
+}
+
+export async function updateAuthProfileContent(agentType, id, content) {
+    return invoke('update_auth_profile_content', { agentType, id, content });
+}
+
+export async function clearActiveAuth(agentType) {
+    return invoke('clear_active_auth', { agentType });
+}

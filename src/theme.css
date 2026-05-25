@@ -1674,3 +1674,215 @@ button.text-red-500:hover { color: var(--danger) !important; background: var(--d
 .ah-meta__chip[data-tone="accent"] {
   background: var(--accent-soft); color: var(--accent);
 }
+
+/* ============================================================
+ * §43 Switch (Codex account switcher)
+ * ============================================================ */
+
+/* Toolbar buttons */
+#sw-btn-save {
+  background: var(--accent) !important;
+  border: none !important;
+  color: #fff !important;
+  border-radius: var(--radius-sm) !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  padding: 6px 14px !important;
+  transition: background var(--dur-fast) var(--ease-soft);
+  cursor: pointer;
+}
+#sw-btn-save:hover { background: var(--accent-strong) !important; }
+
+#sw-btn-add {
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  color: var(--ink-2) !important;
+  border-radius: var(--radius-sm) !important;
+  font-size: 13px !important;
+  padding: 6px 14px !important;
+  transition: background var(--dur-fast) var(--ease-soft), border-color var(--dur-fast) var(--ease-soft);
+  cursor: pointer;
+}
+#sw-btn-add:hover { background: var(--hover) !important; border-color: var(--border-strong) !important; color: var(--ink) !important; }
+
+#sw-btn-clear {
+  background: transparent !important;
+  border: 1px solid var(--border) !important;
+  color: var(--danger) !important;
+  border-radius: var(--radius-sm) !important;
+  font-size: 13px !important;
+  padding: 6px 14px !important;
+  transition: background var(--dur-fast) var(--ease-soft), border-color var(--dur-fast) var(--ease-soft);
+  cursor: pointer;
+}
+#sw-btn-clear:hover { background: var(--danger-soft) !important; border-color: var(--danger) !important; }
+
+/* Profile cards */
+#view-switch .space-y-2 > div {
+  background: var(--surface) !important;
+  border: 1px solid var(--hairline) !important;
+  border-radius: var(--radius-md) !important;
+  padding: 14px 16px !important;
+  transition: box-shadow var(--dur-base) var(--ease-soft), border-color var(--dur-base) var(--ease-soft);
+}
+#view-switch .space-y-2 > div:hover {
+  border-color: var(--border) !important;
+  box-shadow: var(--shadow-soft) !important;
+}
+
+/* Active profile card (border-cyan highlight) */
+#view-switch .space-y-2 > div.border-cyan-700\/60 {
+  background: var(--accent-soft) !important;
+  border-color: var(--accent-mid) !important;
+}
+#view-switch .space-y-2 > div.border-cyan-700\/60:hover {
+  border-color: var(--accent) !important;
+  box-shadow: var(--shadow-soft) !important;
+}
+
+/* Text colors */
+#view-switch .text-gray-200 { color: var(--ink) !important; }
+#view-switch .text-gray-300 { color: var(--ink-2) !important; }
+#view-switch .text-gray-400 { color: var(--ink-2) !important; }
+#view-switch .text-gray-500 { color: var(--ink-3) !important; }
+#view-switch .font-medium.text-gray-200 { color: var(--ink) !important; font-weight: 500 !important; }
+
+/* Active badge */
+#view-switch .text-cyan-400 { color: var(--accent) !important; }
+#view-switch .bg-cyan-900\/50 {
+  background: var(--accent-soft) !important;
+  border-color: var(--accent-mid) !important;
+}
+
+/* Row action buttons (切换 / 编辑 / 备注 / 删除) */
+#view-switch .sw-btn-switch,
+#view-switch .sw-btn-edit-content,
+#view-switch .sw-btn-note {
+  background: transparent !important;
+  border: 1px solid var(--border) !important;
+  color: var(--ink-2) !important;
+  border-radius: var(--radius-xs) !important;
+  font-size: 12px !important;
+  padding: 3px 10px !important;
+  transition: background var(--dur-fast) var(--ease-soft), color var(--dur-fast) var(--ease-soft), border-color var(--dur-fast) var(--ease-soft);
+  cursor: pointer;
+}
+#view-switch .sw-btn-switch:hover { background: var(--accent) !important; color: #fff !important; border-color: var(--accent) !important; }
+#view-switch .sw-btn-edit-content:hover,
+#view-switch .sw-btn-note:hover { background: var(--hover) !important; color: var(--ink) !important; border-color: var(--border-strong) !important; }
+
+#view-switch .sw-btn-delete {
+  background: transparent !important;
+  border: 1px solid var(--border) !important;
+  color: var(--ink-4) !important;
+  border-radius: var(--radius-xs) !important;
+  font-size: 12px !important;
+  padding: 3px 10px !important;
+  transition: color var(--dur-fast) var(--ease-soft), background var(--dur-fast) var(--ease-soft), border-color var(--dur-fast) var(--ease-soft);
+  cursor: pointer;
+}
+#view-switch .sw-btn-delete:hover { color: var(--danger) !important; border-color: var(--danger) !important; background: var(--danger-soft) !important; }
+
+/* Inline add form */
+#view-switch .border-gray-600.bg-gray-800\/50 {
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-md) !important;
+}
+#view-switch .border-gray-600.bg-gray-800\/50 .text-gray-300 { color: var(--ink) !important; }
+
+/* Inline form textarea / input */
+#view-switch textarea,
+#view-switch input[type="text"] {
+  background: var(--sunken) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-sm) !important;
+  color: var(--ink) !important;
+  font-size: 12px !important;
+  transition: border-color var(--dur-fast) var(--ease-soft);
+}
+#view-switch textarea:focus,
+#view-switch input[type="text"]:focus {
+  border-color: var(--accent) !important;
+  outline: none !important;
+}
+#view-switch textarea { font-family: var(--font-mono) !important; }
+
+/* Confirm-add / save-content buttons */
+#sw-add-confirm,
+#view-switch .sw-content-save,
+#view-switch .sw-note-save {
+  background: var(--accent) !important;
+  border: none !important;
+  color: #fff !important;
+  border-radius: var(--radius-xs) !important;
+  font-size: 12px !important;
+  padding: 4px 12px !important;
+  font-weight: 500 !important;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-soft);
+}
+#sw-add-confirm:hover,
+#view-switch .sw-content-save:hover,
+#view-switch .sw-note-save:hover { background: var(--accent-strong) !important; }
+
+/* Cancel buttons */
+#sw-add-cancel,
+#sw-clear-cancel,
+#view-switch .sw-content-cancel,
+#view-switch .sw-note-cancel {
+  background: transparent !important;
+  border: 1px solid var(--border) !important;
+  color: var(--ink-3) !important;
+  border-radius: var(--radius-xs) !important;
+  font-size: 12px !important;
+  padding: 4px 12px !important;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-soft), color var(--dur-fast) var(--ease-soft);
+}
+#sw-add-cancel:hover,
+#sw-clear-cancel:hover,
+#view-switch .sw-content-cancel:hover,
+#view-switch .sw-note-cancel:hover { background: var(--hover) !important; color: var(--ink) !important; }
+
+/* Clear confirm panel */
+#view-switch .border-red-800\/60 {
+  background: var(--danger-soft) !important;
+  border: 1px solid rgba(176, 82, 74, 0.25) !important;
+  border-radius: var(--radius-md) !important;
+}
+#view-switch .text-red-300 { color: var(--danger) !important; font-weight: 600 !important; }
+#view-switch .text-red-400 { color: var(--danger) !important; }
+
+#sw-clear-confirm {
+  background: var(--danger) !important;
+  border: none !important;
+  color: #fff !important;
+  border-radius: var(--radius-xs) !important;
+  font-size: 12px !important;
+  padding: 4px 12px !important;
+  font-weight: 500 !important;
+  cursor: pointer;
+  transition: opacity var(--dur-fast) var(--ease-soft);
+}
+#sw-clear-confirm:hover { opacity: .85; }
+
+/* Empty state */
+#view-switch .text-center.text-gray-500 { color: var(--ink-4) !important; }
+
+/* Inline note edit input */
+#view-switch .mt-2.flex.gap-2.items-center input { margin-bottom: 0 !important; }
+
+/* Error text */
+#view-switch .text-red-400.text-xs { color: var(--danger) !important; }
+
+/* Night mode overrides */
+:root[data-theme="night"] #sw-btn-save { background: var(--accent) !important; }
+:root[data-theme="night"] #sw-btn-add { background: rgba(255,255,255,0.06) !important; border-color: rgba(255,255,255,0.12) !important; color: var(--ink-2) !important; }
+:root[data-theme="night"] #sw-btn-clear { background: transparent !important; }
+:root[data-theme="night"] #view-switch .space-y-2 > div { background: rgba(255,255,255,0.04) !important; border-color: rgba(255,255,255,0.08) !important; }
+:root[data-theme="night"] #view-switch .space-y-2 > div.border-cyan-700\/60 { background: var(--accent-soft) !important; }
+:root[data-theme="night"] #view-switch textarea,
+:root[data-theme="night"] #view-switch input[type="text"] { background: rgba(0,0,0,0.25) !important; border-color: rgba(255,255,255,0.12) !important; }
+:root[data-theme="night"] #view-switch .border-gray-600.bg-gray-800\/50 { background: rgba(255,255,255,0.04) !important; border-color: rgba(255,255,255,0.10) !important; }
+:root[data-theme="night"] #view-switch .border-red-800\/60 { background: rgba(176, 82, 74, 0.15) !important; }

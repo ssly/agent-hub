@@ -8,6 +8,7 @@ mod platform;
 mod session;
 mod skill;
 mod state;
+mod switch;
 mod sync;
 mod trash;
 
@@ -104,6 +105,15 @@ pub fn run() {
             commands::configure_hooks,
             commands::remove_hooks,
             commands::get_hooks_status,
+            switch::commands::list_switch_profiles,
+            switch::commands::save_current_auth_profile,
+            switch::commands::add_auth_profile,
+            switch::commands::switch_auth_profile,
+            switch::commands::update_auth_profile_note,
+            switch::commands::delete_auth_profile,
+            switch::commands::get_auth_profile_content,
+            switch::commands::update_auth_profile_content,
+            switch::commands::clear_active_auth,
         ])
         .run(tauri::generate_context!())
         .expect("error while running agent-hub");
