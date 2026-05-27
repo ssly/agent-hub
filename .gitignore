@@ -4,6 +4,7 @@ src-tauri/target
 src/styles.css
 *.DS_Store
 
+openspec
 .claude
 .codex
 .kiro
