@@ -43,6 +43,16 @@ fn hash_file(path: &PathBuf) -> Option<Vec<u8>> {
     Some(hasher.finalize().to_vec())
 }
 
+fn hash_env_field(path: &PathBuf) -> Option<Vec<u8>> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let val: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let env = val.get("env").cloned().unwrap_or(serde_json::Value::Null);
+    let env_str = serde_json::to_string(&env).ok()?;
+    let mut hasher = Sha256::new();
+    hasher.update(env_str.as_bytes());
+    Some(hasher.finalize().to_vec())
+}
+
 fn now_iso() -> String {
     Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
@@ -52,7 +62,11 @@ fn now_iso() -> String {
 #[tauri::command]
 pub fn list_switch_profiles(agent_type: String) -> Result<Vec<AuthProfile>, String> {
     let dir = profiles_dir(&agent_type)?;
-    let active_hash = agent_config_path(&agent_type).ok().and_then(|p| hash_file(&p));
+    let active_hash = if agent_type == "claude-code" {
+        agent_config_path(&agent_type).ok().and_then(|p| hash_env_field(&p))
+    } else {
+        agent_config_path(&agent_type).ok().and_then(|p| hash_file(&p))
+    };
 
     let mut profiles: Vec<AuthProfile> = Vec::new();
 
@@ -74,7 +88,14 @@ pub fn list_switch_profiles(agent_type: String) -> Result<Vec<AuthProfile>, Stri
         let Ok(meta) = serde_json::from_str::<ProfileMeta>(&meta_str) else {
             continue;
         };
-        let profile_hash = hash_file(&config_path);
+        if !config_path.exists() {
+            continue;
+        }
+        let profile_hash = if agent_type == "claude-code" {
+            hash_env_field(&config_path)
+        } else {
+            hash_file(&config_path)
+        };
         let is_active = match (&active_hash, &profile_hash) {
             (Some(a), Some(b)) => a == b,
             _ => false,
@@ -150,9 +171,37 @@ pub fn switch_auth_profile(agent_type: String, id: String) -> Result<(), String>
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let tmp = dest.with_extension("json.tmp");
-    std::fs::write(&tmp, &content).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, &dest).map_err(|e| e.to_string())?;
+
+    if agent_type == "claude-code" {
+        let profile_str = std::fs::read_to_string(&src).map_err(|e| e.to_string())?;
+        let mut profile_val: serde_json::Value =
+            serde_json::from_str(&profile_str).map_err(|e| e.to_string())?;
+        let env_val = profile_val
+            .as_object_mut()
+            .and_then(|m| m.remove("env"))
+            .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+
+        let current_str = if dest.exists() {
+            std::fs::read_to_string(&dest).map_err(|e| e.to_string())?
+        } else {
+            "{}".to_string()
+        };
+        let mut current_val: serde_json::Value =
+            serde_json::from_str(&current_str).map_err(|e| e.to_string())?;
+
+        if let Some(obj) = current_val.as_object_mut() {
+            obj.insert("env".to_string(), env_val);
+        }
+
+        let merged_str = serde_json::to_string_pretty(&current_val).map_err(|e| e.to_string())?;
+        let tmp = dest.with_extension("json.tmp");
+        std::fs::write(&tmp, merged_str.as_bytes()).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, &dest).map_err(|e| e.to_string())?;
+    } else {
+        let tmp = dest.with_extension("json.tmp");
+        std::fs::write(&tmp, &content).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, &dest).map_err(|e| e.to_string())?;
+    }
 
     Ok(())
 }

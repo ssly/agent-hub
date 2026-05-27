@@ -368,6 +368,8 @@ class App {
         this.switchEditingId = null;
         this.switchEditingContentId = null;
         this.switchContentCache = {}; // id -> json string
+        this.switchDeleteConfirmId = null; // id of profile pending delete confirmation
+        this.switchAccountConfirmId = null; // id of profile pending switch confirmation
         // Trash state
         this.trashCount = 0;
         // Update state
@@ -856,7 +858,13 @@ class App {
             this.switchEditingId = null;
             this.switchEditingContentId = null;
             this.switchContentCache = {};
-            this.render();
+            this.switchDeleteConfirmId = null;
+            this.switchAccountConfirmId = null;
+            if (this.switchSelectedAgent) {
+                this.loadSwitchProfiles();
+            } else {
+                this.render();
+            }
             return;
         }
         this.stopMonitorListener();
@@ -3371,6 +3379,8 @@ API_KEY = "your-key"
                 const label = profile.note || i.tWith('switch.account_fallback', { n: idx + 1 });
                 const date = profile.saved_at ? profile.saved_at.replace('T', ' ').replace('Z', ' UTC').substring(0, 19) + ' UTC' : '';
                 const isEditing = this.switchEditingId === profile.id;
+                const isDeleting = this.switchDeleteConfirmId === profile.id;
+                const isSwitching = this.switchAccountConfirmId === profile.id;
 
                 html += `<div class="p-3 rounded-lg border ${profile.is_active ? 'border-cyan-700/60 bg-cyan-900/10' : 'border-gray-700 bg-gray-800/40'}">
                     <div class="flex items-start justify-between gap-2">
@@ -3381,12 +3391,24 @@ API_KEY = "your-key"
                             </div>
                             <div class="text-xs text-gray-500">${esc(date)}</div>
                         </div>
-                        <div class="flex gap-1.5 flex-shrink-0">
-                            ${!profile.is_active ? `<button class="sw-btn-switch text-xs px-2 py-1 rounded bg-gray-700 text-gray-300 hover:bg-gray-600 cursor-pointer border border-gray-600" data-id="${esc(profile.id)}">${esc(i.t('switch.switch_btn'))}</button>` : ''}
+                        <div class="flex gap-1.5 flex-shrink-0 items-center">`;
+
+                if (isDeleting) {
+                    html += `<span class="text-xs text-red-400">${esc(i.t('switch.confirm_delete'))}</span>
+                             <button class="sw-btn-delete-confirm text-xs px-2 py-1 rounded bg-red-900/30 text-red-400 hover:bg-red-900/50 cursor-pointer border border-red-800/40" data-id="${esc(profile.id)}">${esc(i.t('action.confirm'))}</button>
+                             <button class="sw-btn-delete-cancel text-xs px-2 py-1 rounded bg-gray-700 text-gray-400 hover:bg-gray-600 cursor-pointer border border-gray-600" data-id="${esc(profile.id)}">${esc(i.t('action.cancel'))}</button>`;
+                } else if (isSwitching) {
+                    html += `<span class="text-xs text-cyan-400">${esc(i.t('switch.confirm_switch'))}</span>
+                             <button class="sw-btn-switch-confirm text-xs px-2 py-1 rounded bg-gray-700 text-gray-300 hover:bg-gray-600 cursor-pointer border border-gray-600" data-id="${esc(profile.id)}">${esc(i.t('action.confirm'))}</button>
+                             <button class="sw-btn-switch-cancel text-xs px-2 py-1 rounded bg-gray-700 text-gray-400 hover:bg-gray-600 cursor-pointer border border-gray-600" data-id="${esc(profile.id)}">${esc(i.t('action.cancel'))}</button>`;
+                } else {
+                    html += `${!profile.is_active ? `<button class="sw-btn-switch text-xs px-2 py-1 rounded bg-gray-700 text-gray-300 hover:bg-gray-600 cursor-pointer border border-gray-600" data-id="${esc(profile.id)}">${esc(i.t('switch.switch_btn'))}</button>` : ''}
                             <button class="sw-btn-edit-content text-xs px-2 py-1 rounded bg-gray-700 text-gray-400 hover:bg-gray-600 cursor-pointer border border-gray-600" data-id="${esc(profile.id)}">${esc(i.t('switch.edit_content_btn'))}</button>
                             <button class="sw-btn-note text-xs px-2 py-1 rounded bg-gray-700 text-gray-400 hover:bg-gray-600 cursor-pointer border border-gray-600" data-id="${esc(profile.id)}">${esc(i.t('switch.note_btn'))}</button>
-                            <button class="sw-btn-delete text-xs px-2 py-1 rounded bg-red-900/30 text-red-400 hover:bg-red-900/50 cursor-pointer border border-red-800/40" data-id="${esc(profile.id)}">${esc(i.t('switch.delete_btn'))}</button>
-                        </div>
+                            <button class="sw-btn-delete text-xs px-2 py-1 rounded bg-red-900/30 text-red-400 hover:bg-red-900/50 cursor-pointer border border-red-800/40" data-id="${esc(profile.id)}">${esc(i.t('switch.delete_btn'))}</button>`;
+                }
+
+                html += `</div>
                     </div>`;
 
                 if (isEditing) {
@@ -3447,6 +3469,15 @@ API_KEY = "your-key"
         el.querySelectorAll('.sw-btn-switch').forEach(btn => {
             btn.addEventListener('click', () => this.handleSwitchAccount(btn.dataset.id));
         });
+        el.querySelectorAll('.sw-btn-switch-confirm').forEach(btn => {
+            btn.addEventListener('click', () => this.handleSwitchAccount(btn.dataset.id));
+        });
+        el.querySelectorAll('.sw-btn-switch-cancel').forEach(btn => {
+            btn.addEventListener('click', () => {
+                this.switchAccountConfirmId = null;
+                this.render();
+            });
+        });
         el.querySelectorAll('.sw-btn-edit-content').forEach(btn => {
             btn.addEventListener('click', () => this.handleOpenContentEditor(btn.dataset.id));
         });
@@ -3467,6 +3498,15 @@ API_KEY = "your-key"
         });
         el.querySelectorAll('.sw-btn-delete').forEach(btn => {
             btn.addEventListener('click', () => this.handleSwitchDelete(btn.dataset.id));
+        });
+        el.querySelectorAll('.sw-btn-delete-confirm').forEach(btn => {
+            btn.addEventListener('click', () => this.handleSwitchDelete(btn.dataset.id));
+        });
+        el.querySelectorAll('.sw-btn-delete-cancel').forEach(btn => {
+            btn.addEventListener('click', () => {
+                this.switchDeleteConfirmId = null;
+                this.render();
+            });
         });
         el.querySelectorAll('.sw-note-save').forEach(btn => {
             btn.addEventListener('click', () => this.handleSwitchSaveNote(btn.dataset.id));
@@ -3518,9 +3558,15 @@ API_KEY = "your-key"
     async handleSwitchAccount(id) {
         const i = this.i18n;
         const at = this.switchSelectedAgent;
-        if (!confirm(i.t('switch.confirm_switch'))) return;
+        if (this.switchAccountConfirmId !== id) {
+            this.switchAccountConfirmId = id;
+            this.switchDeleteConfirmId = null;
+            this.render();
+            return;
+        }
         try {
             await Api.switchAuthProfile(at, id);
+            this.switchAccountConfirmId = null;
             this.showToast(i.t('switch.switched_toast'), 'success');
             await this.loadSwitchProfiles();
         } catch (e) {
@@ -3543,9 +3589,15 @@ API_KEY = "your-key"
     async handleSwitchDelete(id) {
         const i = this.i18n;
         const at = this.switchSelectedAgent;
-        if (!confirm(i.t('switch.confirm_delete'))) return;
+        if (this.switchDeleteConfirmId !== id) {
+            this.switchDeleteConfirmId = id;
+            this.switchAccountConfirmId = null;
+            this.render();
+            return;
+        }
         try {
             await Api.deleteAuthProfile(at, id);
+            this.switchDeleteConfirmId = null;
             await this.loadSwitchProfiles();
         } catch (e) {
             this.showToast(String(e?.message || e), 'error');

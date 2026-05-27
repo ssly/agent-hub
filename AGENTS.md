@@ -1,64 +1,118 @@
-<claude-mem-context>
-# Memory Context
+# AGENTS.md
 
-# [agent-hub] recent context, 2026-05-14 12:54am GMT+8
+Agent Hub 的项目上下文文档，供 AI Agent 和开发者快速了解项目。
 
-Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision
-Format: ID TIME TYPE TITLE
-Fetch details: get_observations([IDs]) | Search: mem-search skill
+## 项目概述
 
-Stats: 45 obs (10,194t read) | 1,536,701t work | 99% savings
+Agent Hub 是一个基于 Tauri 2.x 的桌面应用，用于统一管理本地多个 AI Agent 平台的 Skill、MCP Server、会话和账号。当前版本 **0.9.0**。
 
-### Apr 29, 2026
-228 11:28a 🔴 Recycle bin permanent delete functionality examined
-239 11:51a 🔴 Recycle bin permanent delete functionality fixed
-242 11:54a 🔴 Recycle bin permanent delete UX and file handling improved
-243 11:56a 🔴 Recycle bin permanent delete fixed and released v0.6.16
-244 11:58a ✅ GitHub Actions release workflow monitored for v0.6.16
-245 12:20p 🔵 Agent Hub v0.6.16 Release Structure Verified
-248 12:24p 🔵 Agent Hub v0.6.16 Release Structure Verified
-249 " 🔵 Agent Hub v0.6.16 Platform Support Documented
-250 1:32p 🟣 Update download progress tracking infrastructure analyzed
-252 1:35p 🟣 Real download progress tracking implemented for Tauri updater
-### Apr 30, 2026
-341 9:41p 🟣 Agent Hub Sessions tab feature design analysis
-342 9:45p 🟣 Agent Hub backend session module implementation
-343 " 🟣 Session data models and Claude Code session scanner
-344 " 🟣 Session module orchestration and Tauri command registration
-351 9:59p ✅ TailwindCSS v4 配置和版本同步脚本
-352 10:00p ✅ TailwindCSS v4 配置和版本同步脚本
-354 10:01p ✅ Tauri 开发服务器成功启动并运行
-356 10:06p 🔄 会话列表接口性能优化
-358 10:07p 🔄 会话平台列表加载性能优化
-364 10:29p 🔴 Session click causes immediate unresponsiveness
-365 10:30p 🔴 Session click unresponsiveness fixed with async execution and loading states
-368 10:35p 🔴 Session click blocking issue addressed with async architecture
-371 10:41p 🟣 Session pagination and terminal resume functionality added
-372 10:44p 🟣 Session pagination and terminal resume UI fully implemented
-375 10:47p 🔴 Session pagination and terminal resume implementation complete
-377 10:50p 🟣 Session pagination and terminal resume feature fully completed and deployed
-381 11:00p 🔴 Agent Debate Session Directory Path Mapping Incorrect
-382 11:14p ✅ Agent Hub v0.6.16 deployment ready
-383 11:16p 🟣 Sessions tab with pagination and terminal resume
-384 11:18p 🔵 GitHub CLI not available for PR creation
-394 11:35p ⚖️ GitHub Actions Deployment Trigger Request
-406 11:44p ✅ GitHub Actions Release Workflow Triggered via Tag v0.6.17
-409 11:48p 🔵 Update Mechanism Architecture Documented
-410 " 🔵 Tauri Updater Plugin Download Architecture Analyzed
-### May 1, 2026
-411 12:01a 🟣 formatDuration Utility Function Added
-418 12:13a 🟣 OpenSpec change implementation for backend downloads and signature verification
-### May 8, 2026
-709 10:06p 🔵 Locate openspec project files
-711 " 🔵 Review openspec task details
-708 10:07p ✅ Archive openspec project
-710 10:09p 🔵 Explore openspec directory structure
-### May 14, 2026
-802 12:06a ✅ Summary of Uncommitted Changes
-799 12:07a ✅ Tagging and Submission Workflow
-800 " ✅ Uncommitted Changes Detected
-801 " 🔵 Recent Git Tags Identified
-803 12:08a ✅ Update to AGENTS.md Timestamp
+## 架构
 
-Access 1537k tokens of past work via get_observations([IDs]) or mem-search skill.
-</claude-mem-context>
+```
+用户界面 (Vanilla JS + TailwindCSS v4)
+    ↕ Tauri IPC (invoke commands)
+Rust 后端 (模块化设计)
+    ↕ 文件系统 / SQLite / 网络
+```
+
+前端无构建打包工具，HTML 直接加载 ES Module JS。所有前端逻辑在 `src/js/app.js` 的 `App` 类中。
+
+## 目录结构
+
+```
+src/
+  index.html              # SPA 入口
+  input.css               # TailwindCSS 输入
+  styles.css              # 生成的 CSS（gitignored）
+  theme.css               # 明暗主题变量
+  js/
+    api.js                # Tauri invoke 封装（所有后端命令）
+    app.js                # 主应用（App 类，所有视图）
+    i18n.js               # 前端国际化
+    components/           # （待提取）
+  locales/
+    en.json / zh-CN.json  # 前端翻译
+
+src-tauri/src/
+  main.rs                 # 入口
+  lib.rs                  # 应用初始化：状态、插件、命令注册
+  commands.rs             # 所有 Tauri IPC 命令处理
+  config.rs               # 配置加载/保存
+  i18n.rs                 # 语言检测
+  state.rs                # AppState（config, locale, platforms）
+  trash.rs                # 回收站
+  platform/               # 平台发现和注册
+    registry.rs           # 内置平台定义（9 个 Skill 平台）
+    discovery.rs          # 自动发现 + 自定义平台
+  skill/                  # Skill 模型、解析、扫描
+  diff/                   # Myers diff 引擎
+  sync/                   # Skill 同步服务
+  mcp/                    # MCP Server 管理（5 个平台）
+    parser.rs             # JSON/TOML 配置解析
+    writer.rs             # 配置回写
+  session/                # 会话浏览器
+    claude.rs             # Claude Code 会话适配
+    codex.rs              # Codex CLI 会话适配
+    kiro.rs               # Kiro 会话适配
+  switch/                 # 账号切换
+    model.rs              # AuthProfile, ProfileMeta
+    commands.rs           # Profile CRUD + 切换
+  monitor/                # Agent 监控（未启用）
+
+locales/
+  en.toml / zh-CN.toml    # 后端翻译（Rust i18n）
+```
+
+## 关键模块
+
+### Skill 系统
+
+Skill 是包含 `SKILL.md` 的目录，SKILL.md 使用 YAML frontmatter（`name`、`version`、`description`）+ Markdown body。扫描器递归遍历平台目录，用 canonical path 集合防止符号链接循环。
+
+### Diff 引擎
+
+使用 `similar` crate 实现 Myers diff，按文件逐一对比两个平台的同名 Skill。
+
+### MCP Server
+
+每个平台有独立的配置格式（JSON 或 TOML），`parser.rs` 统一解析为内部模型，`writer.rs` 按原格式回写。
+
+### 会话浏览器
+
+每个平台有独立的会话适配器（`claude.rs`、`codex.rs`、`kiro.rs`），读取各自的会话存储格式。支持分页浏览、消息查看、终端恢复。
+
+### 账号切换
+
+Profile 存储在 `~/.agent-hub/switch/<agent-type>/<uuid>/`，通过 SHA-256 哈希比对检测当前活跃账号。切换时原子替换（tmp + rename）。
+
+## 开发命令
+
+```bash
+npm install                # 前端依赖
+npm run build:css          # 构建 CSS
+npm run dev:css            # 监听 CSS 变更
+cargo tauri dev            # 开发模式
+cargo tauri build          # 生产构建
+cargo test                 # Rust 测试（在 src-tauri/ 下）
+npm run version [-- <ver>] # 从 git tag 同步版本号
+```
+
+## 前端约定
+
+- 单页应用，通过 `renderView()` 切换视图
+- 侧边栏 tabs：Skills、MCP、Sessions、Switch
+- 数据流：`app.js` 调用 `api.js` → Tauri IPC → Rust 命令
+- 国际化：`i18n.js` 加载 `locales/*.json`
+- 主题：`theme.css` CSS 变量 + localStorage 持久化
+
+## 测试
+
+Rust 单元测试覆盖 `session`、`trash`、`mcp/parser` 模块。
+
+```bash
+cd src-tauri && cargo test
+```
+
+## CI/CD
+
+`.github/workflows/release.yml` — 推送 `v*` tag 触发，构建 macOS（aarch64 + x86_64）和 Windows 产物，使用 minisign 签名，生成 updater manifest。
