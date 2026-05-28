@@ -628,7 +628,7 @@ class App {
         const actionsEl = document.getElementById('update-actions');
         const confirmBtn = this.modalEl().querySelector('.update-confirm-btn');
         const closeBtn = this.modalEl().querySelector('.update-close-btn');
-        const DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+        const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
         let downloadTimer = null;
         let totalBytes = 0;
 
@@ -860,11 +860,10 @@ class App {
             this.switchContentCache = {};
             this.switchDeleteConfirmId = null;
             this.switchAccountConfirmId = null;
-            if (this.switchSelectedAgent) {
-                this.loadSwitchProfiles();
-            } else {
-                this.render();
+            if (!this.switchSelectedAgent) {
+                this.switchSelectedAgent = 'codex';
             }
+            this.loadSwitchProfiles();
             return;
         }
         this.stopMonitorListener();
@@ -1314,6 +1313,13 @@ class App {
     // --- MCP ---
     async refreshMcpPlatforms() {
         this.mcpPlatforms = await Api.listMcpPlatforms();
+        const exists = this.mcpPlatforms.some(p => p.id === this.selectedMcpPlatform);
+        if (!exists) {
+            this.selectedMcpPlatform = this.mcpPlatforms.length > 0 ? this.mcpPlatforms[0].id : null;
+            if (this.selectedMcpPlatform) {
+                await this.selectMcpPlatform(this.selectedMcpPlatform);
+            }
+        }
     }
 
     async selectMcpPlatform(id) {

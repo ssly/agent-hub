@@ -150,8 +150,13 @@ pub fn list_session_terminals() -> Vec<SessionTerminalOption> {
         vec![
             SessionTerminalOption {
                 id: "terminal-default".to_string(),
-                display_name: "CMD".to_string(),
+                display_name: "Terminal".to_string(),
                 available: is_terminal_available("terminal-default"),
+            },
+            SessionTerminalOption {
+                id: "powershell".to_string(),
+                display_name: "PowerShell".to_string(),
+                available: is_terminal_available("powershell"),
             },
             SessionTerminalOption {
                 id: "windows-terminal".to_string(),
@@ -251,9 +256,25 @@ fn is_terminal_available(terminal_id: &str) -> bool {
 #[cfg(target_os = "windows")]
 fn is_terminal_available(terminal_id: &str) -> bool {
     match terminal_id {
-        "terminal-default" => true, // cmd.exe always available
+        "terminal-default" => true, // default console always available
+        "powershell" => {
+            // Prefer pwsh (PowerShell 7+), fall back to powershell (Windows PowerShell 5)
+            Command::new("where")
+                .arg("pwsh.exe")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+                || Command::new("where")
+                    .arg("powershell.exe")
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false)
+        }
         "windows-terminal" => {
-            // Check for Windows Terminal via where command
             Command::new("where")
                 .arg("wt.exe")
                 .stdout(std::process::Stdio::null())
@@ -347,7 +368,6 @@ fn launch_terminal_with_command(terminal_id: &str, command: &str) -> Result<(), 
 
     match terminal_id {
         "windows-terminal" => {
-            // Windows Terminal: direct launch, no intermediate cmd.exe
             Command::new("wt.exe")
                 .arg("cmd.exe")
                 .arg("/k")
@@ -356,8 +376,33 @@ fn launch_terminal_with_command(terminal_id: &str, command: &str) -> Result<(), 
                 .map_err(|e| format!("Failed to launch terminal: {}", e))?;
             Ok(())
         }
+        "powershell" => {
+            // Prefer pwsh (PowerShell 7+), fall back to powershell (5)
+            let ps = if Command::new("where")
+                .arg("pwsh.exe")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+            {
+                "pwsh.exe"
+            } else {
+                "powershell.exe"
+            };
+            let ps_script = format!(
+                "Start-Process cmd.exe -ArgumentList '/k','{}'",
+                bat_path.to_string_lossy().replace('\'', "''")
+            );
+            Command::new(ps)
+                .arg("-Command")
+                .arg(&ps_script)
+                .spawn()
+                .map_err(|e| format!("Failed to launch terminal: {}", e))?;
+            Ok(())
+        }
         _ => {
-            // Use PowerShell Start-Process to avoid the cmd.exe flash
+            // Default: use PowerShell Start-Process to avoid the cmd.exe flash
             let bat_str = bat_path.to_string_lossy().replace('\'', "''");
             let ps_script =
                 format!("Start-Process cmd.exe -ArgumentList '/k','{}'", bat_str);
