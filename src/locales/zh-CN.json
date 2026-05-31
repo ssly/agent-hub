@@ -212,7 +212,9 @@
     "edit_content_btn": "编辑",
     "save_content": "保存内容",
     "content_saved_toast": "内容已更新",
-    "select_agent": "请在左侧选择一个 Agent"
+    "select_agent": "请在左侧选择一个 Agent",
+    "current_key": "当前",
+    "duplicate_key_error": "检测到重复的密钥，该账号已保存过。"
   },
   "monitor": {
     "title": "监控",

@@ -212,7 +212,9 @@
     "edit_content_btn": "Edit",
     "save_content": "Save Content",
     "content_saved_toast": "Content updated",
-    "select_agent": "Select an agent on the left to get started"
+    "select_agent": "Select an agent on the left to get started",
+    "current_key": "Current",
+    "duplicate_key_error": "Duplicate key detected. This account is already saved."
   },
   "monitor": {
     "title": "Monitor",

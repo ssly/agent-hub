@@ -4,7 +4,7 @@ use chrono::Utc;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use super::model::{AuthProfile, ProfileMeta};
+use super::model::{AuthProfile, ListSwitchResponse, ProfileMeta};
 
 /// Resolve the storage directory for a given agent type.
 fn profiles_dir(agent_type: &str) -> Result<PathBuf, String> {
@@ -57,10 +57,70 @@ fn now_iso() -> String {
     Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
+fn extract_key(agent_type: &str, content: &str) -> Option<String> {
+    let val: serde_json::Value = serde_json::from_str(content).ok()?;
+    match agent_type {
+        "codex" => val
+            .get("access_token")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        "claude-code" => val
+            .get("env")
+            .and_then(|env| env.get("ANTHROPIC_API_KEY"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        _ => None,
+    }
+}
+
+fn mask_key(key: &str) -> String {
+    if key.len() <= 12 {
+        return key.to_string();
+    }
+    format!("{}...{}", &key[..8], &key[key.len() - 4..])
+}
+
+fn check_duplicate_key(
+    agent_type: &str,
+    key: &str,
+    exclude_id: Option<&str>,
+) -> Result<(), String> {
+    let dir = profiles_dir(agent_type)?;
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return Ok(()),
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if let Some(exclude) = exclude_id {
+            if path.file_name().map(|n| n == exclude).unwrap_or(false) {
+                continue;
+            }
+        }
+        let config_path = path.join("config.json");
+        if !config_path.exists() {
+            continue;
+        }
+        let content = match std::fs::read_to_string(&config_path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        if let Some(existing_key) = extract_key(agent_type, &content) {
+            if existing_key == key {
+                return Err("duplicate_key".to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
 // ── Commands ──────────────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub fn list_switch_profiles(agent_type: String) -> Result<Vec<AuthProfile>, String> {
+pub fn list_switch_profiles(agent_type: String) -> Result<ListSwitchResponse, String> {
     let dir = profiles_dir(&agent_type)?;
     let active_hash = if agent_type == "claude-code" {
         agent_config_path(&agent_type).ok().and_then(|p| hash_env_field(&p))
@@ -68,11 +128,23 @@ pub fn list_switch_profiles(agent_type: String) -> Result<Vec<AuthProfile>, Stri
         agent_config_path(&agent_type).ok().and_then(|p| hash_file(&p))
     };
 
+    let config_path = agent_config_path(&agent_type).ok();
+    let current_key = config_path
+        .as_ref()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|c| extract_key(&agent_type, &c))
+        .map(|k| mask_key(&k));
+
     let mut profiles: Vec<AuthProfile> = Vec::new();
 
     let entries = match std::fs::read_dir(&dir) {
         Ok(e) => e,
-        Err(_) => return Ok(Vec::new()),
+        Err(_) => {
+            return Ok(ListSwitchResponse {
+                profiles: Vec::new(),
+                current_key,
+            })
+        }
     };
 
     for entry in entries.flatten() {
@@ -81,35 +153,43 @@ pub fn list_switch_profiles(agent_type: String) -> Result<Vec<AuthProfile>, Stri
             continue;
         }
         let meta_path = path.join("meta.json");
-        let config_path = path.join("config.json");
+        let cfg_path = path.join("config.json");
         let Ok(meta_str) = std::fs::read_to_string(&meta_path) else {
             continue;
         };
         let Ok(meta) = serde_json::from_str::<ProfileMeta>(&meta_str) else {
             continue;
         };
-        if !config_path.exists() {
+        if !cfg_path.exists() {
             continue;
         }
         let profile_hash = if agent_type == "claude-code" {
-            hash_env_field(&config_path)
+            hash_env_field(&cfg_path)
         } else {
-            hash_file(&config_path)
+            hash_file(&cfg_path)
         };
         let is_active = match (&active_hash, &profile_hash) {
             (Some(a), Some(b)) => a == b,
             _ => false,
         };
+        let profile_key = std::fs::read_to_string(&cfg_path)
+            .ok()
+            .and_then(|c| extract_key(&agent_type, &c))
+            .map(|k| mask_key(&k));
         profiles.push(AuthProfile {
             id: meta.id,
             note: meta.note,
             saved_at: meta.saved_at,
             is_active,
+            key: profile_key,
         });
     }
 
     profiles.sort_by(|a, b| b.saved_at.cmp(&a.saved_at));
-    Ok(profiles)
+    Ok(ListSwitchResponse {
+        profiles,
+        current_key,
+    })
 }
 
 #[tauri::command]
@@ -118,13 +198,17 @@ pub fn save_current_auth_profile(agent_type: String, note: String) -> Result<Str
     if !src.exists() {
         return Err("no_active_auth".to_string());
     }
-    let content = std::fs::read(&src).map_err(|e| e.to_string())?;
+    let content_bytes = std::fs::read(&src).map_err(|e| e.to_string())?;
+    let content_str = String::from_utf8_lossy(&content_bytes).to_string();
+    if let Some(key) = extract_key(&agent_type, &content_str) {
+        check_duplicate_key(&agent_type, &key, None)?;
+    }
 
     let id = Uuid::new_v4().to_string();
     let dir = profiles_dir(&agent_type)?.join(&id);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
-    std::fs::write(dir.join("config.json"), &content).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join("config.json"), &content_bytes).map_err(|e| e.to_string())?;
 
     let meta = ProfileMeta {
         id: id.clone(),
@@ -140,6 +224,9 @@ pub fn save_current_auth_profile(agent_type: String, note: String) -> Result<Str
 #[tauri::command]
 pub fn add_auth_profile(agent_type: String, content: String, note: String) -> Result<String, String> {
     serde_json::from_str::<serde_json::Value>(&content).map_err(|_| "invalid_json".to_string())?;
+    if let Some(key) = extract_key(&agent_type, &content) {
+        check_duplicate_key(&agent_type, &key, None)?;
+    }
 
     let id = Uuid::new_v4().to_string();
     let dir = profiles_dir(&agent_type)?.join(&id);

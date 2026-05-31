@@ -363,6 +363,7 @@ class App {
         // Switch state
         this.switchSelectedAgent = null; // 'codex' | 'claude-code'
         this.switchProfiles = [];
+        this.switchCurrentKey = null;
         this.switchAddFormOpen = false;
         this.switchClearConfirmOpen = false;
         this.switchEditingId = null;
@@ -370,6 +371,7 @@ class App {
         this.switchContentCache = {}; // id -> json string
         this.switchDeleteConfirmId = null; // id of profile pending delete confirmation
         this.switchAccountConfirmId = null; // id of profile pending switch confirmation
+        this._switchOutsideClickHandler = null;
         // Trash state
         this.trashCount = 0;
         // Update state
@@ -3317,9 +3319,12 @@ API_KEY = "your-key"
     async loadSwitchProfiles() {
         if (!this.switchSelectedAgent) return;
         try {
-            this.switchProfiles = await Api.listSwitchProfiles(this.switchSelectedAgent);
+            const resp = await Api.listSwitchProfiles(this.switchSelectedAgent);
+            this.switchProfiles = resp.profiles || [];
+            this.switchCurrentKey = resp.current_key || null;
         } catch (e) {
             this.switchProfiles = [];
+            this.switchCurrentKey = null;
         }
         this.render();
     }
@@ -3337,7 +3342,10 @@ API_KEY = "your-key"
         let html = `<div class="max-w-2xl mx-auto">`;
 
         // Toolbar
-        html += `<div class="flex gap-2 mb-4 flex-wrap">
+        const currentKeyHtml = this.switchCurrentKey
+            ? `<span class="text-xs text-gray-500 font-mono truncate max-w-[200px] inline-block align-middle" title="${esc(this.switchCurrentKey)}">${esc(i.t('switch.current_key'))}: ${esc(this.switchCurrentKey)}</span>`
+            : '';
+        html += `<div class="flex gap-2 mb-4 flex-wrap items-center">
             <button id="sw-btn-save" class="px-3 py-1.5 text-sm rounded bg-cyan-900/40 text-cyan-300 hover:bg-cyan-900/60 cursor-pointer border border-cyan-800/50">
                 ${esc(i.t('switch.save_current'))}
             </button>
@@ -3345,6 +3353,7 @@ API_KEY = "your-key"
                 ${esc(i.t('switch.add_account'))}
             </button>
             <div class="flex-1"></div>
+            ${currentKeyHtml}
             <button id="sw-btn-clear" class="px-3 py-1.5 text-sm rounded bg-red-900/30 text-red-400 hover:bg-red-900/50 cursor-pointer border border-red-800/40">
                 ${esc(i.t('switch.clear_active'))}
             </button>
@@ -3395,7 +3404,7 @@ API_KEY = "your-key"
                                 <span class="text-sm font-medium text-gray-200">${esc(label)}</span>
                                 ${profile.is_active ? `<span class="text-xs px-1.5 py-0.5 rounded bg-cyan-900/50 text-cyan-400 border border-cyan-700/50">${esc(i.t('switch.active_badge'))}</span>` : ''}
                             </div>
-                            <div class="text-xs text-gray-500">${esc(date)}</div>
+                            <div class="text-xs text-gray-500">${esc(date)}${profile.key ? ` · <span class="font-mono">${esc(profile.key)}</span>` : ''}</div>
                         </div>
                         <div class="flex gap-1.5 flex-shrink-0 items-center">`;
 
@@ -3418,7 +3427,7 @@ API_KEY = "your-key"
                     </div>`;
 
                 if (isEditing) {
-                    html += `<div class="mt-2 flex gap-2 items-center">
+                    html += `<div class="mt-2 flex gap-2 items-center sw-edit-panel">
                         <input id="sw-note-input-${esc(profile.id)}" type="text" value="${esc(profile.note)}" class="flex-1 text-sm rounded px-2 py-1 bg-gray-900 border border-gray-600 text-gray-300 outline-none" placeholder="${esc(i.t('switch.note_placeholder'))}" />
                         <button class="sw-note-save text-xs px-2 py-1 rounded bg-green-900/40 text-green-300 hover:bg-green-900/60 cursor-pointer border border-green-800/50" data-id="${esc(profile.id)}">${esc(i.t('switch.save_note'))}</button>
                         <button class="sw-note-cancel text-xs px-2 py-1 rounded bg-gray-700 text-gray-400 hover:bg-gray-600 cursor-pointer border border-gray-600" data-id="${esc(profile.id)}">${esc(i.t('action.cancel'))}</button>
@@ -3428,7 +3437,7 @@ API_KEY = "your-key"
                 const isEditingContent = this.switchEditingContentId === profile.id;
                 if (isEditingContent) {
                     const cached = this.switchContentCache[profile.id] || '';
-                    html += `<div class="mt-2">
+                    html += `<div class="mt-2 sw-edit-panel">
                         <textarea id="sw-content-input-${esc(profile.id)}" rows="10" class="w-full text-xs font-mono rounded p-2 bg-gray-900 border border-gray-600 text-gray-300 outline-none resize-y">${esc(cached)}</textarea>
                         <div id="sw-content-error-${esc(profile.id)}" class="hidden text-xs text-red-400 mt-1"></div>
                         <div class="flex gap-2 mt-2">
@@ -3523,6 +3532,26 @@ API_KEY = "your-key"
                 this.render();
             });
         });
+
+        // Click-outside to dismiss edit panels
+        if (this._switchOutsideClickHandler) {
+            document.removeEventListener('mousedown', this._switchOutsideClickHandler);
+        }
+        if (this.switchEditingId || this.switchEditingContentId) {
+            const self = this;
+            this._switchOutsideClickHandler = (e) => {
+                if (e.target.closest('.sw-edit-panel')) return;
+                if (e.target.closest('button')) return;
+                self.switchEditingId = null;
+                self.switchEditingContentId = null;
+                document.removeEventListener('mousedown', self._switchOutsideClickHandler);
+                self._switchOutsideClickHandler = null;
+                self.render();
+            };
+            setTimeout(() => {
+                document.addEventListener('mousedown', this._switchOutsideClickHandler);
+            }, 10);
+        }
     }
 
     async handleSwitchSaveCurrent() {
@@ -3535,6 +3564,8 @@ API_KEY = "your-key"
         } catch (e) {
             if (e === 'no_active_auth' || e?.message === 'no_active_auth') {
                 this.showToast(i.t('switch.no_active_auth_error'), 'error');
+            } else if (e === 'duplicate_key' || e?.message === 'duplicate_key') {
+                this.showToast(i.t('switch.duplicate_key_error'), 'error');
             } else {
                 this.showToast(String(e?.message || e), 'error');
             }
@@ -3555,6 +3586,8 @@ API_KEY = "your-key"
         } catch (e) {
             if (e === 'invalid_json' || e?.message === 'invalid_json') {
                 if (errEl) { errEl.textContent = i.t('switch.invalid_json_error'); errEl.classList.remove('hidden'); }
+            } else if (e === 'duplicate_key' || e?.message === 'duplicate_key') {
+                if (errEl) { errEl.textContent = i.t('switch.duplicate_key_error'); errEl.classList.remove('hidden'); }
             } else {
                 this.showToast(String(e?.message || e), 'error');
             }
