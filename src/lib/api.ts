@@ -5,47 +5,35 @@
  * In browser (npm run dev:web): uses mock data from mock-api.ts.
  */
 
+// Static imports — Vite tree-shakes unused chunks in production
+import { invoke as tauriInvoke } from '@tauri-apps/api/core'
+import * as mockApi from './mock-api'
+
 // Check if we're running inside Tauri
 const isTauri = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__
 
-// Dynamic import: in Tauri we use real invoke, in browser we use mock
-let invokeImpl: (cmd: string, args?: Record<string, unknown>) => Promise<any>
-
-if (isTauri) {
-  // Real Tauri IPC
-  const tauriCore = await import('@tauri-apps/api/core')
-  invokeImpl = tauriCore.invoke
-} else {
-  // Mock mode — load all mock functions
-  const mock = await import('./mock-api')
-  // Build a dispatch map from command name → mock function
-  const mockMap: Record<string, Function> = {}
-  for (const [key, fn] of Object.entries(mock)) {
-    if (typeof fn === 'function') {
-      // Convert camelCase to snake_case for command matching
-      const snakeKey = key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`)
-      mockMap[snakeKey] = fn
-      mockMap[key] = fn // also keep camelCase
-    }
-  }
-
-  invokeImpl = async (cmd: string, args?: Record<string, unknown>) => {
-    // Try exact match first, then camelCase conversion
-    const fn = mockMap[cmd] || mockMap[cmd.replace(/_([a-z])/g, (_, c) => c.toUpperCase())]
-    if (fn) {
-      // Pass args as individual parameters
-      const params = args ? Object.values(args) : []
-      return fn(...params)
-    }
-    console.warn(`[mock-api] No mock for command: ${cmd}`)
-    return null
-  }
-
+if (typeof window !== 'undefined' && !isTauri) {
   console.log('%c🎨 Agent Hub — Web Debug Mode (mock data)', 'color: #3A6B8C; font-weight: bold; font-size: 14px')
 }
 
+function snakeToCamel(s: string): string {
+  return s.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase())
+}
+
 function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  return invokeImpl(cmd, args)
+  if (isTauri) {
+    return tauriInvoke<T>(cmd, args)
+  }
+  // Mock mode — dispatch to matching mock function
+  const fnName = snakeToCamel(cmd)
+  const fn = (mockApi as Record<string, unknown>)[fnName] as ((...a: unknown[]) => Promise<T>) | undefined
+      || (mockApi as Record<string, unknown>)[cmd] as ((...a: unknown[]) => Promise<T>) | undefined
+  if (fn) {
+    const params = args ? Object.values(args) : []
+    return fn(...params)
+  }
+  console.warn(`[mock-api] No mock for command: ${cmd}`)
+  return Promise.resolve(null as T)
 }
 
 // Skills / Platforms
