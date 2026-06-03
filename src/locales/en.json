@@ -167,7 +167,7 @@
     "transition": "v{current} → v{latest}",
     "confirm": "Update",
     "retry": "Retry",
-    "timeout_error": "Download timed out (5 min)",
+    "timeout_error": "Download timed out",
     "failed_with_reason": "Update failed ({reason}): {error}",
     "reason_network": "Network error",
     "reason_signature": "Signature verification failed",

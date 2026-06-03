@@ -1,0 +1,36 @@
+@import "tailwindcss";
+@source "../**/*.vue";
+@source "../**/*.ts";
+
+/* ============================================================
+   Base overrides
+   ============================================================ */
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, #app { height: 100%; margin: 0; }
+
+body {
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 7px; height: 7px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+
+/* Content max-width for all views */
+.ah-view-content {
+  max-width: 52rem;
+  margin-left: auto;
+  margin-right: auto;
+}

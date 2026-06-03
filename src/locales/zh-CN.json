@@ -167,7 +167,7 @@
     "transition": "v{current} → v{latest}",
     "confirm": "更新",
     "retry": "重试",
-    "timeout_error": "下载超时（5 分钟）",
+    "timeout_error": "下载超时",
     "failed_with_reason": "更新失败（{reason}）：{error}",
     "reason_network": "网络异常",
     "reason_signature": "签名校验失败",
