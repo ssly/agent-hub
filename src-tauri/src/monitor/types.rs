@@ -1,7 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -114,8 +113,6 @@ impl MonitorState {
 }
 
 pub trait AgentMonitor: Send + Sync {
-    fn platform_id(&self) -> &str;
-    fn watch_paths(&self) -> Vec<PathBuf>;
     fn detect_sessions(&self, sys: &sysinfo::System) -> Vec<AgentSession>;
     #[allow(dead_code)]
     fn on_fs_event(&mut self, event: &notify::Event) -> Vec<(StateChange, AgentSession)>;

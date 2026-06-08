@@ -1098,9 +1098,11 @@ pub fn sync_mcp_server_cmd(
 
 // --- Monitor Commands ---
 
+#[allow(dead_code)]
 pub type MonitorStateHandle = std::sync::Arc<crate::monitor::service::MonitorService<tauri::Wry>>;
 
 #[tauri::command]
+#[allow(dead_code)]
 pub fn get_active_sessions(
     monitor: tauri::State<'_, MonitorStateHandle>,
 ) -> Vec<crate::monitor::types::AgentSession> {
@@ -1109,6 +1111,7 @@ pub fn get_active_sessions(
 }
 
 #[tauri::command]
+#[allow(dead_code)]
 pub fn get_monitor_config(
     monitor: tauri::State<'_, MonitorStateHandle>,
 ) -> crate::monitor::types::MonitorConfig {
@@ -1116,6 +1119,7 @@ pub fn get_monitor_config(
 }
 
 #[tauri::command]
+#[allow(dead_code)]
 pub fn set_monitor_config(
     monitor: tauri::State<'_, MonitorStateHandle>,
     state: tauri::State<'_, SafeState>,
@@ -1139,6 +1143,7 @@ pub fn set_monitor_config(
 }
 
 #[tauri::command]
+#[allow(dead_code)]
 pub fn set_monitor_polling(
     monitor: tauri::State<'_, MonitorStateHandle>,
     enabled: bool,
@@ -1152,11 +1157,13 @@ pub fn set_monitor_polling(
 /// UI request a fresh snapshot when the user opens the Monitor tab or hits a
 /// refresh button, without waiting for the next poll tick.
 #[tauri::command]
+#[allow(dead_code)]
 pub fn force_poll_monitor(monitor: tauri::State<'_, MonitorStateHandle>) {
     monitor.poll();
 }
 
 #[tauri::command]
+#[allow(dead_code)]
 pub fn configure_hooks(
     monitor: tauri::State<'_, MonitorStateHandle>,
     agent_type: String,
@@ -1165,6 +1172,7 @@ pub fn configure_hooks(
 }
 
 #[tauri::command]
+#[allow(dead_code)]
 pub fn remove_hooks(
     monitor: tauri::State<'_, MonitorStateHandle>,
     agent_type: String,
@@ -1173,6 +1181,7 @@ pub fn remove_hooks(
 }
 
 #[tauri::command]
+#[allow(dead_code)]
 pub fn get_hooks_status(
     monitor: tauri::State<'_, MonitorStateHandle>,
 ) -> std::collections::HashMap<String, bool> {

@@ -376,19 +376,6 @@ impl KiroAdapter {
 }
 
 impl AgentMonitor for KiroAdapter {
-    fn platform_id(&self) -> &str {
-        "kiro"
-    }
-
-    fn watch_paths(&self) -> Vec<PathBuf> {
-        let dir = self.sessions_dir();
-        if dir.exists() {
-            vec![dir]
-        } else {
-            vec![]
-        }
-    }
-
     fn detect_sessions(&self, sys: &sysinfo::System) -> Vec<AgentSession> {
         let dir = self.sessions_dir();
         if !dir.exists() {
@@ -772,19 +759,6 @@ impl ClaudeCodeAdapter {
 }
 
 impl AgentMonitor for ClaudeCodeAdapter {
-    fn platform_id(&self) -> &str {
-        "claude-code"
-    }
-
-    fn watch_paths(&self) -> Vec<PathBuf> {
-        let dir = self.projects_dir();
-        if dir.exists() {
-            vec![dir]
-        } else {
-            vec![]
-        }
-    }
-
     fn detect_sessions(&self, sys: &sysinfo::System) -> Vec<AgentSession> {
         self.detect_from_processes(sys)
     }
@@ -1165,19 +1139,6 @@ impl CodexAdapter {
 }
 
 impl AgentMonitor for CodexAdapter {
-    fn platform_id(&self) -> &str {
-        "codex"
-    }
-
-    fn watch_paths(&self) -> Vec<PathBuf> {
-        let dir = self.codex_dir();
-        if dir.exists() {
-            vec![dir]
-        } else {
-            vec![]
-        }
-    }
-
     fn detect_sessions(&self, sys: &sysinfo::System) -> Vec<AgentSession> {
         self.detect_from_processes(sys)
     }
@@ -1286,19 +1247,6 @@ impl GeminiAdapter {
 }
 
 impl AgentMonitor for GeminiAdapter {
-    fn platform_id(&self) -> &str {
-        "gemini"
-    }
-
-    fn watch_paths(&self) -> Vec<PathBuf> {
-        let dir = self.gemini_tmp_dir();
-        if dir.exists() {
-            vec![dir]
-        } else {
-            vec![]
-        }
-    }
-
     fn detect_sessions(&self, sys: &sysinfo::System) -> Vec<AgentSession> {
         self.detect_from_processes(sys)
     }

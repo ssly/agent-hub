@@ -11,7 +11,6 @@ use tauri_plugin_notification::NotificationExt;
 pub struct MonitorService<R: Runtime> {
     state: Arc<Mutex<MonitorState>>,
     sys: Arc<Mutex<sysinfo::System>>,
-    adapters: Vec<Box<dyn AgentMonitor>>,
     _watcher: Option<RecommendedWatcher>,
     _hooks_watcher: Option<RecommendedWatcher>,
     hooks_dir: PathBuf,
@@ -23,12 +22,6 @@ impl<R: Runtime> MonitorService<R> {
     pub fn new(app: AppHandle<R>, config: MonitorConfig) -> Self {
         let state = Arc::new(Mutex::new(MonitorState::new(config)));
         let sys = Arc::new(Mutex::new(sysinfo::System::new_all()));
-        let adapters: Vec<Box<dyn AgentMonitor>> = vec![
-            Box::new(super::adapters::KiroAdapter::new()),
-            Box::new(super::adapters::ClaudeCodeAdapter::new()),
-            Box::new(super::adapters::CodexAdapter::new()),
-        ];
-
         let hooks_dir = dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("/"))
             .join(".agent-hub/hooks");
@@ -39,7 +32,6 @@ impl<R: Runtime> MonitorService<R> {
         let mut service = Self {
             state,
             sys,
-            adapters,
             _watcher: None,
             _hooks_watcher: None,
             hooks_dir,
@@ -47,44 +39,12 @@ impl<R: Runtime> MonitorService<R> {
             polling_enabled,
         };
 
-        service.init_watcher();
         service.init_hooks_watcher();
-        // Defer initial scan — will run on first poll or first get_active_sessions call
+        // Defer session scanning until the monitor UI explicitly asks for it.
+        // The session directories can be very hot while agents are running
+        // (for example ~/.codex sqlite WAL updates), so startup must not attach
+        // recursive watchers that turn every write into a full process scan.
         service
-    }
-
-    fn init_watcher(&mut self) {
-        let state = self.state.clone();
-        let sys = self.sys.clone();
-        let app = self.app.clone();
-
-        let mut watcher = match RecommendedWatcher::new(
-            move |_res: Result<notify::Event, notify::Error>| {
-                let state = state.clone();
-                let sys = sys.clone();
-                let app = app.clone();
-                Self::detect_and_emit(&state, &sys, &app);
-            },
-            notify::Config::default(),
-        ) {
-            Ok(w) => w,
-            Err(e) => {
-                log::warn!("Failed to create file watcher: {e}");
-                return;
-            }
-        };
-
-        for adapter in &self.adapters {
-            for path in adapter.watch_paths() {
-                if let Err(e) = watcher.watch(&path, RecursiveMode::Recursive) {
-                    log::warn!("Failed to watch {:?}: {e}", path);
-                } else {
-                    log::info!("Watching {:?} for {}", path, adapter.platform_id());
-                }
-            }
-        }
-
-        self._watcher = Some(watcher);
     }
 
     fn init_hooks_watcher(&mut self) {
