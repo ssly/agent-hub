@@ -387,6 +387,32 @@ fn kiro_sessions_dir() -> Result<PathBuf, String> {
     Ok(home.join(".kiro/sessions/cli"))
 }
 
+pub fn search_kiro_messages(
+    query_lower: &str,
+) -> Result<Vec<crate::session::SessionSearchResult>, String> {
+    let sessions = collect_kiro_sessions()?;
+    let mut results = Vec::new();
+    for session in sessions {
+        let Ok(path) = find_kiro_session_jsonl(&session.id) else {
+            continue;
+        };
+        if let Ok(messages) = read_kiro_messages_from_jsonl(&path, 0, 999999) {
+            for msg in messages {
+                if msg.content.to_lowercase().contains(query_lower) {
+                    results.push(crate::session::SessionSearchResult {
+                        session_id: session.id.clone(),
+                        session_title: session.title.clone(),
+                        project_path: session.project_path.clone(),
+                        platform_id: PLATFORM_ID.to_string(),
+                        message: msg,
+                    });
+                }
+            }
+        }
+    }
+    Ok(results)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

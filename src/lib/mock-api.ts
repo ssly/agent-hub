@@ -184,6 +184,34 @@ export async function listSessionTerminals() {
 export async function resumeSession() { await delay(300); return 'claude --resume session-0' }
 export async function getSessionMessages() { await delay(); return [] }
 export async function deleteSession() { await delay(200) }
+export async function searchSessionMessages(platformId: string, query: string) {
+  await delay();
+  const q = query.toLowerCase();
+  return [
+    {
+      session_id: 'session-0',
+      session_title: 'Vue 3 frontend refactor',
+      project_path: '/Users/demo/projects/agent-hub',
+      platform_id: platformId,
+      message: {
+        role: 'user',
+        content: `I have a question about how to implement ${query} and test it in Vue 3.`,
+        timestamp: Date.now() - 3600 * 1000
+      }
+    },
+    {
+      session_id: 'session-0',
+      session_title: 'Vue 3 frontend refactor',
+      project_path: '/Users/demo/projects/agent-hub',
+      platform_id: platformId,
+      message: {
+        role: 'assistant',
+        content: `Here is the solution to implement ${query} using the existing component library.`,
+        timestamp: Date.now() - 3500 * 1000
+      }
+    }
+  ].filter(item => item.message.content.toLowerCase().includes(q));
+}
 
 // Trash
 export async function listTrash() { await delay(); return [{ id: 'trash-1', name: 'old-skill', platform_id: 'claude-code' }] }

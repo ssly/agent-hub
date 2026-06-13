@@ -68,6 +68,7 @@ pub fn run() {
             commands::list_session_terminals,
             commands::resume_session,
             commands::get_session_messages,
+            commands::search_session_messages,
             commands::delete_session,
             switch::commands::list_switch_profiles,
             switch::commands::save_current_auth_profile,

@@ -41,3 +41,13 @@ pub struct SessionTerminalOption {
     pub display_name: String,
     pub available: bool,
 }
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SessionSearchResult {
+    pub session_id: String,
+    pub session_title: String,
+    pub project_path: String,
+    pub platform_id: String,
+    pub message: SessionMessage,
+}
+

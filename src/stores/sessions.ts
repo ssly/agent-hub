@@ -18,6 +18,12 @@ export const useSessionsStore = defineStore('sessions', () => {
   const loadError = ref('')
   const pageSize = 50
 
+  const searchQuery = ref('')
+  const searchResults = ref<any[]>([])
+  const isSearching = ref(false)
+  const searchError = ref('')
+
+
   async function refreshPlatforms(keepPathFilter = false) {
     loadError.value = ''
     try {
@@ -81,6 +87,8 @@ export const useSessionsStore = defineStore('sessions', () => {
   async function selectPlatform(id: string) {
     selectedPlatformId.value = id
     selectedPathFilter.value = 'all'
+    searchQuery.value = ''
+    searchResults.value = []
     isLoading.value = true
     try {
       await loadSessions(false)
@@ -102,11 +110,32 @@ export const useSessionsStore = defineStore('sessions', () => {
 
   async function changePathFilter(filter: string) {
     selectedPathFilter.value = filter || 'all'
+    searchQuery.value = ''
+    searchResults.value = []
     isLoading.value = true
     try {
       await loadSessions(false)
     } finally {
       isLoading.value = false
+    }
+  }
+
+  async function doSearch(query: string) {
+    searchQuery.value = query
+    if (!query.trim() || !selectedPlatformId.value) {
+      searchResults.value = []
+      isSearching.value = false
+      return
+    }
+    isSearching.value = true
+    searchError.value = ''
+    try {
+      searchResults.value = await api.searchSessionMessages(selectedPlatformId.value, query)
+    } catch (e: any) {
+      searchResults.value = []
+      searchError.value = e?.message || e?.SyncError || String(e)
+    } finally {
+      isSearching.value = false
     }
   }
 
@@ -156,7 +185,8 @@ export const useSessionsStore = defineStore('sessions', () => {
     isLoading, loadingMore, loadError,
     messagesModalOpen, messages, activeSession, messagesLoading, messagesLoadingMore,
     messagesOffset, messagesHasMore, messagesError,
+    searchQuery, searchResults, isSearching, searchError,
     refreshPlatforms, refreshTerminals, loadSessions, selectPlatform,
-    changePathFilter, loadMore, openMessages, loadMessages,
+    changePathFilter, loadMore, openMessages, loadMessages, doSearch,
   }
 })

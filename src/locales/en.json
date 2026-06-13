@@ -55,7 +55,13 @@
     "delete_failed": "Delete failed: {error}",
     "unavailable": "Unavailable",
     "resume_started": "Resume command launched:\n{command}",
-    "resume_failed": "Failed to resume: {error}"
+    "resume_failed": "Failed to resume: {error}",
+    "search_placeholder": "Search {agent} sessions...",
+    "search_results": "Search results: '{query}' ({count} message(s) found)",
+    "no_search_results": "No messages found containing '{query}'.",
+    "clear_search": "Clear",
+    "search_match_in": "Matched in session: ",
+    "view_full_session": "View Full Session"
   },
   "skill": {
     "name": "Name",
@@ -200,11 +206,11 @@
     "empty": "No saved accounts yet. Click \"Save Current\" to get started.",
     "saved_toast": "Current account saved",
     "added_toast": "Account added",
-    "switched_toast": "Switched account. Please restart Codex.",
+    "switched_toast": "Switched account. Please restart {agent}.",
     "cleared_toast": "Cleared. Backup saved.",
-    "no_active_auth_error": "No auth.json found. Please log in to Codex first.",
+    "no_active_auth_error": "No auth.json found. Please log in to {agent} first.",
     "invalid_json_error": "Invalid JSON. Please check the content.",
-    "confirm_switch": "Switch to this account? Please restart Codex after switching.",
+    "confirm_switch": "Switch to this account? Please restart {agent} after switching.",
     "confirm_delete": "Delete this account? This cannot be undone.",
     "clear_warning_title": "Danger",
     "clear_warning_body": "This cannot be undone. The system will first auto-save the current auth.json as a backup, then delete ~/.codex/auth.json.",
@@ -214,7 +220,14 @@
     "content_saved_toast": "Content updated",
     "select_agent": "Select an agent on the left to get started",
     "current_key": "Current",
-    "duplicate_key_error": "Duplicate key detected. This account is already saved."
+    "duplicate_key_error": "Duplicate key detected. This account is already saved.",
+    "edit_modal_title": "Edit Account",
+    "note_label": "Name",
+    "content_label": "Content",
+    "already_active_hint": "This account is currently in use",
+    "content_load_failed": "Failed to load content",
+    "content_loading": "Loading…",
+    "deleted_toast": "Deleted"
   },
   "monitor": {
     "title": "Monitor",

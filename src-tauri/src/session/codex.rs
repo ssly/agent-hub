@@ -293,6 +293,104 @@ fn truncate_chars(value: String, max_chars: usize) -> String {
     }
 }
 
+pub fn search_codex_messages(
+    query_lower: &str,
+) -> Result<Vec<crate::session::SessionSearchResult>, String> {
+    let db_path = codex_db_path()?;
+    if !db_path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let conn = open_codex_db_readonly(&db_path)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, title, cwd, model, tokens_used, created_at, updated_at, first_user_message, rollout_path \
+             FROM threads WHERE archived = 0 ORDER BY updated_at DESC",
+        )
+        .map_err(|err| err.to_string())?;
+
+    struct ThreadInfo {
+        summary: SessionSummary,
+        rollout_path: String,
+    }
+
+    let rows = stmt
+        .query_map([], |row| {
+            let id: String = row.get(0)?;
+            let title: String = row.get(1)?;
+            let project_path: String = row.get(2)?;
+            let model: Option<String> = row.get(3)?;
+            let tokens_used: u64 = row.get(4)?;
+            let created_at: i64 = row.get(5)?;
+            let updated_at: i64 = row.get(6)?;
+            let first_user_message: String = row.get(7)?;
+            let rollout_path: String = row.get(8)?;
+
+            let title = if title.trim().is_empty() {
+                truncate_chars(first_user_message, 80)
+            } else {
+                title
+            };
+
+            Ok(ThreadInfo {
+                summary: SessionSummary {
+                    id,
+                    title,
+                    project_path,
+                    model,
+                    started_at: created_at.saturating_mul(1000),
+                    updated_at: updated_at.saturating_mul(1000),
+                    message_count: None,
+                    tokens_used: Some(tokens_used),
+                    platform_id: PLATFORM_ID.to_string(),
+                },
+                rollout_path,
+            })
+        })
+        .map_err(|err| err.to_string())?;
+
+    let mut results = Vec::new();
+    for row in rows {
+        let thread = match row {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+
+        if thread.rollout_path.is_empty() {
+            continue;
+        }
+
+        let Ok(file) = fs::File::open(&thread.rollout_path) else {
+            continue;
+        };
+        let reader = BufReader::new(file);
+
+        for line in reader.lines() {
+            let line = match line {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            let data: Value = match serde_json::from_str(&line) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            let Some(message) = parse_codex_rollout_message(&data) else {
+                continue;
+            };
+            if message.content.to_lowercase().contains(query_lower) {
+                results.push(crate::session::SessionSearchResult {
+                    session_id: thread.summary.id.clone(),
+                    session_title: thread.summary.title.clone(),
+                    project_path: thread.summary.project_path.clone(),
+                    platform_id: PLATFORM_ID.to_string(),
+                    message,
+                });
+            }
+        }
+    }
+    Ok(results)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

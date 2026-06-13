@@ -1,17 +1,25 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSwitchStore } from '@/stores/switch'
 import { useToast } from '@/composables/useToast'
 import * as api from '@/lib/api'
+import AppModal from '@/components/ui/AppModal.vue'
 
 const { t } = useI18n()
 const store = useSwitchStore()
 const { showToast } = useToast()
 
+const AGENT_DISPLAY_NAMES: Record<string, string> = {
+  codex: 'Codex',
+  'claude-code': 'Claude Code',
+}
+const agentName = computed(
+  () => AGENT_DISPLAY_NAMES[store.selectedAgent ?? ''] ?? store.selectedAgent ?? ''
+)
+
 const addNote = ref('')
 const addContent = ref('')
-const editingNoteValue = ref('')
 
 async function handleSaveCurrent() {
   if (!store.selectedAgent) return
@@ -21,38 +29,39 @@ async function handleSaveCurrent() {
     await store.loadProfiles()
   } catch (e: any) {
     if (e === 'duplicate_key' || e?.message === 'duplicate_key') showToast(t('switch.duplicate_key_error'), 'error')
-    else if (e === 'no_active_auth' || e?.message === 'no_active_auth') showToast(t('switch.no_active_auth_error'), 'error')
+    else if (e === 'no_active_auth' || e?.message === 'no_active_auth') showToast(t('switch.no_active_auth_error', { agent: agentName.value }), 'error')
     else showToast(String(e?.message || e), 'error')
   }
 }
 
-async function handleSwitch(id: string) {
-  if (!store.selectedAgent) return
-  if (store.switchConfirmId !== id) {
-    store.switchConfirmId = id
-    store.deleteConfirmId = null
+// Clicking a card toggles the inline switch-confirm state.
+// The active card never enters the flow — it just hints it's in use.
+function handleCardClick(profile: any) {
+  if (profile.is_active) {
+    showToast(t('switch.already_active_hint'), 'info')
     return
   }
+  // Clicking the already-confirming card keeps it in place (no toggle-off);
+  // clicking another card switches the confirm target to it.
+  if (store.switchConfirmId === profile.id) return
+  store.switchConfirmId = profile.id
+}
+
+// Dismiss the inline switch-confirm when clicking anywhere outside the cards.
+// Cards stop propagation (@click.stop) so clicking inside a card won't dismiss.
+function handleOutsideClick() {
+  if (store.switchConfirmId) store.switchConfirmId = null
+}
+
+onMounted(() => window.addEventListener('click', handleOutsideClick))
+onUnmounted(() => window.removeEventListener('click', handleOutsideClick))
+
+async function doSwitch(id: string) {
+  if (!store.selectedAgent) return
   try {
     await api.switchAuthProfile(store.selectedAgent, id)
     store.switchConfirmId = null
-    showToast(t('switch.switched_toast'), 'success')
-    await store.loadProfiles()
-  } catch (e: any) {
-    showToast(String(e?.message || e), 'error')
-  }
-}
-
-async function handleDelete(id: string) {
-  if (!store.selectedAgent) return
-  if (store.deleteConfirmId !== id) {
-    store.deleteConfirmId = id
-    store.switchConfirmId = null
-    return
-  }
-  try {
-    await api.deleteAuthProfile(store.selectedAgent, id)
-    store.deleteConfirmId = null
+    showToast(t('switch.switched_toast', { agent: agentName.value }), 'success')
     await store.loadProfiles()
   } catch (e: any) {
     showToast(String(e?.message || e), 'error')
@@ -79,44 +88,58 @@ async function handleConfirmAdd() {
   }
 }
 
-function startEditNote(profile: any) {
-  store.editingNoteId = profile.id
-  editingNoteValue.value = profile.note || ''
+async function openEditModal(profile: any) {
+  try {
+    await store.openEditModal(profile)
+  } catch {
+    showToast(t('switch.content_load_failed'), 'error')
+  }
 }
 
-async function handleSaveNote(profile: any) {
-  if (!store.selectedAgent) return
-  const note = editingNoteValue.value.trim()
+function closeEditModal() {
+  store.closeEditModal()
+}
+
+async function handleSaveEdit() {
+  if (!store.selectedAgent || !store.editingProfileId || store.editSaving) return
+  store.editSaving = true
+  const id = store.editingProfileId
+  const note = store.editNote.trim()
+  const content = store.editContent.trim()
+  // Save note first; if either step fails, keep the modal open so the user can retry.
   try {
-    await api.updateAuthProfileNote(store.selectedAgent, profile.id, note)
-    store.editingNoteId = null
-    await store.loadProfiles()
+    await api.updateAuthProfileNote(store.selectedAgent, id, note)
   } catch (e: any) {
+    store.editSaving = false
     showToast(String(e?.message || e), 'error')
+    return
   }
-}
-
-async function startEditContent(profile: any) {
-  store.editingContentId = profile.id
-  if (!store.contentCache[profile.id]) {
-    try {
-      store.contentCache[profile.id] = await api.getAuthProfileContent(store.selectedAgent!, profile.id)
-    } catch (e: any) {
-      store.contentCache[profile.id] = ''
-      showToast(String(e?.message || e), 'error')
-    }
-  }
-}
-
-async function handleSaveContent(profile: any) {
-  if (!store.selectedAgent) return
-  const content = store.contentCache[profile.id]?.trim()
   try {
-    await api.updateAuthProfileContent(store.selectedAgent, profile.id, content)
-    store.editingContentId = null
-    showToast(t('switch.content_saved_toast'), 'success')
+    await api.updateAuthProfileContent(store.selectedAgent, id, content)
+  } catch (e: any) {
+    store.editSaving = false
+    showToast(String(e?.message || e), 'error')
+    return
+  }
+  store.editSaving = false
+  showToast(t('switch.content_saved_toast'), 'success')
+  store.closeEditModal()
+  await store.loadProfiles()
+}
+
+function armDelete() {
+  store.deleteArmed = true
+}
+
+async function confirmDelete() {
+  if (!store.selectedAgent || !store.editingProfileId) return
+  try {
+    await api.deleteAuthProfile(store.selectedAgent, store.editingProfileId)
+    showToast(t('switch.deleted_toast'), 'success')
+    store.closeEditModal()
     await store.loadProfiles()
   } catch (e: any) {
+    // keep armed so the user can retry or click away to cancel
     showToast(String(e?.message || e), 'error')
   }
 }
@@ -181,78 +204,146 @@ async function handleSaveContent(profile: any) {
             <div
               v-for="(profile, idx) in store.profiles"
               :key="profile.id"
-              :class="['ah-card', profile.is_active ? 'is-active' : '']"
+              :class="['ah-card', 'switch-card', profile.is_active ? 'switch-card--active' : '']"
+              @click.stop="handleCardClick(profile)"
             >
-              <div class="flex flex-col">
-                <div class="flex items-start justify-between gap-2">
-                  <div class="flex-1 min-w-0">
-                    <div class="flex items-center gap-2 mb-0.5">
-                      <template v-if="store.editingNoteId === profile.id">
-                        <input
-                          v-model="editingNoteValue"
-                          type="text"
-                          class="ah-search-input py-0.5 text-xs"
-                          style="max-width: 200px"
-                          @blur="handleSaveNote(profile)"
-                          @keydown.enter="handleSaveNote(profile)"
-                          @keydown.esc="store.editingNoteId = null"
-                        />
-                        <button class="btn btn-primary btn-sm" style="height: 24px; padding: 0 6px" @click="handleSaveNote(profile)">✓</button>
-                      </template>
-                      <template v-else>
-                        <span class="text-sm font-medium cursor-pointer" style="color: var(--ink)" @dblclick="startEditNote(profile)">
-                          {{ profile.note || t('switch.account_fallback', { n: idx + 1 }) }}
-                        </span>
-                      </template>
-                      <span
-                        v-if="profile.is_active"
-                        class="text-xs px-1.5 py-0.5 rounded"
-                        style="background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent-mid)"
-                      >{{ t('switch.active_badge') }}</span>
-                    </div>
-                    <div class="text-xs" style="color: var(--ink-3)">
-                      {{ profile.saved_at ? profile.saved_at.substring(0, 19).replace('T', ' ') + ' UTC' : '' }}
-                      {{ profile.key ? ` · ${profile.key}` : '' }}
-                    </div>
+              <div class="flex items-start justify-between gap-2">
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2 mb-0.5">
+                    <span class="text-sm font-medium" style="color: var(--ink)">
+                      {{ profile.note || t('switch.account_fallback', { n: idx + 1 }) }}
+                    </span>
+                    <span v-if="profile.is_active" class="switch-active-badge">{{ t('switch.active_badge') }}</span>
                   </div>
-
-                  <div class="flex gap-1.5 flex-shrink-0 items-center">
-                    <template v-if="store.switchConfirmId === profile.id">
-                      <span class="text-xs" style="color: var(--accent)">{{ t('switch.confirm_switch') }}</span>
-                      <button class="btn btn-secondary btn-sm" @click="handleSwitch(profile.id)">{{ t('action.confirm') }}</button>
-                      <button class="btn btn-ghost btn-sm" @click="store.switchConfirmId = null">{{ t('action.cancel') }}</button>
-                    </template>
-                    <template v-else-if="store.deleteConfirmId === profile.id">
-                      <span class="text-xs" style="color: var(--danger)">{{ t('switch.confirm_delete') }}</span>
-                      <button class="btn btn-sm" style="background: var(--danger); color: #fff; border-color: var(--danger)" @click="handleDelete(profile.id)">{{ t('action.confirm') }}</button>
-                      <button class="btn btn-ghost btn-sm" @click="store.deleteConfirmId = null">{{ t('action.cancel') }}</button>
-                    </template>
-                    <template v-else>
-                      <button class="btn btn-secondary btn-sm" @click="startEditNote(profile)">{{ t('switch.note_btn') }}</button>
-                      <button class="btn btn-secondary btn-sm" @click="startEditContent(profile)">{{ t('switch.edit_content_btn') }}</button>
-                      <button v-if="!profile.is_active" class="btn btn-secondary btn-sm" @click="handleSwitch(profile.id)">{{ t('switch.switch_btn') }}</button>
-                      <button class="btn btn-danger btn-sm" @click="handleDelete(profile.id)">{{ t('switch.delete_btn') }}</button>
-                    </template>
+                  <div class="text-xs" style="color: var(--ink-3)">
+                    {{ profile.saved_at ? profile.saved_at.substring(0, 19).replace('T', ' ') + ' UTC' : '' }}
+                    {{ profile.key ? ` · ${profile.key}` : '' }}
                   </div>
                 </div>
 
-                <!-- Edit key content block -->
-                <div v-if="store.editingContentId === profile.id" class="mt-3 pt-3 border-t" style="border-color: var(--hairline)">
-                  <textarea
-                    v-model="store.contentCache[profile.id]"
-                    class="ah-config-editor"
-                    style="min-height: 100px"
-                  />
-                  <div class="mt-2 flex justify-end gap-2">
-                    <button class="btn btn-secondary btn-sm" @click="store.editingContentId = null">{{ t('action.cancel') }}</button>
-                    <button class="btn btn-primary btn-sm" @click="handleSaveContent(profile)">{{ t('switch.save_content') }}</button>
-                  </div>
+                <div class="flex-shrink-0">
+                  <button class="btn btn-secondary btn-sm" @click.stop="openEditModal(profile)">
+                    {{ t('switch.edit_content_btn') }}
+                  </button>
                 </div>
+              </div>
+
+              <!-- Inline switch confirmation -->
+              <div
+                v-if="store.switchConfirmId === profile.id && !profile.is_active"
+                class="switch-confirm"
+                @click.stop
+              >
+                <span class="text-xs" style="color: var(--accent)">{{ t('switch.confirm_switch', { agent: agentName }) }}</span>
+                <button class="btn btn-primary btn-sm" @click.stop="doSwitch(profile.id)">{{ t('action.confirm') }}</button>
+                <button class="btn btn-ghost btn-sm" @click.stop="store.switchConfirmId = null">{{ t('action.cancel') }}</button>
               </div>
             </div>
           </div>
         </div>
       </template>
     </div>
+
+    <!-- Edit Modal -->
+    <AppModal
+      :show="store.editModalOpen"
+      :title="t('switch.edit_modal_title')"
+      width-class="w-[44rem]"
+      @close="closeEditModal"
+    >
+      <!-- body: clicking anywhere here disarms the delete confirmation -->
+      <div class="space-y-4" @click="store.deleteArmed = false">
+        <div class="flex flex-col gap-1.5">
+          <label class="text-xs font-semibold" style="color: var(--ink-2)">{{ t('switch.note_label') }}</label>
+          <input
+            v-model="store.editNote"
+            type="text"
+            class="ah-search-input"
+            :placeholder="t('switch.note_placeholder')"
+          />
+        </div>
+        <div class="flex flex-col gap-1.5">
+          <label class="text-xs font-semibold" style="color: var(--ink-2)">{{ t('switch.content_label') }}</label>
+          <textarea
+            v-if="!store.editContentLoading"
+            v-model="store.editContent"
+            class="ah-config-editor"
+            style="min-height: 200px"
+          />
+          <div
+            v-else
+            class="ah-config-editor flex items-center justify-center text-xs"
+            style="min-height: 200px; color: var(--ink-3)"
+          >
+            {{ t('switch.content_loading') }}
+          </div>
+        </div>
+      </div>
+
+      <template #footer>
+        <div class="flex items-center gap-2 w-full" @click="store.deleteArmed = false">
+          <button
+            :class="store.deleteArmed ? 'btn btn-sm' : 'btn btn-danger btn-sm'"
+            :style="store.deleteArmed ? { background: 'var(--danger)', color: '#fff', borderColor: 'var(--danger)' } : {}"
+            @click.stop="store.deleteArmed ? confirmDelete() : armDelete()"
+          >
+            {{ store.deleteArmed ? t('action.confirm') : t('switch.delete_btn') }}
+          </button>
+          <div class="flex-1" />
+          <button class="btn btn-secondary" @click="closeEditModal">{{ t('action.cancel') }}</button>
+          <button
+            class="btn btn-primary"
+            :disabled="store.editSaving || store.editContentLoading"
+            @click="handleSaveEdit"
+          >
+            {{ t('switch.save_note') }}
+          </button>
+        </div>
+      </template>
+    </AppModal>
   </div>
 </template>
+
+<style scoped>
+.switch-card {
+  cursor: pointer;
+  position: relative;
+}
+.switch-card:hover {
+  border-color: var(--border);
+  box-shadow: var(--shadow-soft);
+}
+.switch-card--active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-mid) inset;
+  padding-left: 18px;
+}
+.switch-card--active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 4px;
+  background: var(--accent);
+  border-radius: 0 2px 2px 0;
+}
+.switch-active-badge {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+}
+.switch-confirm {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--hairline);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+</style>

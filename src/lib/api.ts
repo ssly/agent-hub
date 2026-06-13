@@ -90,6 +90,8 @@ export const getSessionMessages = (platformId: string, sessionId: string, offset
   invoke<any[]>('get_session_messages', { platformId, sessionId, offset, limit })
 export const deleteSession = (platformId: string, sessionId: string) =>
   invoke<void>('delete_session', { platformId, sessionId })
+export const searchSessionMessages = (platformId: string, query: string) =>
+  invoke<any[]>('search_session_messages', { platformId, query })
 
 // Trash
 export const listTrash = () => invoke<any[]>('list_trash_cmd')

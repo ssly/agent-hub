@@ -31,7 +31,9 @@ function handleTabClick(tabId: typeof tabs[number]['id']) {
       sessionsStore.isLoading = false
     })
   } else if (tabId === 'switch') {
-    if (!switchStore.selectedAgent) switchStore.selectAgent('codex')
+    if (!switchStore.selectedAgent) {
+      switchStore.selectAgent(localStorage.getItem('ah-switch-agent') || 'codex')
+    }
   }
 }
 
@@ -86,6 +88,15 @@ function handleSearch(e: Event) {
       skillsStore.searchResults = []
       appStore.setView('skills')
     }
+  }, 300)
+}
+
+let sessionSearchDebounce: ReturnType<typeof setTimeout>
+function handleSessionSearch(e: Event) {
+  const query = (e.target as HTMLInputElement).value
+  clearTimeout(sessionSearchDebounce)
+  sessionSearchDebounce = setTimeout(() => {
+    sessionsStore.doSearch(query)
   }, 300)
 }
 </script>
@@ -163,6 +174,17 @@ function handleSearch(e: Event) {
           :placeholder="t('ui.search_placeholder')"
           class="ah-search-input"
           @input="handleSearch"
+        />
+      </div>
+
+      <!-- Search (sessions tab only) -->
+      <div v-if="appStore.currentTab === 'sessions' && sessionsStore.selectedPlatformId" class="p-2.5" style="border-top: 1px solid var(--hairline)">
+        <input
+          type="text"
+          :placeholder="t('session.search_placeholder', { agent: sessionsStore.platforms.find(p => p.id === sessionsStore.selectedPlatformId)?.display_name || '' })"
+          class="ah-search-input"
+          :value="sessionsStore.searchQuery"
+          @input="handleSessionSearch"
         />
       </div>
 

@@ -3,12 +3,17 @@ import { ref } from 'vue'
 import * as api from '@/lib/api'
 import { useSkillsStore } from './skills'
 import { useMcpStore } from './mcp'
+import { useSwitchStore } from './switch'
+import { useSessionsStore } from './sessions'
 
 export type TabId = 'skills' | 'mcp' | 'sessions' | 'switch'
 export type ViewId = 'skills' | 'detail' | 'diff' | 'search'
 
+const VALID_TABS: TabId[] = ['skills', 'mcp', 'sessions', 'switch']
+
 export const useAppStore = defineStore('app', () => {
-  const currentTab = ref<TabId>('skills')
+  const savedTab = localStorage.getItem('ah-tab') as TabId | null
+  const currentTab = ref<TabId>(savedTab && VALID_TABS.includes(savedTab) ? savedTab : 'skills')
   const currentView = ref<ViewId>('skills')
   const sidebarCollapsed = ref(false)
   const appVersion = ref('...')
@@ -31,6 +36,20 @@ export const useAppStore = defineStore('app', () => {
     await mcpStore.refreshPlatforms()
 
     await refreshTrashCount()
+
+    // Restore the content of the last-opened tab (skills/mcp are already refreshed above).
+    if (currentTab.value === 'switch') {
+      const switchStore = useSwitchStore()
+      if (switchStore.selectedAgent) await switchStore.loadProfiles()
+    } else if (currentTab.value === 'sessions') {
+      const sessionsStore = useSessionsStore()
+      sessionsStore.isLoading = true
+      try {
+        await Promise.all([sessionsStore.refreshPlatforms(), sessionsStore.refreshTerminals()])
+      } finally {
+        sessionsStore.isLoading = false
+      }
+    }
   }
 
   async function refreshTrashCount() {
@@ -77,6 +96,7 @@ export const useAppStore = defineStore('app', () => {
 
   function switchTab(tab: TabId) {
     currentTab.value = tab
+    localStorage.setItem('ah-tab', tab)
     if (tab === 'skills') {
       currentView.value = 'skills'
     }

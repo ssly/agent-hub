@@ -3,26 +3,33 @@ import { ref } from 'vue'
 import * as api from '@/lib/api'
 
 export const useSwitchStore = defineStore('switch', () => {
-  const selectedAgent = ref<string | null>(null)
+  const selectedAgent = ref<string | null>(localStorage.getItem('ah-switch-agent'))
   const profiles = ref<any[]>([])
   const currentKey = ref<string | null>(null)
   const addFormOpen = ref(false)
-  const clearConfirmOpen = ref(false)
-  const editingNoteId = ref<string | null>(null)
-  const editingContentId = ref<string | null>(null)
-  const contentCache = ref<Record<string, string>>({})
-  const deleteConfirmId = ref<string | null>(null)
   const switchConfirmId = ref<string | null>(null)
+
+  // Edit modal state
+  const editModalOpen = ref(false)
+  const editingProfileId = ref<string | null>(null)
+  const editNote = ref('')
+  const editContent = ref('')
+  const editContentLoading = ref(false)
+  const editSaving = ref(false)
+  const deleteArmed = ref(false)
 
   async function selectAgent(agentType: string) {
     selectedAgent.value = agentType
+    localStorage.setItem('ah-switch-agent', agentType)
     addFormOpen.value = false
-    clearConfirmOpen.value = false
-    editingNoteId.value = null
-    editingContentId.value = null
-    contentCache.value = {}
-    deleteConfirmId.value = null
     switchConfirmId.value = null
+    editModalOpen.value = false
+    editingProfileId.value = null
+    editNote.value = ''
+    editContent.value = ''
+    editContentLoading.value = false
+    editSaving.value = false
+    deleteArmed.value = false
     await loadProfiles()
   }
 
@@ -38,18 +45,45 @@ export const useSwitchStore = defineStore('switch', () => {
     }
   }
 
+  async function openEditModal(profile: any) {
+    if (!selectedAgent.value) return
+    editingProfileId.value = profile.id
+    editNote.value = profile.note || ''
+    editContent.value = ''
+    editContentLoading.value = true
+    deleteArmed.value = false
+    editModalOpen.value = true
+    try {
+      editContent.value = await api.getAuthProfileContent(selectedAgent.value, profile.id)
+    } catch (e) {
+      editContent.value = ''
+      throw e // let the component surface a toast
+    } finally {
+      editContentLoading.value = false
+    }
+  }
+
+  function closeEditModal() {
+    editModalOpen.value = false
+    editingProfileId.value = null
+    deleteArmed.value = false
+  }
+
   function resetState() {
     addFormOpen.value = false
-    clearConfirmOpen.value = false
-    editingNoteId.value = null
-    editingContentId.value = null
-    deleteConfirmId.value = null
     switchConfirmId.value = null
+    editModalOpen.value = false
+    editingProfileId.value = null
+    editNote.value = ''
+    editContent.value = ''
+    editContentLoading.value = false
+    editSaving.value = false
+    deleteArmed.value = false
   }
 
   return {
-    selectedAgent, profiles, currentKey, addFormOpen, clearConfirmOpen,
-    editingNoteId, editingContentId, contentCache, deleteConfirmId, switchConfirmId,
-    selectAgent, loadProfiles, resetState,
+    selectedAgent, profiles, currentKey, addFormOpen, switchConfirmId,
+    editModalOpen, editingProfileId, editNote, editContent, editContentLoading, editSaving, deleteArmed,
+    selectAgent, loadProfiles, openEditModal, closeEditModal, resetState,
   }
 })

@@ -6,7 +6,7 @@ mod models;
 use std::path::Path;
 use std::process::Command;
 
-pub use models::{SessionListPage, SessionMessage, SessionPlatform, SessionTerminalOption};
+pub use models::{SessionListPage, SessionMessage, SessionPlatform, SessionTerminalOption, SessionSearchResult};
 
 const MAX_SESSION_PAGE_SIZE: usize = 200;
 const PATH_FILTER_ALL: &str = "all";
@@ -433,6 +433,19 @@ pub fn get_session_messages(
         "claude-code" => claude::get_claude_messages(session_id, offset, limit),
         "codex-cli" => codex::get_codex_messages(session_id, offset, limit),
         "kiro" => kiro::get_kiro_messages(session_id, offset, limit),
+        _ => Err(format!("Unsupported platform: {}", platform_id)),
+    }
+}
+
+pub fn search_session_messages(
+    platform_id: &str,
+    query: &str,
+) -> Result<Vec<SessionSearchResult>, String> {
+    let query_lower = query.to_lowercase();
+    match platform_id {
+        "claude-code" => claude::search_claude_messages(&query_lower),
+        "codex-cli" => codex::search_codex_messages(&query_lower),
+        "kiro" => kiro::search_kiro_messages(&query_lower),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
 }

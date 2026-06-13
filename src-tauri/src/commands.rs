@@ -545,6 +545,15 @@ pub fn get_session_messages(
 }
 
 #[tauri::command(async)]
+pub fn search_session_messages(
+    platform_id: String,
+    query: String,
+) -> Result<Vec<session::SessionSearchResult>, CommandError> {
+    session::search_session_messages(&platform_id, &query)
+        .map_err(CommandError::SyncError)
+}
+
+#[tauri::command(async)]
 pub fn delete_session(platform_id: String, session_id: String) -> Result<String, CommandError> {
     session::delete_session(&platform_id, &session_id).map_err(CommandError::SyncError)?;
     Ok("ok".to_string())
