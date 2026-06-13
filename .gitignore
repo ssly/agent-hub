@@ -8,3 +8,6 @@ openspec
 .claude
 .codex
 .kiro
+
+# build output
+/dist
