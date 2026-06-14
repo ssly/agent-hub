@@ -6,7 +6,15 @@ mod models;
 use std::path::Path;
 use std::process::Command;
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 pub use models::{SessionListPage, SessionMessage, SessionPlatform, SessionTerminalOption, SessionSearchResult};
+
+// Windows: suppress the console window that GUI apps otherwise allocate for each
+// child process. Applied to silent detection probes only, never to terminal spawns.
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 const MAX_SESSION_PAGE_SIZE: usize = 200;
 const PATH_FILTER_ALL: &str = "all";
@@ -217,6 +225,21 @@ fn command_exists(command: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Windows: check whether an executable is on PATH via `where`, without flashing
+/// a console window. `CREATE_NO_WINDOW` keeps the probe silent; the exit code it
+/// returns is unchanged, so detection results are identical to before.
+#[cfg(target_os = "windows")]
+fn executable_available(exe: &str) -> bool {
+    Command::new("where")
+        .arg(exe)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
 fn run_osascript_lines(lines: &[&str]) -> Result<(), String> {
     let mut cmd = Command::new("osascript");
     for line in lines {
@@ -257,32 +280,9 @@ fn is_terminal_available(terminal_id: &str) -> bool {
 fn is_terminal_available(terminal_id: &str) -> bool {
     match terminal_id {
         "terminal-default" => true, // default console always available
-        "powershell" => {
-            // Prefer pwsh (PowerShell 7+), fall back to powershell (Windows PowerShell 5)
-            Command::new("where")
-                .arg("pwsh.exe")
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false)
-                || Command::new("where")
-                    .arg("powershell.exe")
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .status()
-                    .map(|s| s.success())
-                    .unwrap_or(false)
-        }
-        "windows-terminal" => {
-            Command::new("where")
-                .arg("wt.exe")
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false)
-        }
+        // Prefer pwsh (PowerShell 7+), fall back to powershell (Windows PowerShell 5)
+        "powershell" => executable_available("pwsh.exe") || executable_available("powershell.exe"),
+        "windows-terminal" => executable_available("wt.exe"),
         _ => false,
     }
 }
@@ -378,14 +378,7 @@ fn launch_terminal_with_command(terminal_id: &str, command: &str) -> Result<(), 
         }
         "powershell" => {
             // Prefer pwsh (PowerShell 7+), fall back to powershell (5)
-            let ps = if Command::new("where")
-                .arg("pwsh.exe")
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false)
-            {
+            let ps = if executable_available("pwsh.exe") {
                 "pwsh.exe"
             } else {
                 "powershell.exe"
