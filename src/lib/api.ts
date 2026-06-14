@@ -90,6 +90,11 @@ export const getSessionMessages = (platformId: string, sessionId: string, offset
   invoke<any[]>('get_session_messages', { platformId, sessionId, offset, limit })
 export const deleteSession = (platformId: string, sessionId: string) =>
   invoke<void>('delete_session', { platformId, sessionId })
+export const deleteSessions = (platformId: string, sessionIds: string[]) =>
+  invoke<{ deleted: number; failed: Array<{ session_id: string; error: string }> }>(
+    'delete_sessions',
+    { platformId, sessionIds },
+  )
 export const searchSessionMessages = (platformId: string, query: string) =>
   invoke<any[]>('search_session_messages', { platformId, query })
 

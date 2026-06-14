@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import * as api from '@/lib/api'
 
 export const useSessionsStore = defineStore('sessions', () => {
@@ -22,6 +22,11 @@ export const useSessionsStore = defineStore('sessions', () => {
   const searchResults = ref<any[]>([])
   const isSearching = ref(false)
   const searchError = ref('')
+
+  // Batch selection mode (sessions list).
+  const selectionMode = ref(false)
+  const selectedIds = ref<Set<string>>(new Set())
+  const isBulkDeleting = ref(false)
 
 
   async function refreshPlatforms(keepPathFilter = false) {
@@ -179,6 +184,50 @@ export const useSessionsStore = defineStore('sessions', () => {
     }
   }
 
+  function enterSelection() {
+    selectionMode.value = true
+  }
+
+  function exitSelection() {
+    selectionMode.value = false
+    selectedIds.value = new Set()
+  }
+
+  function toggleSelected(id: string) {
+    const next = new Set(selectedIds.value)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    selectedIds.value = next
+  }
+
+  function selectAllLoaded() {
+    selectedIds.value = new Set(sessions.value.map((s: any) => s.id))
+  }
+
+  function clearSelection() {
+    selectedIds.value = new Set()
+  }
+
+  const selectedCount = computed(() => selectedIds.value.size)
+
+  async function bulkDelete(): Promise<{ deleted: number; failed: Array<{ session_id: string; error: string }> }> {
+    const platformId = selectedPlatformId.value
+    const ids = Array.from(selectedIds.value)
+    if (!platformId || ids.length === 0) {
+      return { deleted: 0, failed: [] }
+    }
+    isBulkDeleting.value = true
+    try {
+      const result = await api.deleteSessions(platformId, ids)
+      // Refresh once (not per-item). Reuse the path-filter-preserving refresh.
+      await refreshPlatforms(true)
+      exitSelection()
+      return result
+    } finally {
+      isBulkDeleting.value = false
+    }
+  }
+
   return {
     platforms, sessions, selectedPlatformId, selectedPathFilter, pathOptions,
     terminals, selectedTerminal, sessionTotal, sessionOffset, hasMore,
@@ -186,7 +235,9 @@ export const useSessionsStore = defineStore('sessions', () => {
     messagesModalOpen, messages, activeSession, messagesLoading, messagesLoadingMore,
     messagesOffset, messagesHasMore, messagesError,
     searchQuery, searchResults, isSearching, searchError,
+    selectionMode, selectedIds, selectedCount, isBulkDeleting,
     refreshPlatforms, refreshTerminals, loadSessions, selectPlatform,
     changePathFilter, loadMore, openMessages, loadMessages, doSearch,
+    enterSelection, exitSelection, toggleSelected, selectAllLoaded, clearSelection, bulkDelete,
   }
 })

@@ -104,6 +104,39 @@ pub fn delete_codex_session(session_id: &str) -> Result<(), String> {
     delete_codex_session_in_db(&db_path, session_id)
 }
 
+pub fn delete_codex_sessions(session_ids: &[String]) -> Result<usize, String> {
+    let db_path = codex_db_path()?;
+    delete_codex_sessions_in_db(&db_path, session_ids)
+}
+
+fn delete_codex_sessions_in_db(path: &Path, session_ids: &[String]) -> Result<usize, String> {
+    if !path.exists() {
+        return Err(format!(
+            "Codex session database not found: {}",
+            path.display()
+        ));
+    }
+    if session_ids.is_empty() {
+        return Ok(0);
+    }
+
+    let conn = open_codex_db_readwrite(path)?;
+    // One write-lock acquisition marks all requested threads archived in a single
+    // statement, instead of reopening a readwrite connection per thread (each of
+    // which would re-fight the CLI's write lock under contention). rows-affected ==
+    // count of rows flipped archived 0 -> 1.
+    use rusqlite::params_from_iter;
+    let placeholders = vec!["?"; session_ids.len()];
+    let sql = format!(
+        "UPDATE threads SET archived = 1 WHERE archived = 0 AND id IN ({})",
+        placeholders.join(", ")
+    );
+    let changed = conn
+        .execute(&sql, params_from_iter(session_ids.iter().map(|s| s.as_str())))
+        .map_err(|err| err.to_string())?;
+    Ok(changed)
+}
+
 fn parse_codex_rollout_message(value: &Value) -> Option<SessionMessage> {
     let line_type = value.get("type").and_then(|v| v.as_str())?;
     if line_type == "event_msg" {
@@ -465,5 +498,59 @@ mod tests {
         let err = delete_codex_session_in_db(&missing, "thread-1")
             .expect_err("missing database should fail");
         assert!(err.contains("database not found"));
+    }
+
+    #[test]
+    fn delete_codex_sessions_archives_all_in_one_statement() {
+        let (_dir, db_path) = create_test_codex_db();
+        let conn = Connection::open(&db_path).expect("db should open");
+        for id in ["t1", "t2", "t3"] {
+            conn.execute(
+                "INSERT INTO threads (id, title, cwd, model, tokens_used, created_at, updated_at, first_user_message, rollout_path, archived)
+                 VALUES (?1, 't', '/tmp', NULL, 0, 1, 1, '', '', 0)",
+                [id],
+            )
+            .expect("insert");
+        }
+        drop(conn);
+
+        let n = delete_codex_sessions_in_db(
+            &db_path,
+            &["t1".to_string(), "t2".to_string(), "t3".to_string()],
+        )
+        .expect("batch delete should succeed");
+        assert_eq!(n, 3);
+
+        let conn = Connection::open(&db_path).expect("db should reopen");
+        let archived: i64 = conn
+            .query_row(
+                "SELECT SUM(archived) FROM threads WHERE id IN ('t1','t2','t3')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("sum");
+        assert_eq!(archived, 3);
+    }
+
+    #[test]
+    fn delete_codex_sessions_reports_missing_database() {
+        let mut missing = std::env::temp_dir();
+        missing.push(format!(
+            "agent-hub-codex-batch-missing-{}.sqlite",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let err = delete_codex_sessions_in_db(&missing, &["x".to_string()])
+            .expect_err("missing db should fail");
+        assert!(err.contains("database not found"));
+    }
+
+    #[test]
+    fn delete_codex_sessions_empty_is_ok_zero() {
+        let (_dir, db_path) = create_test_codex_db();
+        let n = delete_codex_sessions_in_db(&db_path, &[]).expect("empty batch ok");
+        assert_eq!(n, 0);
     }
 }

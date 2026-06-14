@@ -8,6 +8,7 @@ openspec
 .claude
 .codex
 .kiro
+.antigravitycli
 
 # build output
 /dist

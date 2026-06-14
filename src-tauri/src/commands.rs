@@ -559,6 +559,14 @@ pub fn delete_session(platform_id: String, session_id: String) -> Result<String,
     Ok("ok".to_string())
 }
 
+#[tauri::command(async)]
+pub fn delete_sessions(
+    platform_id: String,
+    session_ids: Vec<String>,
+) -> Result<session::BatchDeleteResult, CommandError> {
+    Ok(session::delete_sessions(&platform_id, &session_ids))
+}
+
 // --- Trash Commands ---
 
 #[derive(Debug, Clone, serde::Serialize)]

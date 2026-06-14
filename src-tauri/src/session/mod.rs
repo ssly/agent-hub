@@ -9,7 +9,7 @@ use std::process::Command;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
-pub use models::{SessionListPage, SessionMessage, SessionPlatform, SessionTerminalOption, SessionSearchResult};
+pub use models::{SessionListPage, SessionMessage, SessionPlatform, SessionTerminalOption, SessionSearchResult, BatchDeleteResult, BatchDeleteFailure};
 
 // Windows: suppress the console window that GUI apps otherwise allocate for each
 // child process. Applied to silent detection probes only, never to terminal spawns.
@@ -452,6 +452,63 @@ pub fn delete_session(platform_id: &str, session_id: &str) -> Result<(), String>
     }
 }
 
+/// Best-effort batch delete. One session failing never aborts the others — every
+/// id is attempted and its outcome recorded. Codex uses a single batched UPDATE
+/// (one write-lock acquisition) instead of reopening a connection per thread.
+/// Returns the outcome directly (not a `Result`): an all-failed batch is still a
+/// legitimate result the UI must render.
+pub fn delete_sessions(platform_id: &str, session_ids: &[String]) -> BatchDeleteResult {
+    let mut deleted: usize = 0;
+    let mut failed: Vec<BatchDeleteFailure> = Vec::new();
+
+    if session_ids.is_empty() {
+        return BatchDeleteResult { deleted, failed };
+    }
+
+    if platform_id == "codex-cli" {
+        match codex::delete_codex_sessions(session_ids) {
+            Ok(changed) => {
+                deleted = changed;
+                // rows-affected only gives the count flipped 0 -> 1; we cannot tell
+                // WHICH ids were already archived or absent. Report the shortfall as
+                // generic failures so the UI count ("deleted N, failed M") stays honest.
+                let shortfall = session_ids.len().saturating_sub(changed);
+                while failed.len() < shortfall {
+                    failed.push(BatchDeleteFailure {
+                        session_id: String::new(),
+                        error: "Codex thread already archived or not found".to_string(),
+                    });
+                }
+                return BatchDeleteResult { deleted, failed };
+            }
+            Err(err) => {
+                // Whole batch failed (DB lock exhausted / missing DB). Do NOT fall
+                // through to the per-item loop — it would reopen a readwrite connection
+                // per id and each would re-fail under contention. Report every id.
+                for id in session_ids {
+                    failed.push(BatchDeleteFailure {
+                        session_id: id.clone(),
+                        error: err.clone(),
+                    });
+                }
+                return BatchDeleteResult { deleted, failed };
+            }
+        }
+    }
+
+    // Claude / Kiro (and any unknown platform): per-item best-effort.
+    for id in session_ids {
+        match delete_session(platform_id, id) {
+            Ok(()) => deleted += 1,
+            Err(err) => failed.push(BatchDeleteFailure {
+                session_id: id.clone(),
+                error: err,
+            }),
+        }
+    }
+    BatchDeleteResult { deleted, failed }
+}
+
 fn build_resume_command(platform_id: &str, session_id: &str) -> Result<String, String> {
     match platform_id {
         "claude-code" => Ok(format!("claude --resume {}", shell_quote(session_id))),
@@ -552,6 +609,28 @@ mod tests {
         let err = delete_session("unknown-platform", "session-1")
             .expect_err("unknown platform should be rejected");
         assert!(err.contains("Unsupported platform"));
+    }
+
+    #[test]
+    fn delete_sessions_best_effort_reports_all_failed_on_unknown_platform() {
+        let result = delete_sessions(
+            "does-not-exist",
+            &["a".to_string(), "b".to_string(), "c".to_string()],
+        );
+        assert_eq!(result.deleted, 0);
+        assert_eq!(result.failed.len(), 3);
+        // Confirms one failure did not abort the loop (best-effort).
+        let ids: Vec<&str> = result.failed.iter().map(|f| f.session_id.as_str()).collect();
+        assert!(ids.contains(&"a"));
+        assert!(ids.contains(&"b"));
+        assert!(ids.contains(&"c"));
+    }
+
+    #[test]
+    fn delete_sessions_empty_input_is_empty_result() {
+        let result = delete_sessions("claude-code", &[]);
+        assert_eq!(result.deleted, 0);
+        assert!(result.failed.is_empty());
     }
 
     #[test]

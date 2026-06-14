@@ -594,10 +594,16 @@
   box-shadow: var(--shadow-soft);
 }
 .ah-session-card__title { font-size: 14px; font-weight: 500; color: var(--ink); }
-.ah-session-card__path { font-size: 12px; color: var(--ink-3); word-break: break-all; margin-top: 4px; }
-.ah-session-card__meta { display: flex; gap: 8px; margin-top: 8px; font-size: 12px; }
-.ah-session-card__model { color: var(--accent); }
-.ah-session-card__tokens { color: var(--warning); }
+.ah-session-card__path { font-size: 12px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 4px; }
+.ah-session-card__meta { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
+.ah-session-card__model {
+  background: var(--accent-soft); color: var(--accent);
+  padding: 1px 8px; border-radius: var(--radius-pill); font-size: 11px; font-weight: 500;
+}
+.ah-session-card__tokens {
+  background: var(--highlight-soft); color: var(--highlight);
+  padding: 1px 8px; border-radius: var(--radius-pill); font-size: 11px; font-weight: 500;
+}
 
 
 /* ============================================================
@@ -607,9 +613,10 @@
   background: var(--surface);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-md);
-  padding: 12px 14px;
+  padding: 10px 14px;
   margin-bottom: 14px;
 }
+.ah-filter-bar .text-xs { white-space: nowrap; flex-shrink: 0; }
 .ah-select {
   background: var(--sunken);
   border: 1px solid var(--border);
@@ -620,6 +627,7 @@
   cursor: pointer;
   outline: none;
   transition: border-color var(--dur-fast) var(--ease-soft);
+  max-width: 16rem;
 }
 .ah-select:focus { border-color: var(--accent); }
 

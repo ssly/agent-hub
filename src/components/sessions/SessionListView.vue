@@ -4,14 +4,33 @@ import { useSessionsStore } from '@/stores/sessions'
 import { formatInt, formatSessionTime } from '@/lib/utils'
 import { useToast } from '@/composables/useToast'
 import * as api from '@/lib/api'
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import AppModal from '@/components/ui/AppModal.vue'
+import AppSelect from '@/components/ui/AppSelect.vue'
 
 const { t, locale } = useI18n()
 const store = useSessionsStore()
 const { showToast } = useToast()
 const resumingId = ref<string | null>(null)
 const confirmDeleteId = ref<string | null>(null)
+
+// Map store data into the { value, label, disabled } shape AppSelect expects.
+const pathSelectOptions = computed(() =>
+  store.pathOptions.map(p => ({
+    value: p,
+    label: p === 'all' ? t('session.path_filter_all') : p === 'unknown' ? t('session.path_filter_unknown') : p,
+  }))
+)
+const terminalSelectOptions = computed(() => {
+  const list = store.terminals.length > 0
+    ? store.terminals
+    : [{ id: 'terminal-default', display_name: 'Terminal (Default)', available: true }]
+  return list.map((term: any) => ({
+    value: term.id,
+    label: `${term.display_name}${term.available ? '' : ` (${t('session.unavailable')})`}`,
+    disabled: !term.available,
+  }))
+})
 
 async function handleResume(session: any) {
   resumingId.value = session.id
@@ -163,40 +182,29 @@ function clearSessionSearch() {
         <!-- Standard session list view -->
         <template v-else>
           <!-- Filter bar -->
-          <div class="ah-filter-bar">
-            <div class="flex items-start justify-between gap-3">
-              <div class="text-xs" style="color: var(--ink-2)">
-                {{ t('session.loaded_summary', { loaded: formatInt(store.sessions.length), total: formatInt(store.sessionTotal) }) }}
-              </div>
-              <div class="flex flex-col items-end gap-2">
-                <div class="flex items-center gap-2">
-                  <span class="text-xs" style="color: var(--ink-3)">{{ t('session.path_filter_label') }}</span>
-                  <select
-                    :value="store.selectedPathFilter"
-                    class="ah-select"
-                    @change="store.changePathFilter(($event.target as HTMLSelectElement).value)"
-                  >
-                    <option v-for="path in store.pathOptions" :key="path" :value="path">
-                      {{ path === 'all' ? t('session.path_filter_all') : path === 'unknown' ? t('session.path_filter_unknown') : path }}
-                    </option>
-                  </select>
+          <div class="ah-filter-bar flex items-center justify-between gap-3 flex-wrap">
+            <div class="text-xs whitespace-nowrap" style="color: var(--ink-3)">
+              {{ t('session.loaded_summary', { loaded: formatInt(store.sessions.length), total: formatInt(store.sessionTotal) }) }}
+            </div>
+            <div class="flex items-center gap-4 flex-wrap">
+              <div class="flex items-center gap-2">
+                <span class="text-xs whitespace-nowrap" style="color: var(--ink-3)">{{ t('session.path_filter_label') }}</span>
+                <div class="w-52">
+                  <AppSelect
+                    :model-value="store.selectedPathFilter"
+                    :options="pathSelectOptions"
+                    @update:model-value="store.changePathFilter($event)"
+                  />
                 </div>
-                <div class="flex items-center gap-2">
-                  <span class="text-xs" style="color: var(--ink-3)">{{ t('session.resume_terminal') }}</span>
-                  <select
-                    :value="store.selectedTerminal"
-                    class="ah-select"
-                    @change="store.selectedTerminal = ($event.target as HTMLSelectElement).value"
-                  >
-                    <option
-                      v-for="term in (store.terminals.length > 0 ? store.terminals : [{ id: 'terminal-default', display_name: 'Terminal (Default)', available: true }])"
-                      :key="term.id"
-                      :value="term.id"
-                      :disabled="!term.available"
-                    >
-                      {{ term.display_name }}{{ !term.available ? ` (${t('session.unavailable')})` : '' }}
-                    </option>
-                  </select>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="text-xs whitespace-nowrap" style="color: var(--ink-3)">{{ t('session.resume_terminal') }}</span>
+                <div class="w-44">
+                  <AppSelect
+                    :model-value="store.selectedTerminal"
+                    :options="terminalSelectOptions"
+                    @update:model-value="store.selectedTerminal = $event"
+                  />
                 </div>
               </div>
             </div>
@@ -211,9 +219,9 @@ function clearSessionSearch() {
             <div
               v-for="session in store.sessions"
               :key="session.id"
-              class="ah-session-card"
+              class="ah-session-card session-card"
             >
-              <div class="flex items-center justify-between gap-3">
+              <div class="session-card__head">
                 <h3 class="ah-session-card__title truncate">{{ session.title || t('session.untitled') }}</h3>
                 <span class="text-xs whitespace-nowrap" style="color: var(--ink-3)">
                   {{ formatSessionTime(session.updated_at, locale) }}
@@ -224,25 +232,31 @@ function clearSessionSearch() {
                 <span v-if="session.model" class="ah-session-card__model">{{ session.model }}</span>
                 <span v-if="session.tokens_used != null" class="ah-session-card__tokens">{{ t('session.tokens_value', { count: formatInt(session.tokens_used) }) }}</span>
               </div>
-              <div class="mt-2 flex items-center justify-between gap-2">
-                <span class="text-xs" style="color: var(--ink-4)">{{ t('session.started_at', { time: formatSessionTime(session.started_at, locale) }) }}</span>
-                <div class="flex items-center gap-2">
-                  <button class="btn btn-secondary btn-sm" @click="store.openMessages(session)">{{ t('session.view_messages') }}</button>
-                  <button
-                    class="btn btn-primary btn-sm"
-                    :disabled="resumingId === session.id"
-                    @click="handleResume(session)"
+              <div class="session-card__actions">
+                <button class="btn btn-secondary btn-sm" @click="store.openMessages(session)">{{ t('session.view_messages') }}</button>
+                <button
+                  class="btn btn-primary btn-sm"
+                  :disabled="resumingId === session.id"
+                  @click="handleResume(session)"
+                >
+                  {{ resumingId === session.id ? t('session.resuming') : t('session.resume') }}
+                </button>
+                <button
+                  class="session-card__delete"
+                  :class="{ 'is-confirming': confirmDeleteId === session.id }"
+                  :title="confirmDeleteId === session.id ? t('session.confirm_delete') : t('session.delete')"
+                  @click="handleDelete(session)"
+                >
+                  <svg
+                    v-if="confirmDeleteId !== session.id"
+                    width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
                   >
-                    {{ resumingId === session.id ? t('session.resuming') : t('session.resume') }}
-                  </button>
-                  <button
-                    :class="['btn btn-sm', confirmDeleteId === session.id ? 'btn-danger' : 'btn-secondary']"
-                    :style="confirmDeleteId === session.id ? { background: 'var(--danger)', color: '#fff', borderColor: 'var(--danger)' } : {}"
-                    @click="handleDelete(session)"
-                  >
-                    {{ confirmDeleteId === session.id ? t('session.confirm_delete') : t('session.delete') }}
-                  </button>
-                </div>
+                    <polyline points="3 6 5 6 21 6" />
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                  </svg>
+                  <span v-else>{{ t('session.confirm_delete') }}</span>
+                </button>
               </div>
             </div>
           </div>
@@ -335,3 +349,68 @@ function clearSessionSearch() {
     </div>
   </div>
 </template>
+
+<style scoped>
+.session-card {
+  position: relative;
+  overflow: hidden;
+}
+.session-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 12px;
+  bottom: 12px;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: transparent;
+  transition: background var(--dur-fast) var(--ease-soft);
+}
+.session-card:hover::before {
+  background: var(--accent);
+}
+.session-card__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+.session-card__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 10px;
+}
+/* Delete: quiet icon by default, turns into a red confirm chip on first click.
+   Kept self-contained (not using .btn) so the confirming state is fully controlled. */
+.session-card__delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  width: 28px;
+  padding: 0;
+  color: var(--ink-4);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--dur-fast) var(--ease-soft), background var(--dur-fast) var(--ease-soft),
+    border-color var(--dur-fast) var(--ease-soft), width var(--dur-fast) var(--ease-soft),
+    padding var(--dur-fast) var(--ease-soft);
+}
+.session-card__delete:hover {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+.session-card__delete.is-confirming {
+  width: auto;
+  padding: 0 10px;
+  color: #fff;
+  background: var(--danger);
+  border-color: var(--danger);
+}
+</style>

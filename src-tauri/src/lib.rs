@@ -70,6 +70,7 @@ pub fn run() {
             commands::get_session_messages,
             commands::search_session_messages,
             commands::delete_session,
+            commands::delete_sessions,
             switch::commands::list_switch_profiles,
             switch::commands::save_current_auth_profile,
             switch::commands::add_auth_profile,

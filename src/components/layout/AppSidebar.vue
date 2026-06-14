@@ -33,6 +33,11 @@ function handleTabClick(tabId: typeof tabs[number]['id']) {
   } else if (tabId === 'switch') {
     if (!switchStore.selectedAgent) {
       switchStore.selectAgent(localStorage.getItem('ah-switch-agent') || 'codex')
+    } else {
+      // Always refresh on tab entry. selectedAgent is persisted in localStorage, so without
+      // this the list would rely on stale store.profiles and could render empty (e.g. after
+      // an earlier load failure or a startup race). Mirrors how the sessions tab always refreshes.
+      switchStore.loadProfiles()
     }
   }
 }
@@ -44,6 +49,8 @@ async function handleRefresh() {
     sessionsStore.isLoading = true
     await Promise.all([sessionsStore.refreshPlatforms(true), sessionsStore.refreshTerminals()])
     sessionsStore.isLoading = false
+  } else if (appStore.currentTab === 'switch') {
+    if (switchStore.selectedAgent) await switchStore.loadProfiles()
   } else {
     await skillsStore.refreshPlatforms()
   }

@@ -51,3 +51,15 @@ pub struct SessionSearchResult {
     pub message: SessionMessage,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BatchDeleteFailure {
+    pub session_id: String,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BatchDeleteResult {
+    pub deleted: usize,
+    pub failed: Vec<BatchDeleteFailure>,
+}
+
