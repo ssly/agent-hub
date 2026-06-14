@@ -25,6 +25,9 @@ export const useAppStore = defineStore('app', () => {
   const trashItems = ref<any[]>([])
   const trashLoading = ref(false)
 
+  // About Modal
+  const aboutModalOpen = ref(false)
+
   async function init() {
     try { locale.value = await api.getLocale() } catch {}
     try { appVersion.value = await api.getAppVersion() } catch { appVersion.value = '0.0.0' }
@@ -94,6 +97,10 @@ export const useAppStore = defineStore('app', () => {
     trashModalOpen.value = false
   }
 
+  function openAbout() {
+    aboutModalOpen.value = true
+  }
+
   function switchTab(tab: TabId) {
     currentTab.value = tab
     localStorage.setItem('ah-tab', tab)
@@ -135,7 +142,8 @@ export const useAppStore = defineStore('app', () => {
   return {
     currentTab, currentView, sidebarCollapsed, appVersion, trashCount, locale,
     trashModalOpen, trashItems, trashLoading,
+    aboutModalOpen,
     init, refreshTrashCount, switchTab, setView, toggleSidebar, toggleTheme, isNightTheme, switchLocale,
-    openTrash, restoreTrash, deleteTrashForever, emptyTrash,
+    openTrash, restoreTrash, deleteTrashForever, emptyTrash, openAbout,
   }
 })

@@ -264,5 +264,22 @@
       "completed": "已完成",
       "ended": "已结束"
     }
+  },
+  "about": {
+    "title": "关于 Agent Hub",
+    "version_label": "当前版本",
+    "author_label": "作者",
+    "links_label": "链接",
+    "github": "GitHub 仓库",
+    "homepage": "官方网站",
+    "check_updates": "检查更新",
+    "checking": "正在检查更新...",
+    "up_to_date": "已是最新版本",
+    "update_available": "发现新版本",
+    "install_restart": "安装并重启",
+    "installing": "正在安装更新...",
+    "update_complete": "更新完成，应用即将重启",
+    "check_failed": "检查更新失败",
+    "install_failed": "更新安装失败"
   }
 }

@@ -17,6 +17,9 @@ import SearchResults from '@/components/search/SearchResults.vue'
 import DiffView from '@/components/diff/DiffView.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 
+// Detect Tauri context for plugin usage (updater works only in desktop build)
+const isTauri = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__
+
 const appStore = useAppStore()
 const skillsStore = useSkillsStore()
 const { showToast } = useToast()
@@ -70,6 +73,108 @@ async function handleEmptyTrash() {
     }
   }
 }
+
+// ----- About / Version modal + updater -----
+const aboutUpdateStatus = ref<'idle' | 'checking' | 'available' | 'uptodate' | 'installing' | 'error'>('idle')
+const aboutUpdateInfo = ref<any>(null)
+const aboutProgress = ref(0)
+const aboutError = ref('')
+
+function resetAboutState() {
+  aboutUpdateStatus.value = 'idle'
+  aboutUpdateInfo.value = null
+  aboutProgress.value = 0
+  aboutError.value = ''
+}
+
+async function openExternal(url: string) {
+  try {
+    if (isTauri) {
+      const { open } = await import('@tauri-apps/plugin-shell')
+      await open(url)
+      return
+    }
+  } catch (e) {
+    console.warn('[about] shell open failed, using fallback', e)
+  }
+  window.open(url, '_blank', 'noopener,noreferrer')
+}
+
+async function handleCheckUpdates() {
+  if (!isTauri) {
+    showToast('Updater is only available in the desktop app.', 'error')
+    return
+  }
+  aboutUpdateStatus.value = 'checking'
+  aboutError.value = ''
+  aboutUpdateInfo.value = null
+  aboutProgress.value = 0
+
+  try {
+    const { check } = await import('@tauri-apps/plugin-updater')
+    const update = await check()
+    if (update) {
+      aboutUpdateInfo.value = update
+      aboutUpdateStatus.value = 'available'
+    } else {
+      aboutUpdateStatus.value = 'uptodate'
+    }
+  } catch (e: any) {
+    aboutError.value = e?.message || String(e)
+    aboutUpdateStatus.value = 'error'
+    showToast(t('about.check_failed') + (aboutError.value ? `: ${aboutError.value}` : ''), 'error')
+  }
+}
+
+async function handleInstallUpdate() {
+  if (!aboutUpdateInfo.value || !isTauri) return
+
+  aboutUpdateStatus.value = 'installing'
+  aboutProgress.value = 0
+  aboutError.value = ''
+
+  try {
+    let downloaded = 0
+    let contentLength = 0
+
+    await aboutUpdateInfo.value.downloadAndInstall((event: any) => {
+      if (event.event === 'Started') {
+        contentLength = event.data?.contentLength || 0
+      } else if (event.event === 'Progress') {
+        downloaded += event.data?.chunkLength || 0
+        if (contentLength > 0) {
+          aboutProgress.value = Math.min(100, Math.round((downloaded / contentLength) * 100))
+        }
+      } else if (event.event === 'Finished') {
+        aboutProgress.value = 100
+      }
+    })
+
+    showToast(t('about.update_complete'), 'success')
+
+    const { relaunch } = await import('@tauri-apps/plugin-process')
+    await relaunch()
+  } catch (e: any) {
+    aboutError.value = e?.message || String(e)
+    aboutUpdateStatus.value = 'error'
+    showToast((t('about.install_failed') || 'Install failed') + `: ${aboutError.value}`, 'error')
+  }
+}
+
+function handleOpenGithub() {
+  openExternal('https://github.com/ssly/agent-hub')
+}
+
+function handleOpenHomepage() {
+  openExternal('https://liuxyz.com')
+}
+
+// Reset transient update state whenever the About modal is (re)opened
+watch(() => appStore.aboutModalOpen, (isOpen) => {
+  if (isOpen) {
+    resetAboutState()
+  }
+})
 
 watch(() => appStore.locale, (newVal) => {
   locale.value = newVal
@@ -258,6 +363,108 @@ onMounted(async () => {
           {{ t('trash.empty_trash') }}
         </button>
         <button class="btn btn-secondary" @click="appStore.trashModalOpen = false">{{ t('action.close') }}</button>
+      </template>
+    </AppModal>
+
+    <!-- About / Version + Check Updates Modal -->
+    <AppModal
+      :show="appStore.aboutModalOpen"
+      :title="t('about.title')"
+      @close="appStore.aboutModalOpen = false"
+      width-class="w-[30rem]"
+    >
+      <div class="space-y-4 text-sm">
+        <!-- Version -->
+        <div>
+          <div class="text-[11px] font-medium tracking-wide" style="color: var(--ink-3)">{{ t('about.version_label') }}</div>
+          <div class="font-mono text-lg" style="color: var(--ink)">v{{ appStore.appVersion }}</div>
+        </div>
+
+        <!-- Author -->
+        <div>
+          <div class="text-[11px] font-medium tracking-wide" style="color: var(--ink-3)">{{ t('about.author_label') }}</div>
+          <button
+            class="text-left px-1 py-0.5 rounded hover:bg-[var(--sunken)] transition-colors w-fit"
+            style="color: var(--accent)"
+            @click="handleOpenHomepage"
+          >
+            yeqiyeluo
+          </button>
+        </div>
+
+        <!-- Links -->
+        <div>
+          <div class="text-[11px] font-medium tracking-wide mb-1" style="color: var(--ink-3)">{{ t('about.links_label') }}</div>
+          <div class="flex flex-col gap-0.5">
+            <button
+              class="text-left px-1 py-0.5 rounded hover:bg-[var(--sunken)] transition-colors w-fit"
+              style="color: var(--accent)"
+              @click="handleOpenGithub"
+            >
+              {{ t('about.github') }}
+            </button>
+          </div>
+        </div>
+
+        <!-- Check for Updates -->
+        <div class="pt-3 border-t space-y-2" style="border-color: var(--hairline)">
+          <button
+            class="btn btn-primary w-full"
+            :disabled="aboutUpdateStatus === 'checking' || aboutUpdateStatus === 'installing'"
+            @click="handleCheckUpdates"
+          >
+            <span v-if="aboutUpdateStatus === 'checking'">{{ t('about.checking') }}</span>
+            <span v-else>{{ t('about.check_updates') }}</span>
+          </button>
+
+          <!-- Status -->
+          <div v-if="aboutUpdateStatus === 'uptodate'" class="text-center text-xs py-1" style="color: #16a34a">
+            {{ t('about.up_to_date') }}
+          </div>
+
+          <div v-if="aboutUpdateStatus === 'available' && aboutUpdateInfo" class="space-y-2">
+            <div class="text-xs" style="color: var(--ink-3)">
+              {{ t('about.update_available') }}
+              <span class="font-mono ml-1" style="color: var(--ink)">v{{ aboutUpdateInfo.version }}</span>
+            </div>
+
+            <div
+              v-if="aboutUpdateInfo.body"
+              class="text-[11px] p-2 rounded max-h-[120px] overflow-auto font-mono whitespace-pre-wrap"
+              style="background: var(--sunken); color: var(--ink-2); border: 1px solid var(--border)"
+            >
+              {{ aboutUpdateInfo.body }}
+            </div>
+
+            <button
+              class="btn btn-primary w-full"
+              @click="handleInstallUpdate"
+            >
+              {{ t('about.install_restart') }}
+            </button>
+          </div>
+
+          <div v-if="aboutUpdateStatus === 'installing'" class="space-y-1">
+            <div class="text-xs" style="color: var(--ink-3)">{{ t('about.installing') }}</div>
+            <div class="h-1.5 rounded bg-[var(--sunken)] overflow-hidden">
+              <div
+                class="h-1.5 rounded bg-[var(--accent)] transition-all duration-150"
+                :style="{ width: aboutProgress + '%' }"
+              ></div>
+            </div>
+            <div class="text-right text-[10px] font-mono tabular-nums" style="color: var(--ink-3)">
+              {{ aboutProgress }}%
+            </div>
+          </div>
+
+          <div v-if="aboutUpdateStatus === 'error' && aboutError" class="text-xs text-red-500 break-all">
+            {{ t('about.install_failed') || t('about.check_failed') }}: {{ aboutError }}
+          </div>
+        </div>
+      </div>
+
+      <template #footer>
+        <button class="btn btn-secondary" @click="appStore.aboutModalOpen = false">{{ t('action.close') }}</button>
       </template>
     </AppModal>
   </div>

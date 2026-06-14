@@ -207,7 +207,12 @@ function handleSessionSearch(e: Event) {
       </div>
 
       <!-- Version -->
-      <div class="px-3 py-2 text-center" style="border-top: 1px solid var(--hairline)">
+      <div
+        class="px-3 py-2 text-center cursor-pointer select-none transition-colors hover:bg-[color:var(--sunken)]"
+        style="border-top: 1px solid var(--hairline)"
+        @click="appStore.openAbout"
+        :title="t('about.title')"
+      >
         <span style="color: var(--ink-4); font-size: 11px">v{{ appStore.appVersion }}</span>
       </div>
     </template>

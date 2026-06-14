@@ -25,6 +25,8 @@ pub fn run() {
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
             #[cfg(desktop)]
             app.handle().plugin(tauri_plugin_process::init())?;
+            #[cfg(desktop)]
+            app.handle().plugin(tauri_plugin_shell::init())?;
             // Monitor / completion hooks are currently disabled. Do not request
             // notification permission, start filesystem watchers, or spawn the
             // process polling thread while the feature is hidden.
