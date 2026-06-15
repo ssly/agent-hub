@@ -27,7 +27,9 @@ export const useAppStore = defineStore('app', () => {
 
   // About Modal
   const aboutModalOpen = ref(false)
-  const availableUpdate = ref<any>(null)
+  // Only store metadata (version/body/date), NOT the raw Update object.
+  // The Update class uses private fields (#backend) that break when wrapped by Vue/Pinia Proxy.
+  const availableUpdate = ref<{ version: string; body?: string; date?: string } | null>(null)
 
   async function init() {
     try { locale.value = await api.getLocale() } catch {}

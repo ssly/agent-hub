@@ -114,9 +114,12 @@ async function handleCheckUpdates() {
     const { check } = await import('@tauri-apps/plugin-updater')
     const update = await check()
     if (update) {
-      aboutUpdateInfo.value = update
+      // Store only metadata — the raw Update object has private fields (#backend)
+      // that break when wrapped by Vue/Pinia Proxy.
+      const meta = { version: update.version, body: update.body, date: update.date }
+      aboutUpdateInfo.value = meta
       aboutUpdateStatus.value = 'available'
-      appStore.availableUpdate = update
+      appStore.availableUpdate = meta
     } else {
       aboutUpdateStatus.value = 'uptodate'
     }
@@ -133,8 +136,10 @@ async function checkForUpdatesSilently() {
     const { check } = await import('@tauri-apps/plugin-updater')
     const update = await check()
     if (update) {
-      appStore.availableUpdate = update
-      aboutUpdateInfo.value = update
+      // Store only metadata — raw Update object has private fields that break under Proxy.
+      const meta = { version: update.version, body: update.body, date: update.date }
+      appStore.availableUpdate = meta
+      aboutUpdateInfo.value = meta
       aboutUpdateStatus.value = 'available'
       // Non-intrusive notification. User can click the version in the sidebar.
       showToast(t('about.new_version_toast', { version: update.version }), 'info')
@@ -153,10 +158,18 @@ async function handleInstallUpdate() {
   aboutError.value = ''
 
   try {
+    // Re-check to get a fresh Update object (the stored one is only metadata;
+    // the raw object has private fields that break under Vue Proxy).
+    const { check } = await import('@tauri-apps/plugin-updater')
+    const update = await check()
+    if (!update) {
+      throw new Error('Update no longer available')
+    }
+
     let downloaded = 0
     let contentLength = 0
 
-    await aboutUpdateInfo.value.downloadAndInstall((event: any) => {
+    await update.downloadAndInstall((event: any) => {
       if (event.event === 'Started') {
         contentLength = event.data?.contentLength || 0
       } else if (event.event === 'Progress') {
