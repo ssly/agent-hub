@@ -2,7 +2,7 @@ use std::fs;
 
 use serde_json::Value;
 
-use super::parser::{apply_json_server, apply_toml_server, build_sync_config, parse_server_config_input};
+use super::parser::{apply_json_server, apply_toml_server, build_sync_config, parse_server_config_input_with_format};
 use super::registry::{find_mcp_platform, McpFormat};
 
 /// Cross-platform sync write: extracts universal core fields from `source_config`,
@@ -39,7 +39,7 @@ pub fn delete_mcp_server(platform_id: &str, name: &str) -> Result<(), String> {
 
 pub fn import_mcp_server(platform_id: &str, name: &str, config_text: &str) -> Result<(), String> {
     let def = find_mcp_platform(platform_id).ok_or("Platform not found")?;
-    let config = parse_server_config_input(config_text, &def.mcp_key, name)?;
+    let config = parse_server_config_input_with_format(config_text, &def.mcp_key, name, def.format)?;
     save_mcp_server(platform_id, name, config)
 }
 
@@ -107,25 +107,35 @@ fn delete_toml_server(def: &super::registry::McpPlatformDef, name: &str) -> Resu
     // Validate TOML is parseable
     let _doc: toml::Value = toml::from_str(&content).map_err(|e| format!("Invalid TOML: {}", e))?;
 
-    let section_header = format!("[{}.{}]", def.mcp_key, name);
-    if let Some(pos) = content.find(&section_header) {
-        // Find end of this section: next "\n[" or end of file
-        let after_header = &content[pos + section_header.len()..];
-        let next_section = after_header.find("\n[");
-        let section_end = match next_section {
-            Some(i) => pos + section_header.len() + i + 1,
-            None => content.len(),
+    let ranges = super::parser::find_toml_server_section_ranges(&content, &def.mcp_key, name);
+    if !ranges.is_empty() {
+        // Remove all matched section ranges (server + nested subtables),
+        // then tidy up stray blank lines.
+        let mut result = String::with_capacity(content.len());
+        let mut cursor = 0usize;
+        for r in &ranges {
+            if r.start > cursor {
+                result.push_str(&content[cursor..r.start]);
+            }
+            cursor = r.end;
+        }
+        if cursor < content.len() {
+            result.push_str(&content[cursor..]);
+        }
+        while result.contains("\n\n\n") {
+            result = result.replace("\n\n\n", "\n\n");
+        }
+        let trimmed = result.trim_end();
+        let out = if trimmed.is_empty() {
+            String::new()
+        } else {
+            format!("{}\n", trimmed)
         };
-        // Remove leading newlines before the section header if needed
-        let prefix = &content[..pos];
-        let prefix_trimmed = prefix.trim_end();
-        let result = format!("{}{}", prefix_trimmed, &content[section_end..]);
-        return fs::write(&def.config_path, result.trim_end().to_string() + "\n")
-            .map_err(|e| e.to_string());
+        return fs::write(&def.config_path, out).map_err(|e| e.to_string());
     }
 
     // Fallback: full re-serialization
-    let mut doc: toml::Value = toml::from_str(&content).map_err(|e| e.to_string())?;
+    let mut doc: toml::Value = toml::from_str(&content).map_err(|e| format!("Invalid TOML: {}", e))?;
     let table = doc
         .as_table_mut()
         .ok_or("Config file is not a TOML table")?;

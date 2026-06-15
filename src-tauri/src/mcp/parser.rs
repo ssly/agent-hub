@@ -129,12 +129,69 @@ pub fn parse_server_config_input(text: &str, mcp_key: &str, name: &str) -> Resul
     Ok(config)
 }
 
-pub fn config_to_display(config: &Value, format: McpFormat) -> String {
+/// Parse server config with format enforcement.
+/// For `Toml` format, only TOML input is accepted.
+/// For `Json` format, only JSON input is accepted.
+pub fn parse_server_config_input_with_format(
+    text: &str,
+    mcp_key: &str,
+    name: &str,
+    format: McpFormat,
+) -> Result<Value, String> {
+    let trimmed = text.trim();
+
+    match format {
+        McpFormat::Toml => {
+            // For TOML platforms (Codex), only accept TOML input.
+            // Reject pure JSON objects.
+            if trimmed.starts_with('{') {
+                return Err("Codex only supports TOML format. Please paste TOML config.".into());
+            }
+            let toml_val: toml::Value =
+                toml::from_str(text).map_err(|e| format!("TOML parse error: {}", e))?;
+            let config = toml_to_json(&toml_val);
+
+            // Unwrap: [mcp_servers.name] -> inner config
+            if let Some(wrapped) = config
+                .get(mcp_key)
+                .and_then(|servers| servers.get(name))
+                .cloned()
+            {
+                return Ok(wrapped);
+            }
+            if let Some(wrapped) = config.get(name).cloned() {
+                if config.as_object().map(|obj| obj.len()) == Some(1) {
+                    return Ok(wrapped);
+                }
+            }
+            Ok(config)
+        }
+        McpFormat::Json => {
+            // For JSON platforms, only accept JSON input.
+            if !trimmed.starts_with('{') && !trimmed.starts_with('[') {
+                return Err("This platform only supports JSON format.".into());
+            }
+            parse_server_config_input(text, mcp_key, name)
+        }
+    }
+}
+
+pub fn config_to_display(config: &Value, format: McpFormat, mcp_key: &str, name: &str) -> String {
     match format {
         McpFormat::Json => serde_json::to_string_pretty(config).unwrap_or_default(),
         McpFormat::Toml => {
-            let toml_val = json_to_toml(config);
-            toml::to_string_pretty(&toml_val).unwrap_or_default()
+            // Wrap config as {mcp_key: {name: config}} so nested subtables
+            // (e.g. `env`) serialize with the full dotted path
+            // `[mcp_servers.<name>.env]` instead of a context-less `[env]`.
+            let mut server_table = serde_json::Map::new();
+            server_table.insert(name.to_string(), config.clone());
+            let mut root = serde_json::Map::new();
+            root.insert(mcp_key.to_string(), Value::Object(server_table));
+            let toml_val = json_to_toml(&Value::Object(root));
+            toml::to_string_pretty(&toml_val)
+                .unwrap_or_default()
+                .trim_end()
+                .to_string()
         }
     }
 }
@@ -681,7 +738,7 @@ fn trailing_ws(text: &str) -> String {
     text[trimmed_len..].to_string()
 }
 
-fn find_toml_server_section_ranges(text: &str, mcp_key: &str, name: &str) -> Vec<Range<usize>> {
+pub fn find_toml_server_section_ranges(text: &str, mcp_key: &str, name: &str) -> Vec<Range<usize>> {
     let headers = toml_headers(text);
     let mut ranges = Vec::new();
     for (idx, (start, path)) in headers.iter().enumerate() {
@@ -1338,6 +1395,123 @@ name = "keep"
         let obj = core.as_object().unwrap();
         assert_eq!(obj.len(), 3, "core must have exactly command+args+env");
     }
+
+    #[test]
+    fn test_find_toml_section_ranges_includes_nested_subtables() {
+        // Mirrors the Codex `node_repl` case: a server with a nested [..env]
+        // subtable, followed by an unrelated section that must be preserved.
+        let content = "\
+model = \"gpt-5.5\"
+
+[mcp_servers.node_repl]
+args = []
+command = \"/usr/bin/node_repl\"
+
+[mcp_servers.node_repl.env]
+API_KEY = \"secret\"
+NODE_PATH = \"/usr/bin/node\"
+
+[plugins.foo]
+enabled = true
+";
+        let ranges =
+            find_toml_server_section_ranges(content, "mcp_servers", "node_repl");
+        // Should match both [mcp_servers.node_repl] and [mcp_servers.node_repl.env].
+        assert_eq!(ranges.len(), 2, "expected 2 ranges (server + env subtable)");
+
+        // Build the "after" text by removing the ranges.
+        let mut after = String::new();
+        let mut cursor = 0usize;
+        for r in &ranges {
+            if r.start > cursor {
+                after.push_str(&content[cursor..r.start]);
+            }
+            cursor = r.end;
+        }
+        if cursor < content.len() {
+            after.push_str(&content[cursor..]);
+        }
+        while after.contains("\n\n\n") {
+            after = after.replace("\n\n\n", "\n\n");
+        }
+        let after = after.trim_end().to_string() + "\n";
+
+        // The unrelated [plugins.foo] section must survive.
+        assert!(after.contains("[plugins.foo]"), "plugins section must survive");
+        assert!(
+            !after.contains("node_repl"),
+            "all node_repl traces must be removed"
+        );
+        assert!(after.contains("model ="), "model key must survive");
+        assert!(
+            !after.contains("API_KEY"),
+            "env vars from deleted subtable must be removed"
+        );
+        // Result must still be valid TOML.
+        let _: toml::Value = toml::from_str(&after).expect("result must be valid TOML");
+    }
+
+    #[test]
+    fn test_find_toml_section_ranges_does_not_match_prefix_sibling() {
+        // [mcp_servers.node] must NOT match when deleting "node" if only
+        // [mcp_servers.node_repl] exists, and vice versa.
+        let content = "\
+[mcp_servers.node]
+command = \"a\"
+
+[mcp_servers.node_repl]
+command = \"b\"
+";
+        // Deleting "node" should only touch [mcp_servers.node], leaving node_repl.
+        let ranges = find_toml_server_section_ranges(content, "mcp_servers", "node");
+        assert_eq!(ranges.len(), 1, "only the exact-match section should be hit");
+        let mut after = String::new();
+        let mut cursor = 0usize;
+        for r in &ranges {
+            after.push_str(&content[cursor..r.start]);
+            cursor = r.end;
+        }
+        after.push_str(&content[cursor..]);
+        assert!(after.contains("node_repl"), "node_repl must survive");
+        assert!(
+            !after.contains("[mcp_servers.node]\ncommand = \"a\""),
+            "node section must be gone"
+        );
+    }
+
+    #[test]
+    fn test_config_to_display_toml_renders_nested_env_under_server() {
+        // A server with a nested `env` object must render the env subtable
+        // with the full dotted path `[mcp_servers.node_repl.env]`, NOT a
+        // context-less `[env]` header.
+        let config = serde_json::json!({
+            "args": [],
+            "command": "/usr/bin/node_repl",
+            "startup_timeout_sec": 120,
+            "env": {
+                "NODE_PATH": "/usr/bin/node",
+                "API_KEY": "secret",
+            }
+        });
+        let text = config_to_display(&config, McpFormat::Toml, "mcp_servers", "node_repl");
+        assert!(
+            text.contains("[mcp_servers.node_repl]"),
+            "server header must be present, got:\n{}",
+            text
+        );
+        assert!(
+            text.contains("[mcp_servers.node_repl.env]"),
+            "env subtable must use the full dotted path, got:\n{}",
+            text
+        );
+        assert!(
+            !text.contains("\n[env]"),
+            "bare [env] header must NOT appear, got:\n{}",
+            text
+        );
+        // Round-trip: the produced text must be valid TOML.
+        let _: toml::Value = toml::from_str(&text).expect("display text must be valid TOML");
+    }
 }
 
 fn compute_text_diff(before: &str, after: &str) -> Vec<DiffLine> {
@@ -1356,4 +1530,134 @@ fn compute_text_diff(before: &str, after: &str) -> Vec<DiffLine> {
             }
         })
         .collect()
+}
+
+// --- MCP Change Preview (Add / Delete) ---
+
+/// Generate empty file content for a new platform config.
+fn default_new_file_content(format: McpFormat, mcp_key: &str) -> String {
+    match format {
+        McpFormat::Json => "{}".to_string(),
+        McpFormat::Toml => format!("[{}]\n", mcp_key),
+    }
+}
+
+/// Preview the effect of importing/adding a server (before actually writing).
+pub fn preview_import_mcp_server(
+    platform_id: &str,
+    name: &str,
+    config: &Value,
+) -> Result<McpSyncPreview, String> {
+    let def = find_mcp_platform(platform_id).ok_or("Platform not found")?;
+    let existing = read_mcp_server(platform_id, name).ok();
+
+    let before_text = if def.config_path.exists() {
+        fs::read_to_string(&def.config_path).unwrap_or_default()
+    } else {
+        default_new_file_content(def.format, &def.mcp_key)
+    };
+
+    let after_text = match def.format {
+        McpFormat::Json => apply_json_server(&before_text, &def.mcp_key, name, config)?,
+        McpFormat::Toml => apply_toml_server(&before_text, &def.mcp_key, name, config)?,
+    };
+
+    let diff_lines = compute_text_diff(&before_text, &after_text);
+    let added = diff_lines.iter().filter(|l| l.tag == "added").count();
+    let removed = diff_lines.iter().filter(|l| l.tag == "removed").count();
+
+    Ok(McpSyncPreview {
+        server_name: name.to_string(),
+        target_format: match def.format {
+            McpFormat::Json => "json",
+            McpFormat::Toml => "toml",
+        }
+        .to_string(),
+        target_config_path: def.config_path.display().to_string(),
+        has_conflict: existing.is_some(),
+        diff_lines,
+        added,
+        removed,
+    })
+}
+
+/// Preview the effect of deleting a server (before actually deleting).
+pub fn preview_delete_mcp_server(
+    platform_id: &str,
+    name: &str,
+) -> Result<McpSyncPreview, String> {
+    let def = find_mcp_platform(platform_id).ok_or("Platform not found")?;
+    if !def.config_path.exists() {
+        return Err("Config file not found".into());
+    }
+
+    let before_text = fs::read_to_string(&def.config_path).map_err(|e| e.to_string())?;
+
+    let after_text = match def.format {
+        McpFormat::Json => {
+            let mut doc: Value =
+                serde_json::from_str(&before_text).map_err(|e| format!("Invalid JSON: {}", e))?;
+            if let Some(servers) = doc.get_mut(&def.mcp_key).and_then(|v| v.as_object_mut()) {
+                servers.remove(name);
+            }
+            serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())?
+        }
+        McpFormat::Toml => {
+            let ranges = find_toml_server_section_ranges(&before_text, &def.mcp_key, name);
+            if ranges.is_empty() {
+                // Fallback: full re-serialization
+                let mut doc: toml::Value = toml::from_str(&before_text)
+                    .map_err(|e| format!("Invalid TOML: {}", e))?;
+                if let Some(servers) = doc
+                    .as_table_mut()
+                    .and_then(|t| t.get_mut(&def.mcp_key))
+                    .and_then(|v| v.as_table_mut())
+                {
+                    servers.remove(name);
+                }
+                toml::to_string_pretty(&doc).map_err(|e| e.to_string())?
+            } else {
+                // Remove all matched section ranges (server + nested subtables),
+                // then tidy up stray blank lines.
+                let mut result = String::with_capacity(before_text.len());
+                let mut cursor = 0usize;
+                for r in &ranges {
+                    if r.start > cursor {
+                        result.push_str(&before_text[cursor..r.start]);
+                    }
+                    cursor = r.end;
+                }
+                if cursor < before_text.len() {
+                    result.push_str(&before_text[cursor..]);
+                }
+                while result.contains("\n\n\n") {
+                    result = result.replace("\n\n\n", "\n\n");
+                }
+                let trimmed = result.trim_end();
+                if trimmed.is_empty() {
+                    String::new()
+                } else {
+                    format!("{}\n", trimmed)
+                }
+            }
+        }
+    };
+
+    let diff_lines = compute_text_diff(&before_text, &after_text);
+    let added = diff_lines.iter().filter(|l| l.tag == "added").count();
+    let removed = diff_lines.iter().filter(|l| l.tag == "removed").count();
+
+    Ok(McpSyncPreview {
+        server_name: name.to_string(),
+        target_format: match def.format {
+            McpFormat::Json => "json",
+            McpFormat::Toml => "toml",
+        }
+        .to_string(),
+        target_config_path: def.config_path.display().to_string(),
+        has_conflict: false,
+        diff_lines,
+        added,
+        removed,
+    })
 }
