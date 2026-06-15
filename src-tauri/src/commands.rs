@@ -24,6 +24,9 @@ use tauri::{ipc::Channel, Manager, ResourceId, Runtime, Webview};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tauri_plugin_updater::Update;
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+const UPDATE_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
 // --- View types ---
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -996,13 +999,14 @@ fn update_cache_key(update: &Update) -> String {
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn build_resumable_update_request(update: &Update) -> Result<reqwest::Client, CommandError> {
+    let timeout = update
+        .timeout
+        .map(|timeout| timeout.min(UPDATE_DOWNLOAD_TIMEOUT))
+        .unwrap_or(UPDATE_DOWNLOAD_TIMEOUT);
     let mut builder = ClientBuilder::new()
         .user_agent("agent-hub-resumable-updater")
         .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(60));
-    if let Some(timeout) = update.timeout {
-        builder = builder.timeout(timeout);
-    }
+        .timeout(timeout);
     if update.no_proxy {
         builder = builder.no_proxy();
     } else if let Some(proxy) = update.proxy.clone() {
@@ -1065,7 +1069,7 @@ async fn send_update_request(
 
 #[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
 mod updater_tests {
-    use super::update_download_url;
+    use super::{update_download_url, ResumableDownloadEvent, UPDATE_DOWNLOAD_TIMEOUT};
     use reqwest::Url;
 
     #[test]
@@ -1104,6 +1108,26 @@ mod updater_tests {
             super::CommandError::SyncError(message)
                 if message.contains("only available for GitHub")
         ));
+    }
+
+    #[test]
+    fn progress_events_use_lowercase_names_and_camel_case_fields() {
+        let event = ResumableDownloadEvent::Progress {
+            chunk_length: 128,
+            total: Some(1024),
+            downloaded: 512,
+        };
+
+        let value = serde_json::to_value(event).unwrap();
+
+        assert_eq!(value["event"], "progress");
+        assert_eq!(value["data"]["chunkLength"], 128);
+        assert_eq!(value["data"]["downloaded"], 512);
+    }
+
+    #[test]
+    fn update_download_timeout_is_five_minutes() {
+        assert_eq!(UPDATE_DOWNLOAD_TIMEOUT.as_secs(), 5 * 60);
     }
 }
 

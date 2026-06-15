@@ -79,13 +79,38 @@ async function handleEmptyTrash() {
 const aboutUpdateStatus = ref<'idle' | 'checking' | 'available' | 'uptodate' | 'installing' | 'error'>('idle')
 const aboutUpdateInfo = ref<any>(null)
 const aboutProgress = ref(0)
+const aboutDownloaded = ref(0)
+const aboutTotal = ref(0)
 const aboutError = ref('')
+const UPDATE_TIMEOUT_MINUTES = 5
+
+const aboutProgressText = computed(() => {
+  const downloaded = formatBytes(aboutDownloaded.value)
+  if (aboutTotal.value > 0) {
+    return t('about.progress_detail', {
+      percent: aboutProgress.value,
+      downloaded,
+      total: formatBytes(aboutTotal.value),
+    })
+  }
+  return t('about.progress_unknown', { downloaded })
+})
 
 function resetAboutState() {
   aboutUpdateStatus.value = 'idle'
   aboutUpdateInfo.value = null
   aboutProgress.value = 0
+  aboutDownloaded.value = 0
+  aboutTotal.value = 0
   aboutError.value = ''
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
+  const value = bytes / (1024 ** index)
+  return `${value >= 100 || index === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[index]}`
 }
 
 async function openExternal(url: string) {
@@ -151,6 +176,8 @@ async function handleInstallUpdate(useMirror = false) {
 
   aboutUpdateStatus.value = 'installing'
   aboutProgress.value = 0
+  aboutDownloaded.value = 0
+  aboutTotal.value = 0
   aboutError.value = ''
 
   try {
@@ -167,19 +194,28 @@ async function handleInstallUpdate(useMirror = false) {
 
     const channel = new Channel<any>()
     channel.onmessage = (event: any) => {
-      if (event.event === 'Started') {
+      const eventName = String(event?.event || '').toLowerCase()
+      if (eventName === 'started') {
         const total = event.data?.total || event.data?.contentLength || 0
         const resumed = event.data?.resumedFrom || 0
+        aboutTotal.value = total
+        aboutDownloaded.value = resumed
         if (total > 0) {
           aboutProgress.value = Math.min(100, Math.round((resumed / total) * 100))
         }
-      } else if (event.event === 'Progress') {
+      } else if (eventName === 'progress') {
         const total = event.data?.total || 0
         const downloaded = event.data?.downloaded || 0
+        if (total > 0) aboutTotal.value = total
+        aboutDownloaded.value = downloaded
         if (total > 0) {
           aboutProgress.value = Math.min(100, Math.round((downloaded / total) * 100))
         }
-      } else if (event.event === 'Finished') {
+      } else if (eventName === 'finished') {
+        const total = event.data?.total || aboutTotal.value
+        const downloaded = event.data?.downloaded || total
+        aboutTotal.value = total
+        aboutDownloaded.value = downloaded
         aboutProgress.value = 100
       }
     }
@@ -195,7 +231,10 @@ async function handleInstallUpdate(useMirror = false) {
     const { relaunch } = await import('@tauri-apps/plugin-process')
     await relaunch()
   } catch (e: any) {
-    aboutError.value = e?.message || String(e)
+    const rawError = e?.message || e?.SyncError || String(e)
+    aboutError.value = /timed?\s*out|timeout/i.test(rawError)
+      ? t('about.timeout_error', { minutes: UPDATE_TIMEOUT_MINUTES })
+      : rawError
     aboutUpdateStatus.value = 'error'
     showToast((t('about.install_failed') || 'Install failed') + `: ${aboutError.value}`, 'error')
   }
@@ -497,15 +536,20 @@ onMounted(async () => {
           </div>
 
           <div v-if="aboutUpdateStatus === 'installing'" class="space-y-1">
-            <div class="text-xs" style="color: var(--ink-3)">{{ t('about.installing') }}</div>
+            <div class="text-xs" style="color: var(--ink-3)">
+              {{ t('about.installing', { minutes: UPDATE_TIMEOUT_MINUTES }) }}
+            </div>
             <div class="h-1.5 rounded bg-[var(--sunken)] overflow-hidden">
               <div
-                class="h-1.5 rounded bg-[var(--accent)] transition-all duration-150"
-                :style="{ width: aboutProgress + '%' }"
+                :class="[
+                  'h-1.5 rounded bg-[var(--accent)]',
+                  aboutTotal > 0 ? 'transition-all duration-150' : 'update-progress-indeterminate',
+                ]"
+                :style="aboutTotal > 0 ? { width: aboutProgress + '%' } : undefined"
               ></div>
             </div>
             <div class="text-right text-[10px] font-mono tabular-nums" style="color: var(--ink-3)">
-              {{ aboutProgress }}%
+              {{ aboutProgressText }}
             </div>
           </div>
 
@@ -534,3 +578,15 @@ onMounted(async () => {
     </AppModal>
   </div>
 </template>
+
+<style scoped>
+.update-progress-indeterminate {
+  width: 35%;
+  animation: update-progress-slide 1.2s ease-in-out infinite;
+}
+
+@keyframes update-progress-slide {
+  0% { transform: translateX(-110%); }
+  100% { transform: translateX(320%); }
+}
+</style>
