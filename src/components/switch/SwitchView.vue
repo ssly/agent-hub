@@ -7,7 +7,7 @@ import * as api from '@/lib/api'
 import AppModal from '@/components/ui/AppModal.vue'
 import { RefreshCw, Gauge } from 'lucide-vue-next'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const store = useSwitchStore()
 const { showToast } = useToast()
 
@@ -42,7 +42,13 @@ function fmtReset(secs?: number): string {
 
 function fmtLastQuery(): string {
   if (!store.codexUsageLastQuery) return ''
-  return new Date(store.codexUsageLastQuery).toISOString().replace('T', ' ').substring(0, 16) + ' UTC'
+  return new Date(store.codexUsageLastQuery).toLocaleString(locale.value === 'zh-CN' ? 'zh-CN' : 'en-US', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 }
 
 async function handleRefreshUsage() {
