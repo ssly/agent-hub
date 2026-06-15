@@ -304,6 +304,9 @@
     "update_complete": "更新完成，应用即将重启",
     "check_failed": "检查更新失败",
     "install_failed": "更新安装失败",
+    "retry_github": "重试 GitHub 下载",
+    "retry_mirror": "使用国内镜像重试",
+    "mirror_notice": "国内镜像仅在你主动选择时使用，安装包仍会进行签名校验。",
     "new_version_toast": "发现新版本 v{version}，点击左侧版本号查看详情并更新",
     "update_available_short": "有更新"
   }

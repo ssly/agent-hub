@@ -81,10 +81,6 @@ const aboutUpdateInfo = ref<any>(null)
 const aboutProgress = ref(0)
 const aboutError = ref('')
 
-// Store the raw check() result (contains rid) outside reactive state.
-// The Update object has private fields (#backend) that break under Vue/Pinia Proxy.
-let pendingUpdateRaw: any = null
-
 function resetAboutState() {
   aboutUpdateStatus.value = 'idle'
   aboutUpdateInfo.value = null
@@ -118,7 +114,6 @@ async function handleCheckUpdates() {
   try {
     const update = await invoke<any>('plugin:updater|check')
     if (update) {
-      pendingUpdateRaw = update
       const meta = { version: update.version, body: update.body, date: update.date }
       aboutUpdateInfo.value = meta
       aboutUpdateStatus.value = 'available'
@@ -138,7 +133,6 @@ async function checkForUpdatesSilently() {
   try {
     const update = await invoke<any>('plugin:updater|check')
     if (update) {
-      pendingUpdateRaw = update
       const meta = { version: update.version, body: update.body, date: update.date }
       appStore.availableUpdate = meta
       aboutUpdateInfo.value = meta
@@ -152,7 +146,7 @@ async function checkForUpdatesSilently() {
   }
 }
 
-async function handleInstallUpdate() {
+async function handleInstallUpdate(useMirror = false) {
   if (!aboutUpdateInfo.value || !isTauri) return
 
   aboutUpdateStatus.value = 'installing'
@@ -190,7 +184,11 @@ async function handleInstallUpdate() {
       }
     }
 
-    await invoke('download_and_install_update_resumable', { rid, onEvent: channel })
+    await invoke('download_and_install_update_resumable', {
+      rid,
+      onEvent: channel,
+      useMirror,
+    })
 
     showToast(t('about.update_complete'), 'success')
 
@@ -492,7 +490,7 @@ onMounted(async () => {
 
             <button
               class="btn btn-primary w-full"
-              @click="handleInstallUpdate"
+              @click="handleInstallUpdate(false)"
             >
               {{ t('about.install_restart') }}
             </button>
@@ -511,8 +509,21 @@ onMounted(async () => {
             </div>
           </div>
 
-          <div v-if="aboutUpdateStatus === 'error' && aboutError" class="text-xs text-red-500 break-all">
-            {{ t('about.install_failed') || t('about.check_failed') }}: {{ aboutError }}
+          <div v-if="aboutUpdateStatus === 'error' && aboutError" class="space-y-2">
+            <div class="text-xs text-red-500 break-all">
+              {{ t(aboutUpdateInfo ? 'about.install_failed' : 'about.check_failed') }}: {{ aboutError }}
+            </div>
+            <div v-if="aboutUpdateInfo" class="grid grid-cols-2 gap-2">
+              <button class="btn btn-secondary" @click="handleInstallUpdate(false)">
+                {{ t('about.retry_github') }}
+              </button>
+              <button class="btn btn-secondary" @click="handleInstallUpdate(true)">
+                {{ t('about.retry_mirror') }}
+              </button>
+            </div>
+            <div v-if="aboutUpdateInfo" class="text-[10px]" style="color: var(--ink-4)">
+              {{ t('about.mirror_notice') }}
+            </div>
           </div>
         </div>
       </div>

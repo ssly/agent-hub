@@ -11,12 +11,14 @@ use http::header::{HeaderValue, ACCEPT, CONTENT_LENGTH, CONTENT_RANGE, RANGE};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use minisign_verify::{PublicKey, Signature};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-use reqwest::{ClientBuilder, StatusCode};
+use reqwest::{ClientBuilder, StatusCode, Url};
 use std::collections::hash_map::DefaultHasher;
 use std::fs::{self, OpenOptions};
 use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::PathBuf;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use std::time::Duration;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tauri::{ipc::Channel, Manager, ResourceId, Runtime, Webview};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -833,6 +835,7 @@ pub async fn download_and_install_update_resumable<R: Runtime>(
     webview: Webview<R>,
     rid: ResourceId,
     on_event: Channel<ResumableDownloadEvent>,
+    use_mirror: bool,
 ) -> Result<(), CommandError> {
     let update = webview
         .resources_table()
@@ -855,18 +858,8 @@ pub async fn download_and_install_update_resumable<R: Runtime>(
         headers.insert(ACCEPT, HeaderValue::from_static("application/octet-stream"));
     }
 
-    let mut request = build_resumable_update_request(&update)?
-        .get(update.download_url.clone())
-        .headers(headers.clone());
-
-    if resumed_from > 0 {
-        request = request.header(RANGE, format!("bytes={}-", resumed_from));
-    }
-
-    let mut response = request
-        .send()
-        .await
-        .map_err(|err| CommandError::SyncError(err.to_string()))?;
+    let download_url = update_download_url(&update.download_url, use_mirror)?;
+    let mut response = send_update_request(&update, &download_url, &headers, resumed_from).await?;
 
     if resumed_from > 0 {
         match response.status() {
@@ -874,12 +867,7 @@ pub async fn download_and_install_update_resumable<R: Runtime>(
             StatusCode::OK | StatusCode::RANGE_NOT_SATISFIABLE => {
                 resumed_from = 0;
                 let _ = fs::remove_file(&partial_path);
-                response = build_resumable_update_request(&update)?
-                    .get(update.download_url.clone())
-                    .headers(headers.clone())
-                    .send()
-                    .await
-                    .map_err(|err| CommandError::SyncError(err.to_string()))?;
+                response = send_update_request(&update, &download_url, &headers, 0).await?;
             }
             status if !status.is_success() => {
                 return Err(CommandError::SyncError(format!(
@@ -963,8 +951,9 @@ pub async fn download_and_install_update_resumable<R: Runtime>(
 pub async fn download_and_install_update_resumable(
     rid: u32,
     on_event: serde_json::Value,
+    use_mirror: bool,
 ) -> Result<(), CommandError> {
-    let _ = (rid, on_event);
+    let _ = (rid, on_event, use_mirror);
     Err(CommandError::SyncError(
         "Resumable updater is not available on this platform.".to_string(),
     ))
@@ -1007,7 +996,10 @@ fn update_cache_key(update: &Update) -> String {
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn build_resumable_update_request(update: &Update) -> Result<reqwest::Client, CommandError> {
-    let mut builder = ClientBuilder::new().user_agent("agent-hub-resumable-updater");
+    let mut builder = ClientBuilder::new()
+        .user_agent("agent-hub-resumable-updater")
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(60));
     if let Some(timeout) = update.timeout {
         builder = builder.timeout(timeout);
     }
@@ -1022,6 +1014,97 @@ fn build_resumable_update_request(update: &Update) -> Result<reqwest::Client, Co
     builder
         .build()
         .map_err(|err| CommandError::SyncError(err.to_string()))
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn update_download_url(download_url: &Url, use_mirror: bool) -> Result<Url, CommandError> {
+    const GITHUB_ORIGIN: &str = "https://github.com/";
+    const GITHUB_MIRROR: &str = "https://gh-proxy.com/";
+
+    if !use_mirror {
+        return Ok(download_url.clone());
+    }
+    if !download_url.as_str().starts_with(GITHUB_ORIGIN) {
+        return Err(CommandError::SyncError(
+            "The domestic mirror is only available for GitHub downloads.".to_string(),
+        ));
+    }
+    Url::parse(&format!("{GITHUB_MIRROR}{download_url}"))
+        .map_err(|err| CommandError::SyncError(err.to_string()))
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+async fn send_update_request(
+    update: &Update,
+    download_url: &Url,
+    headers: &http::HeaderMap,
+    resumed_from: u64,
+) -> Result<reqwest::Response, CommandError> {
+    let mut request = build_resumable_update_request(update)?
+        .get(download_url.clone())
+        .headers(headers.clone());
+    if resumed_from > 0 {
+        request = request.header(RANGE, format!("bytes={resumed_from}-"));
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|err| CommandError::SyncError(format!("{download_url}: {err}")))?;
+    if response.status().is_success()
+        || response.status() == StatusCode::RANGE_NOT_SATISFIABLE
+    {
+        Ok(response)
+    } else {
+        Err(CommandError::SyncError(format!(
+            "{download_url} returned HTTP {}",
+            response.status()
+        )))
+    }
+}
+
+#[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
+mod updater_tests {
+    use super::update_download_url;
+    use reqwest::Url;
+
+    #[test]
+    fn github_download_uses_direct_url_by_default() {
+        let download_url =
+            Url::parse("https://github.com/ssly/agent-hub/releases/download/v0.11.0/app.msi")
+                .unwrap();
+
+        let url = update_download_url(&download_url, false).unwrap();
+
+        assert_eq!(url, download_url);
+    }
+
+    #[test]
+    fn github_download_uses_mirror_only_when_requested() {
+        let download_url =
+            Url::parse("https://github.com/ssly/agent-hub/releases/download/v0.11.0/app.msi")
+                .unwrap();
+
+        let url = update_download_url(&download_url, true).unwrap();
+
+        assert_eq!(
+            url.as_str(),
+            "https://gh-proxy.com/https://github.com/ssly/agent-hub/releases/download/v0.11.0/app.msi"
+        );
+    }
+
+    #[test]
+    fn mirror_rejects_non_github_downloads() {
+        let download_url = Url::parse("https://downloads.example.com/app.msi").unwrap();
+
+        let error = update_download_url(&download_url, true).unwrap_err();
+
+        assert!(matches!(
+            error,
+            super::CommandError::SyncError(message)
+                if message.contains("only available for GitHub")
+        ));
+    }
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
