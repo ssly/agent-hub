@@ -57,6 +57,7 @@ pub fn run() {
             commands::import_mcp_server_cmd,
             commands::get_mcp_sync_targets,
             commands::preview_mcp_sync_cmd,
+            commands::preview_mcp_change_cmd,
             commands::sync_mcp_server_cmd,
             commands::list_trash_cmd,
             commands::restore_trash_item_cmd,

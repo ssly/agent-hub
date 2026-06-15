@@ -17,6 +17,15 @@ export const useMcpStore = defineStore('mcp', () => {
   const syncServerName = ref<string | null>(null)
   const deleteConfirmServerName = ref<string | null>(null)
 
+  // Preview Modal States (for add / delete diff confirmation)
+  const previewModalOpen = ref(false)
+  const previewLoading = ref(false)
+  const previewData = ref<any>(null)
+  const previewMode = ref<'add' | 'delete'>('add')
+  // Stashed add inputs for cancel-back
+  const previewAddName = ref('')
+  const previewAddConfig = ref('')
+
   async function refreshPlatforms() {
     platforms.value = await api.listMcpPlatforms()
     const exists = platforms.value.some(p => p.id === selectedPlatformId.value)
@@ -76,9 +85,66 @@ export const useMcpStore = defineStore('mcp', () => {
     syncModalOpen.value = false
   }
 
+  // --- Preview for Add / Delete ---
+
+  async function loadAddPreview(name: string, configText: string) {
+    if (!selectedPlatformId.value) return
+    previewMode.value = 'add'
+    previewAddName.value = name
+    previewAddConfig.value = configText
+    previewLoading.value = true
+    previewModalOpen.value = true
+    previewData.value = null
+    try {
+      previewData.value = await api.previewMcpChange(selectedPlatformId.value, name, configText)
+    } catch (e: any) {
+      previewData.value = { error: String(e?.message || e) }
+    } finally {
+      previewLoading.value = false
+    }
+  }
+
+  async function loadDeletePreview(name: string) {
+    if (!selectedPlatformId.value) return
+    previewMode.value = 'delete'
+    previewLoading.value = true
+    previewModalOpen.value = true
+    previewData.value = null
+    try {
+      previewData.value = await api.previewMcpChange(selectedPlatformId.value, name)
+    } catch (e: any) {
+      previewData.value = { error: String(e?.message || e) }
+    } finally {
+      previewLoading.value = false
+    }
+  }
+
+  async function confirmPreview() {
+    if (!selectedPlatformId.value || !previewData.value || previewData.value.error) return
+    const serverName = previewData.value.server_name
+    if (previewMode.value === 'add') {
+      await api.importMcpServer(selectedPlatformId.value, serverName, previewAddConfig.value)
+    } else {
+      await api.deleteMcpServer(selectedPlatformId.value, serverName)
+    }
+    previewModalOpen.value = false
+    previewData.value = null
+    await selectPlatform(selectedPlatformId.value)
+  }
+
+  function cancelPreview() {
+    previewModalOpen.value = false
+    previewData.value = null
+  }
+
   return {
     platforms, servers, selectedPlatformId, expandedServer, serverDetails,
-    addModalOpen, syncModalOpen, syncTargets, syncTargetPlatformId, syncServerName, deleteConfirmServerName,
-    refreshPlatforms, selectPlatform, toggleServer, createServer, deleteServer, loadSyncTargets, performSync,
+    addModalOpen, syncModalOpen, syncTargets, syncTargetPlatformId, syncServerName,
+    deleteConfirmServerName,
+    previewModalOpen, previewLoading, previewData, previewMode,
+    previewAddName, previewAddConfig,
+    refreshPlatforms, selectPlatform, toggleServer, createServer, deleteServer,
+    loadSyncTargets, performSync,
+    loadAddPreview, loadDeletePreview, confirmPreview, cancelPreview,
   }
 })

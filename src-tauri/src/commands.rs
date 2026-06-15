@@ -746,7 +746,8 @@ pub fn get_mcp_server(platform_id: String, name: String) -> Result<McpServerDeta
         crate::mcp::read_mcp_server(&platform_id, &name).map_err(|e| CommandError::NotFound(e))?;
     let def = crate::mcp::find_mcp_platform(&platform_id)
         .ok_or_else(|| CommandError::NotFound("Platform not found".into()))?;
-    let config_text = crate::mcp::config_to_display(&server.config, def.format);
+    let config_text =
+        crate::mcp::config_to_display(&server.config, def.format, &def.mcp_key, &server.name);
     Ok(McpServerDetail {
         name: server.name,
         config_text,
@@ -1088,6 +1089,32 @@ pub fn get_mcp_sync_targets(platform_id: String, server_name: String) -> Vec<Mcp
             }
         })
         .collect()
+}
+
+#[tauri::command]
+pub fn preview_mcp_change_cmd(
+    platform_id: String,
+    server_name: String,
+    config_text: Option<String>,
+) -> Result<crate::mcp::McpSyncPreview, CommandError> {
+    if let Some(text) = config_text {
+        // Add/import preview
+        let def = crate::mcp::find_mcp_platform(&platform_id)
+            .ok_or_else(|| CommandError::NotFound("Platform not found".into()))?;
+        let config = crate::mcp::parse_server_config_input_with_format(
+            &text,
+            &def.mcp_key,
+            &server_name,
+            def.format,
+        )
+        .map_err(|e| CommandError::SyncError(e))?;
+        crate::mcp::preview_import_mcp_server(&platform_id, &server_name, &config)
+            .map_err(|e| CommandError::SyncError(e))
+    } else {
+        // Delete preview
+        crate::mcp::preview_delete_mcp_server(&platform_id, &server_name)
+            .map_err(|e| CommandError::SyncError(e))
+    }
 }
 
 #[tauri::command]

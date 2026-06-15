@@ -166,6 +166,7 @@ export async function deleteMcpServer() { await delay() }
 export async function importMcpServer() { await delay() }
 export async function getMcpSyncTargets() { await delay(); return MCP_PLATFORMS.map(p => ({ id: p.id, display_name: p.display_name })) }
 export async function previewMcpSync() { await delay(); return { changes: [] } }
+export async function previewMcpChange() { await delay(); return { server_name: 'mock', target_format: 'json', target_config_path: '/mock/config.json', has_conflict: false, diff_lines: [{ tag: 'added', content: '  "mock": { "command": "echo" }\n' }], added: 1, removed: 0 } }
 export async function syncMcpServer() { await delay(500) }
 
 // Sessions

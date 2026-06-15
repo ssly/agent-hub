@@ -149,7 +149,15 @@
     "confirm_sync": "Confirm Sync",
     "sync_done": "Sync completed.",
     "sync_failed": "Sync failed: {error}",
-    "conflict_warning": "Target already has this server!"
+    "conflict_warning": "Target already has this server!",
+    "preview_title_add": "Add Preview",
+    "preview_title_delete": "Delete Preview",
+    "preview_loading": "Generating preview...",
+    "preview_error": "Preview failed: {error}",
+    "preview_conflict": "Server already exists and will be updated.",
+    "preview_stats": "+{added} added  -{removed} removed",
+    "only_toml": "Codex only supports TOML format. Please paste TOML config.",
+    "only_json": "This platform only supports JSON format."
   },
   "trash": {
     "title": "Recycle Bin",

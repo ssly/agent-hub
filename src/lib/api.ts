@@ -76,6 +76,8 @@ export const getMcpSyncTargets = (platformId: string, serverName: string) =>
   invoke<any[]>('get_mcp_sync_targets', { platformId, serverName })
 export const previewMcpSync = (sourcePlatformId: string, targetPlatformId: string, serverName: string) =>
   invoke<any>('preview_mcp_sync_cmd', { sourcePlatformId, targetPlatformId, serverName })
+export const previewMcpChange = (platformId: string, serverName: string, configText?: string) =>
+  invoke<any>('preview_mcp_change_cmd', { platformId, serverName, configText })
 export const syncMcpServer = (sourcePlatformId: string, targetPlatformId: string, serverName: string) =>
   invoke<void>('sync_mcp_server_cmd', { sourcePlatformId, targetPlatformId, serverName })
 

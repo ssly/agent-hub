@@ -149,7 +149,15 @@
     "confirm_sync": "确认同步",
     "sync_done": "同步完成。",
     "sync_failed": "同步失败：{error}",
-    "conflict_warning": "目标平台已有该服务器！"
+    "conflict_warning": "目标平台已有该服务器！",
+    "preview_title_add": "添加预览",
+    "preview_title_delete": "删除预览",
+    "preview_loading": "正在生成预览...",
+    "preview_error": "预览失败：{error}",
+    "preview_conflict": "该服务器已存在，将被更新。",
+    "preview_stats": "+{added} 行新增  -{removed} 行删除",
+    "only_toml": "Codex 仅支持 TOML 格式，请粘贴 TOML 配置。",
+    "only_json": "该平台仅支持 JSON 格式。"
   },
   "trash": {
     "title": "回收站",
