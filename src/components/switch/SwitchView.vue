@@ -5,6 +5,7 @@ import { useSwitchStore } from '@/stores/switch'
 import { useToast } from '@/composables/useToast'
 import * as api from '@/lib/api'
 import AppModal from '@/components/ui/AppModal.vue'
+import { RefreshCw, Gauge } from 'lucide-vue-next'
 
 const { t } = useI18n()
 const store = useSwitchStore()
@@ -17,6 +18,42 @@ const AGENT_DISPLAY_NAMES: Record<string, string> = {
 const agentName = computed(
   () => AGENT_DISPLAY_NAMES[store.selectedAgent ?? ''] ?? store.selectedAgent ?? ''
 )
+
+// --- Codex usage panel ---
+const isCodex = computed(() => store.selectedAgent === 'codex')
+// Name of the currently active account (the one usage is actually queried for).
+const activeAccountName = computed(() => {
+  const active = store.profiles.find((p) => p.is_active)
+  if (!active) return ''
+  const idx = store.profiles.indexOf(active)
+  return active.note || t('switch.account_fallback', { n: idx + 1 })
+})
+
+function fmtReset(secs?: number): string {
+  if (!secs || secs <= 0) return t('switch.usage_reset_now')
+  const h = Math.floor(secs / 3600)
+  const m = Math.floor((secs % 3600) / 60)
+  if (h >= 24) {
+    const d = Math.floor(h / 24)
+    return t('switch.usage_reset_dh', { d, h: h % 24 })
+  }
+  return t('switch.usage_reset_hm', { h, m })
+}
+
+function fmtLastQuery(): string {
+  if (!store.codexUsageLastQuery) return ''
+  return new Date(store.codexUsageLastQuery).toISOString().replace('T', ' ').substring(0, 16) + ' UTC'
+}
+
+async function handleRefreshUsage() {
+  if (store.codexUsageLoading) return
+  await store.refreshCodexUsage(false)
+  if (store.codexUsageError) {
+    showToast(t('switch.usage_failed'), 'error')
+  } else {
+    showToast(t('switch.usage_refresh_toast'), 'success')
+  }
+}
 
 const addNote = ref('')
 const addContent = ref('')
@@ -53,7 +90,11 @@ function handleOutsideClick() {
   if (store.switchConfirmId) store.switchConfirmId = null
 }
 
-onMounted(() => window.addEventListener('click', handleOutsideClick))
+onMounted(() => {
+  window.addEventListener('click', handleOutsideClick)
+  // Trigger a (cooldown-gated) usage fetch when entering the Codex view
+  if (isCodex.value) store.ensureFreshCodexUsage()
+})
 onUnmounted(() => window.removeEventListener('click', handleOutsideClick))
 
 async function doSwitch(id: string) {
@@ -237,6 +278,64 @@ async function confirmDelete() {
                 <span class="text-xs" style="color: var(--accent)">{{ t('switch.confirm_switch', { agent: agentName }) }}</span>
                 <button class="btn btn-primary btn-sm" @click.stop="doSwitch(profile.id)">{{ t('action.confirm') }}</button>
                 <button class="btn btn-ghost btn-sm" @click.stop="store.switchConfirmId = null">{{ t('action.cancel') }}</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Codex usage panel -->
+          <div v-if="isCodex" class="ah-card mt-6" style="background: var(--surface); border-color: var(--border)">
+            <div class="flex items-center justify-between mb-3">
+              <span class="text-base font-semibold flex items-center gap-2" style="color: var(--ink)">
+                <Gauge :size="18" :style="{ color: 'var(--accent)' }" />
+                {{ t('switch.usage_title', { name: activeAccountName || t('switch.active_badge') }) }}
+              </span>
+              <button
+                class="btn btn-secondary btn-sm flex items-center gap-1"
+                :disabled="store.codexUsageLoading"
+                @click="handleRefreshUsage"
+              >
+                <RefreshCw :size="14" :class="{ 'animate-spin': store.codexUsageLoading }" />
+                {{ t('switch.usage_refresh') }}
+              </button>
+            </div>
+
+            <!-- Loading -->
+            <div v-if="store.codexUsageLoading" class="text-sm py-4" style="color: var(--ink-3)">
+              {{ t('switch.usage_loading') }}
+            </div>
+
+            <!-- Error -->
+            <div v-else-if="store.codexUsageError" class="text-sm py-2 flex items-center justify-between gap-3" style="color: var(--danger)">
+              <span>{{ t('switch.usage_failed') }}: {{ store.codexUsageError }}</span>
+              <button class="btn btn-danger btn-sm" @click="handleRefreshUsage">{{ t('switch.usage_retry') }}</button>
+            </div>
+
+            <!-- Empty hint (before first fetch) -->
+            <div v-else-if="!store.codexUsage" class="text-sm py-2" style="color: var(--ink-3)">
+              {{ t('switch.usage_empty_hint') }}
+            </div>
+
+            <!-- Data: 5h + 7d windows -->
+            <div v-else class="space-y-3 text-sm">
+              <div
+                v-for="win in [
+                  { label: t('switch.usage_primary_window'), w: store.codexUsage.primary_window },
+                  { label: t('switch.usage_secondary_window'), w: store.codexUsage.secondary_window },
+                ]"
+                :key="win.label"
+                class="p-3 rounded-lg"
+                style="background: var(--sunken)"
+              >
+                <div class="flex justify-between items-center">
+                  <span class="font-medium" style="color: var(--ink)">{{ win.label }}</span>
+                  <span class="font-semibold" style="color: var(--accent)">{{ t('switch.usage_remaining', { n: win.w.remaining_percent }) }}</span>
+                </div>
+                <div class="text-xs mt-1" style="color: var(--ink-3)">
+                  {{ t('switch.usage_used_reset', { used: win.w.used_percent, reset: fmtReset(win.w.reset_after_seconds) }) }}
+                </div>
+              </div>
+              <div class="text-xs pt-2 border-t" style="color: var(--ink-4); border-color: var(--hairline)">
+                {{ t('switch.usage_last_query', { time: fmtLastQuery() }) }}
               </div>
             </div>
           </div>

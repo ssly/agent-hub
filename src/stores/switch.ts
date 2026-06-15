@@ -1,6 +1,10 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import * as api from '@/lib/api'
+import type { CodexUsage } from '@/lib/api'
+
+const QUOTA_COOLDOWN_MS = 60 * 60 * 1000 // 1h
+const QUOTA_LS_KEY = 'codex_quota_last_query'
 
 export const useSwitchStore = defineStore('switch', () => {
   const selectedAgent = ref<string | null>(localStorage.getItem('ah-switch-agent'))
@@ -8,6 +12,12 @@ export const useSwitchStore = defineStore('switch', () => {
   const currentKey = ref<string | null>(null)
   const addFormOpen = ref(false)
   const switchConfirmId = ref<string | null>(null)
+
+  // Codex usage (5h / 7d windows) for the currently active account
+  const codexUsage = ref<CodexUsage | null>(null)
+  const codexUsageLoading = ref(false)
+  const codexUsageError = ref<string | null>(null)
+  const codexUsageLastQuery = ref<number>(parseInt(localStorage.getItem(QUOTA_LS_KEY) || '0', 10))
 
   // Edit modal state
   const editModalOpen = ref(false)
@@ -31,6 +41,35 @@ export const useSwitchStore = defineStore('switch', () => {
     editSaving.value = false
     deleteArmed.value = false
     await loadProfiles()
+    // Auto-refresh Codex usage when entering the Codex view (1h cooldown)
+    if (agentType === 'codex') ensureFreshCodexUsage()
+  }
+
+  // Fetch Codex usage only if stale (older than the cooldown) or never fetched.
+  async function ensureFreshCodexUsage() {
+    if (codexUsageLoading.value) return
+    const stale = !codexUsage.value || (Date.now() - codexUsageLastQuery.value > QUOTA_COOLDOWN_MS)
+    if (stale) refreshCodexUsage(false)
+  }
+
+  async function refreshCodexUsage(showToast = true) {
+    if (selectedAgent.value !== 'codex') return
+    codexUsageLoading.value = true
+    codexUsageError.value = null
+    try {
+      const data = await api.getCodexUsage()
+      codexUsage.value = data
+      codexUsageLastQuery.value = Date.now()
+      localStorage.setItem(QUOTA_LS_KEY, String(codexUsageLastQuery.value))
+      if (showToast) {
+        // surfaced by component to keep store free of i18n deps
+      }
+    } catch (e: any) {
+      codexUsageError.value = String(e?.message || e)
+      codexUsage.value = null
+    } finally {
+      codexUsageLoading.value = false
+    }
   }
 
   async function loadProfiles() {
@@ -84,6 +123,8 @@ export const useSwitchStore = defineStore('switch', () => {
   return {
     selectedAgent, profiles, currentKey, addFormOpen, switchConfirmId,
     editModalOpen, editingProfileId, editNote, editContent, editContentLoading, editSaving, deleteArmed,
+    codexUsage, codexUsageLoading, codexUsageError, codexUsageLastQuery,
     selectAgent, loadProfiles, openEditModal, closeEditModal, resetState,
+    ensureFreshCodexUsage, refreshCodexUsage,
   }
 })

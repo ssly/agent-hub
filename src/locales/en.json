@@ -227,7 +227,22 @@
     "already_active_hint": "This account is currently in use",
     "content_load_failed": "Failed to load content",
     "content_loading": "Loading…",
-    "deleted_toast": "Deleted"
+    "deleted_toast": "Deleted",
+    "usage_title": "Codex Usage ({name})",
+    "usage_primary_window": "5-hour window",
+    "usage_secondary_window": "7-day window",
+    "usage_remaining": "{n}% remaining",
+    "usage_used_reset": "Used {used}% · resets {reset}",
+    "usage_loading": "Querying Codex usage…",
+    "usage_failed": "Failed to query usage",
+    "usage_retry": "Retry",
+    "usage_refresh": "Refresh",
+    "usage_refresh_toast": "Usage refreshed",
+    "usage_empty_hint": "Click \"Refresh\" to get used/remaining percent and reset time for the 5h and 7d windows.",
+    "usage_last_query": "Last query: {time}",
+    "usage_reset_now": "resets soon",
+    "usage_reset_hm": "in {h}h {m}m",
+    "usage_reset_dh": "in {d}d {h}h"
   },
   "monitor": {
     "title": "Monitor",
@@ -280,6 +295,8 @@
     "installing": "Installing update...",
     "update_complete": "Update installed. The app will restart.",
     "check_failed": "Failed to check for updates",
-    "install_failed": "Update installation failed"
+    "install_failed": "Update installation failed",
+    "new_version_toast": "New version v{version} found. Click the version in the sidebar to view details and update.",
+    "update_available_short": "Update"
   }
 }

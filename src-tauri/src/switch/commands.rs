@@ -356,3 +356,119 @@ pub fn clear_active_auth(agent_type: String) -> Result<String, String> {
 
     Ok(backup_id)
 }
+
+// --- Codex quota via internal endpoint (for the Switch view) ---
+
+#[derive(serde::Deserialize)]
+struct CodexAuthTokens {
+    access_token: String,
+    account_id: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct CodexAuthFile {
+    tokens: Option<CodexAuthTokens>,
+    account_id: Option<String>,
+}
+
+#[derive(serde::Serialize, Debug, Clone)]
+pub struct UsageWindow {
+    pub used_percent: u8,
+    pub remaining_percent: u8,
+    pub reset_after_seconds: u64,
+    pub reset_at: u64,
+}
+
+#[derive(serde::Serialize, Debug, Clone)]
+pub struct CodexUsageResponse {
+    pub plan_type: String,
+    pub primary_window: UsageWindow,
+    pub secondary_window: UsageWindow,
+}
+
+#[tauri::command]
+pub async fn get_codex_usage() -> Result<CodexUsageResponse, String> {
+    // Resolve auth file (respect CODEX_HOME if set)
+    let codex_home: PathBuf = match std::env::var("CODEX_HOME") {
+        Ok(dir) => PathBuf::from(dir),
+        Err(_) => {
+            let home = dirs::home_dir()
+                .ok_or_else(|| "无法确定用户主目录".to_string())?;
+            home.join(".codex")
+        }
+    };
+
+    let auth_path = codex_home.join("auth.json");
+    if !auth_path.exists() {
+        return Err("未找到 Codex 认证文件（~/.codex/auth.json）。请先在终端运行 `codex login`。".to_string());
+    }
+
+    let content = std::fs::read_to_string(&auth_path).map_err(|e| format!("读取 auth.json 失败: {}", e))?;
+    let auth: CodexAuthFile = serde_json::from_str(&content).map_err(|e| format!("解析 auth.json 失败: {}", e))?;
+
+    let tokens = auth.tokens.ok_or_else(|| "auth.json 中没有 tokens 字段".to_string())?;
+    let access_token = tokens.access_token;
+    let account_id = tokens.account_id
+        .or(auth.account_id)
+        .ok_or_else(|| "缺少 account_id，无法查询用量".to_string())?;
+
+    // Call the (undocumented) internal usage endpoint.
+    // We prefer /wham/usage as it reliably returns the JSON quota windows.
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let url = "https://chatgpt.com/backend-api/wham/usage";
+    let resp = client
+        .get(url)
+        .header("Authorization", format!("Bearer {}", access_token))
+        .header("ChatGPT-Account-Id", &account_id)
+        .header("Accept", "application/json")
+        .header("User-Agent", "Codex CLI")
+        .header("Origin", "https://chatgpt.com")
+        .header("Referer", "https://chatgpt.com/")
+        .send()
+        .await
+        .map_err(|e| format!("请求 Codex 用量接口失败: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Codex 用量接口返回错误: HTTP {}", resp.status()));
+    }
+
+    let raw: serde_json::Value = resp.json().await.map_err(|e| format!("解析用量响应失败: {}", e))?;
+
+    let rate = raw.get("rate_limit").ok_or("响应缺少 rate_limit 字段")?;
+    let primary = rate.get("primary_window").ok_or("缺少 primary_window")?;
+    let secondary = rate.get("secondary_window").ok_or("缺少 secondary_window")?;
+
+    let p_used = primary.get("used_percent").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+    let s_used = secondary.get("used_percent").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+
+    let p_after = primary.get("reset_after_seconds").and_then(|v| v.as_u64()).unwrap_or(0);
+    let s_after = secondary.get("reset_after_seconds").and_then(|v| v.as_u64()).unwrap_or(0);
+
+    let p_at = primary.get("reset_at").and_then(|v| v.as_u64()).unwrap_or(0);
+    let s_at = secondary.get("reset_at").and_then(|v| v.as_u64()).unwrap_or(0);
+
+    let plan = raw.get("plan_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+
+    Ok(CodexUsageResponse {
+        plan_type: plan,
+        primary_window: UsageWindow {
+            used_percent: p_used,
+            remaining_percent: 100u8.saturating_sub(p_used),
+            reset_after_seconds: p_after,
+            reset_at: p_at,
+        },
+        secondary_window: UsageWindow {
+            used_percent: s_used,
+            remaining_percent: 100u8.saturating_sub(s_used),
+            reset_after_seconds: s_after,
+            reset_at: s_at,
+        },
+    })
+}

@@ -133,5 +133,19 @@ export const updateAuthProfileContent = (agentType: string, id: string, content:
   invoke<void>('update_auth_profile_content', { agentType, id, content })
 export const clearActiveAuth = (agentType: string) => invoke<void>('clear_active_auth', { agentType })
 
+// Codex usage (5h / 7d windows) for the currently active account.
+export interface UsageWindow {
+  used_percent: number
+  remaining_percent: number
+  reset_after_seconds: number
+  reset_at: number
+}
+export interface CodexUsage {
+  plan_type: string
+  primary_window: UsageWindow
+  secondary_window: UsageWindow
+}
+export const getCodexUsage = () => invoke<CodexUsage>('get_codex_usage')
+
 // App
 export const getAppVersion = () => invoke<string>('get_app_version')

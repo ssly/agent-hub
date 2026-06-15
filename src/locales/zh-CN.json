@@ -227,7 +227,22 @@
     "already_active_hint": "当前正在使用此账号",
     "content_load_failed": "内容加载失败",
     "content_loading": "加载中…",
-    "deleted_toast": "已删除"
+    "deleted_toast": "已删除",
+    "usage_title": "Codex 用量（{name}）",
+    "usage_primary_window": "5 小时窗",
+    "usage_secondary_window": "7 天窗",
+    "usage_remaining": "{n}% 剩余",
+    "usage_used_reset": "已用 {used}% · 重置 {reset}",
+    "usage_loading": "正在查询 Codex 用量…",
+    "usage_failed": "用量查询失败",
+    "usage_retry": "重试",
+    "usage_refresh": "刷新",
+    "usage_refresh_toast": "用量已刷新",
+    "usage_empty_hint": "点击「刷新」获取 5 小时窗和 7 天窗的已用/剩余百分比及重置时间。",
+    "usage_last_query": "上次查询：{time}",
+    "usage_reset_now": "即将重置",
+    "usage_reset_hm": "{h} 小时 {m} 分钟后",
+    "usage_reset_dh": "{d} 天 {h} 小时后"
   },
   "monitor": {
     "title": "监控",
@@ -280,6 +295,8 @@
     "installing": "正在安装更新...",
     "update_complete": "更新完成，应用即将重启",
     "check_failed": "检查更新失败",
-    "install_failed": "更新安装失败"
+    "install_failed": "更新安装失败",
+    "new_version_toast": "发现新版本 v{version}，点击左侧版本号查看详情并更新",
+    "update_available_short": "有更新"
   }
 }

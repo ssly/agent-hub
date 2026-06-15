@@ -239,6 +239,14 @@ export async function deleteAuthProfile() { await delay() }
 export async function getAuthProfileContent() { await delay(); return 'sk-ant-api03-mock-key-content...' }
 export async function updateAuthProfileContent() { await delay() }
 export async function clearActiveAuth() { await delay() }
+export async function getCodexUsage() {
+  await delay()
+  return {
+    plan_type: 'plus',
+    primary_window: { used_percent: 17, remaining_percent: 83, reset_after_seconds: 11528, reset_at: 1781463697 },
+    secondary_window: { used_percent: 14, remaining_percent: 86, reset_after_seconds: 340296, reset_at: 1781792465 },
+  }
+}
 
 // App
 export async function getAppVersion() { return '0.9.3-dev' }
