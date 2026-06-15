@@ -211,9 +211,15 @@ function handleSessionSearch(e: Event) {
         class="px-3 py-2 text-center cursor-pointer select-none transition-colors hover:bg-[color:var(--sunken)]"
         style="border-top: 1px solid var(--hairline)"
         @click="appStore.openAbout"
-        :title="t('about.title')"
+        :title="appStore.availableUpdate ? `发现新版本 v${appStore.availableUpdate.version}，点击查看` : t('about.title')"
       >
-        <span style="color: var(--ink-4); font-size: 11px">v{{ appStore.appVersion }}</span>
+        <span
+          :style="appStore.availableUpdate ? { color: '#f59e0b' } : { color: 'var(--ink-4)' }"
+          style="font-size: 11px"
+        >
+          v{{ appStore.appVersion }}
+          <span v-if="appStore.availableUpdate" class="ml-1 text-[10px] font-semibold">{{ t('about.update_available_short') }}</span>
+        </span>
       </div>
     </template>
   </aside>

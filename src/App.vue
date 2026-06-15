@@ -116,6 +116,7 @@ async function handleCheckUpdates() {
     if (update) {
       aboutUpdateInfo.value = update
       aboutUpdateStatus.value = 'available'
+      appStore.availableUpdate = update
     } else {
       aboutUpdateStatus.value = 'uptodate'
     }
@@ -123,6 +124,24 @@ async function handleCheckUpdates() {
     aboutError.value = e?.message || String(e)
     aboutUpdateStatus.value = 'error'
     showToast(t('about.check_failed') + (aboutError.value ? `: ${aboutError.value}` : ''), 'error')
+  }
+}
+
+async function checkForUpdatesSilently() {
+  if (!isTauri) return
+  try {
+    const { check } = await import('@tauri-apps/plugin-updater')
+    const update = await check()
+    if (update) {
+      appStore.availableUpdate = update
+      aboutUpdateInfo.value = update
+      aboutUpdateStatus.value = 'available'
+      // Non-intrusive notification. User can click the version in the sidebar.
+      showToast(t('about.new_version_toast', { version: update.version }), 'info')
+    }
+  } catch (e) {
+    // Silent fail is intentional (dev mode, offline, rate limit, etc.)
+    // Do not show error toasts for background check.
   }
 }
 
@@ -173,6 +192,11 @@ function handleOpenHomepage() {
 watch(() => appStore.aboutModalOpen, (isOpen) => {
   if (isOpen) {
     resetAboutState()
+    // If we have a pending update from background check, pre-fill the modal
+    if (appStore.availableUpdate) {
+      aboutUpdateInfo.value = appStore.availableUpdate
+      aboutUpdateStatus.value = 'available'
+    }
   }
 })
 
@@ -182,6 +206,13 @@ watch(() => appStore.locale, (newVal) => {
 
 onMounted(async () => {
   await appStore.init()
+
+  // Perform a silent background update check shortly after launch.
+  // This provides the "update notification" the user expects.
+  // Only runs in real Tauri desktop build.
+  setTimeout(() => {
+    checkForUpdatesSilently()
+  }, 2500)
 })
 </script>
 

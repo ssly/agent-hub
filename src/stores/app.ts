@@ -27,6 +27,7 @@ export const useAppStore = defineStore('app', () => {
 
   // About Modal
   const aboutModalOpen = ref(false)
+  const availableUpdate = ref<any>(null)
 
   async function init() {
     try { locale.value = await api.getLocale() } catch {}
@@ -142,7 +143,7 @@ export const useAppStore = defineStore('app', () => {
   return {
     currentTab, currentView, sidebarCollapsed, appVersion, trashCount, locale,
     trashModalOpen, trashItems, trashLoading,
-    aboutModalOpen,
+    aboutModalOpen, availableUpdate,
     init, refreshTrashCount, switchTab, setView, toggleSidebar, toggleTheme, isNightTheme, switchLocale,
     openTrash, restoreTrash, deleteTrashForever, emptyTrash, openAbout,
   }
