@@ -164,9 +164,8 @@ cargo tauri dev                     # 启动开发模式（热重载）
 
 | 修改内容 | 效果 |
 |---------|------|
-| `src/js/*.js` 或 `src/index.html` | 自动刷新窗口 |
+| `src/**/*.vue` 或 `src/**/*.ts` | Vite HMR 热重载 |
 | `src-tauri/src/*.rs` | 自动重编译 |
-| CSS（`.css` 文件） | 需另开终端运行 `npm run dev:css` 监听变更 |
 
 ### 构建
 

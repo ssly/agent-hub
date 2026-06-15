@@ -4,42 +4,43 @@ Agent Hub 项目开发指南。
 
 ## 项目概况
 
-Tauri 2.x 桌面应用（Rust 后端 + Vanilla JS 前端），统一管理本地 AI Agent 平台的 Skill、MCP Server、会话和账号。版本 0.9.0。
+Tauri 2.x 桌面应用（Rust 后端 + Vue 3 前端），统一管理本地 AI Agent 平台的 Skill、MCP Server、会话和账号。
 
 ## 技术约束
 
-- 前端无打包工具，HTML 直接加载 JS（ES Module）
-- CSS 由 TailwindCSS v4 CLI 生成：`npm run build:css`
-- 所有前端逻辑在 `src/js/app.js` 的 `App` 类中
-- 后端命令在 `src-tauri/src/commands.rs` 注册
-- API 调用统一通过 `src/js/api.js` 封装
+- 前端 Vue 3 + Vite + Pinia + TailwindCSS v4（`@tailwindcss/vite` 插件，无 CLI）
+- 入口 `index.html` → `src/main.ts` → `src/App.vue`
+- 状态用 Pinia store（`src/stores/*`），Tauri 调用封装在 `src/lib/api.ts`
+- 浏览器调试模式（`npm run dev:web`）走 `src/lib/mock-api.ts` mock 数据
+- 后端命令在各模块的 `commands.rs` 实现，统一在 `src-tauri/src/lib.rs` 注册
 
 ## 开发流程
 
 ```bash
-npm install && npm run build:css   # 首次
-cargo tauri dev                     # 开发模式
+npm install                # 首次
+cargo tauri dev            # 开发模式（自动启动 Vite）
+npm run dev:web            # 仅前端 + mock 数据（无 Tauri）
 ```
 
 - 改 `.rs` → 自动重编译
-- 改 `.js`/`.html` → 自动刷新窗口
-- 改 CSS → 需运行 `npm run dev:css` 或手动 `npm run build:css`
+- 改 `.vue`/`.ts` → Vite HMR 热更新
 
 ## 代码风格
 
 - Rust：标准 Rust 风格，模块按功能拆分
-- JS：类方法，模板字符串拼接 HTML，无框架
-- 国际化：UI 文字使用 `i18n.t('key')`，翻译文件在 `src/locales/*.json` 和 `locales/*.toml`
-- 新增后端命令：在 `commands.rs` 添加 `#[tauri::command]` 函数，在 `lib.rs` 注册
-- 新增前端功能：在 `app.js` 的 `App` 类中添加方法，通过 `api.js` 调用后端
+- Vue：`<script setup lang="ts">` 单文件组件，Pinia store 管理状态
+- 国际化：UI 文字使用 vue-i18n `t('key')`，翻译在 `src/locales/*.json`
+- 新增后端命令：添加 `#[tauri::command]` 函数，在 `lib.rs` 注册
+- 新增前端功能：在 `src/lib/api.ts`（+ `mock-api.ts`）加调用，在对应 store + 组件实现
 
 ## 关键文件
 
 | 文件 | 作用 |
 |------|------|
-| `src/js/app.js` | 前端所有 UI 逻辑 |
-| `src/js/api.js` | Tauri IPC 调用封装 |
-| `src-tauri/src/commands.rs` | 后端所有命令处理 |
+| `src/main.ts` | Vue 应用挂载（Pinia + vue-i18n） |
+| `src/App.vue` | 根组件（布局 + 视图切换） |
+| `src/lib/api.ts` | Tauri IPC 调用封装 |
+| `src/stores/*` | Pinia 状态管理 |
 | `src-tauri/src/lib.rs` | 应用初始化和命令注册 |
 | `src-tauri/src/platform/registry.rs` | 平台定义 |
 | `src-tauri/src/mcp/parser.rs` | MCP 配置解析 |

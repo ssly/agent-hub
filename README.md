@@ -165,9 +165,8 @@ cargo tauri dev                     # launch dev mode with hot reload
 
 | What you change | What happens |
 |-----------------|-------------|
-| `src/js/*.js` or `src/index.html` | Auto-refresh window |
+| `src/**/*.vue` or `src/**/*.ts` | Vite HMR hot reload |
 | `src-tauri/src/*.rs` | Auto-recompile |
-| CSS (`.css` files) | Run `npm run dev:css` in another terminal to watch |
 
 ### Build
 

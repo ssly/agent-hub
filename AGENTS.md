@@ -9,27 +9,45 @@ Agent Hub 是一个基于 Tauri 2.x 的桌面应用，用于统一管理本地�
 ## 架构
 
 ```
-用户界面 (Vanilla JS + TailwindCSS v4)
+用户界面 (Vue 3 + Vite + TailwindCSS v4 + Pinia)
     ↕ Tauri IPC (invoke commands)
 Rust 后端 (模块化设计)
     ↕ 文件系统 / SQLite / 网络
 ```
 
-前端无构建打包工具，HTML 直接加载 ES Module JS。所有前端逻辑在 `src/js/app.js` 的 `App` 类中。
+前端基于 Vue 3 单文件组件，Vite 构建。入口 `index.html` → `src/main.ts` → `src/App.vue`。状态用 Pinia store 管理，Tauri 调用统一封装在 `src/lib/api.ts`。浏览器调试模式（`npm run dev:web`）走 `src/lib/mock-api.ts` 的 mock 数据。
 
 ## 目录结构
 
 ```
 src/
-  index.html              # SPA 入口
-  input.css               # TailwindCSS 输入
-  styles.css              # 生成的 CSS（gitignored）
-  theme.css               # 明暗主题变量
-  js/
-    api.js                # Tauri invoke 封装（所有后端命令）
-    app.js                # 主应用（App 类，所有视图）
-    i18n.js               # 前端国际化
-    components/           # （待提取）
+  index.html              # Vite SPA 入口（根目录）
+  main.ts                 # Vue 应用挂载：createApp + Pinia + vue-i18n
+  App.vue                 # 根组件（布局 + 路由切换）
+  assets/                 # 全局样式
+    theme.css             # 明暗主题变量
+    main.css              # 基础样式
+  components/
+    layout/               # AppSidebar, AppToolbar, AppToast
+    ui/                   # AppModal, AppSelect
+    skills/               # SkillListView, SkillDetailView
+    mcp/                  # McpListView
+    sessions/             # SessionListView
+    switch/               # SwitchView（含 Codex 用量面板）
+    diff/                 # DiffView
+    search/               # SearchResults
+  stores/                 # Pinia stores
+    app.ts                # 全局/导航
+    skills.ts             # Skill 与平台
+    mcp.ts                # MCP Server
+    sessions.ts           # 会话浏览
+    switch.ts             # 账号切换 + Codex 用量
+  composables/
+    useToast.ts           # 全局 toast
+  lib/
+    api.ts                # Tauri invoke 封装（所有后端命令，含 getCodexUsage）
+    mock-api.ts           # 浏览器调试 mock 数据
+    utils.ts              # 工具函数
   locales/
     en.json / zh-CN.json  # 前端翻译
 
@@ -54,14 +72,36 @@ src-tauri/src/
     claude.rs             # Claude Code 会话适配
     codex.rs              # Codex CLI 会话适配
     kiro.rs               # Kiro 会话适配
-  switch/                 # 账号切换
+  switch/                 # 账号切换 + Codex 用量
     model.rs              # AuthProfile, ProfileMeta
-    commands.rs           # Profile CRUD + 切换
+    commands.rs           # Profile CRUD + 切换 + get_codex_usage
   monitor/                # Agent 监控（未启用）
 
 locales/
   en.toml / zh-CN.toml    # 后端翻译（Rust i18n）
 ```
+
+## 开发命令
+
+```bash
+npm install                # 前端依赖
+npm run dev                # Vite 开发服务器（前端 only）
+npm run dev:web            # 浏览器调试模式（mock 数据，无需 Tauri）
+npm run build              # vue-tsc 类型检查 + vite 构建
+cargo tauri dev            # 开发模式（自动启动 Vite）
+cargo tauri build          # 生产构建
+cargo test                 # Rust 测试（在 src-tauri/ 下）
+npm run version [-- <ver>] # 从 git tag 同步版本号
+```
+
+## 前端约定
+
+- Vue 3 SPA，通过 `src/App.vue` + Pinia `stores/app.ts` 切换视图
+- 侧边栏 tabs：Skills、MCP、Sessions、Switch
+- 数据流：组件 → `stores/*` → `lib/api.ts` → Tauri IPC → Rust 命令
+- 国际化：vue-i18n 加载 `src/locales/*.json`
+- 主题：`src/assets/theme.css` CSS 变量 + localStorage 持久化
+- 新增 Tauri 命令需同时在 `src/lib/api.ts`（真实调用）和 `src/lib/mock-api.ts`（浏览器调试）加对应函数
 
 ## 关键模块
 
@@ -83,27 +123,7 @@ Skill 是包含 `SKILL.md` 的目录，SKILL.md 使用 YAML frontmatter（`name`
 
 ### 账号切换
 
-Profile 存储在 `~/.agent-hub/switch/<agent-type>/<uuid>/`，通过 SHA-256 哈希比对检测当前活跃账号。切换时原子替换（tmp + rename）。
-
-## 开发命令
-
-```bash
-npm install                # 前端依赖
-npm run build:css          # 构建 CSS
-npm run dev:css            # 监听 CSS 变更
-cargo tauri dev            # 开发模式
-cargo tauri build          # 生产构建
-cargo test                 # Rust 测试（在 src-tauri/ 下）
-npm run version [-- <ver>] # 从 git tag 同步版本号
-```
-
-## 前端约定
-
-- 单页应用，通过 `renderView()` 切换视图
-- 侧边栏 tabs：Skills、MCP、Sessions、Switch
-- 数据流：`app.js` 调用 `api.js` → Tauri IPC → Rust 命令
-- 国际化：`i18n.js` 加载 `locales/*.json`
-- 主题：`theme.css` CSS 变量 + localStorage 持久化
+Profile 存储在 `~/.agent-hub/switch/<agent-type>/<uuid>/`，通过 SHA-256 哈希比对检测当前活跃账号。切换时原子替换（tmp + rename）。Switch 视图还提供 Codex 用量查询（`get_codex_usage` 命令，调用 ChatGPT 内部 usage 接口返回 5h/7d 窗口配额）。
 
 ## 测试
 
