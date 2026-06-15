@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, watch, ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { invoke, Channel } from '@tauri-apps/api/core'
 import { useAppStore } from '@/stores/app'
 import { useSkillsStore } from '@/stores/skills'
 import { useToast } from '@/composables/useToast'
@@ -80,6 +81,10 @@ const aboutUpdateInfo = ref<any>(null)
 const aboutProgress = ref(0)
 const aboutError = ref('')
 
+// Store the raw check() result (contains rid) outside reactive state.
+// The Update object has private fields (#backend) that break under Vue/Pinia Proxy.
+let pendingUpdateRaw: any = null
+
 function resetAboutState() {
   aboutUpdateStatus.value = 'idle'
   aboutUpdateInfo.value = null
@@ -111,11 +116,9 @@ async function handleCheckUpdates() {
   aboutProgress.value = 0
 
   try {
-    const { check } = await import('@tauri-apps/plugin-updater')
-    const update = await check()
+    const update = await invoke<any>('plugin:updater|check')
     if (update) {
-      // Store only metadata — the raw Update object has private fields (#backend)
-      // that break when wrapped by Vue/Pinia Proxy.
+      pendingUpdateRaw = update
       const meta = { version: update.version, body: update.body, date: update.date }
       aboutUpdateInfo.value = meta
       aboutUpdateStatus.value = 'available'
@@ -133,10 +136,9 @@ async function handleCheckUpdates() {
 async function checkForUpdatesSilently() {
   if (!isTauri) return
   try {
-    const { check } = await import('@tauri-apps/plugin-updater')
-    const update = await check()
+    const update = await invoke<any>('plugin:updater|check')
     if (update) {
-      // Store only metadata — raw Update object has private fields that break under Proxy.
+      pendingUpdateRaw = update
       const meta = { version: update.version, body: update.body, date: update.date }
       appStore.availableUpdate = meta
       aboutUpdateInfo.value = meta
@@ -158,29 +160,37 @@ async function handleInstallUpdate() {
   aboutError.value = ''
 
   try {
-    // Re-check to get a fresh Update object (the stored one is only metadata;
-    // the raw object has private fields that break under Vue Proxy).
-    const { check } = await import('@tauri-apps/plugin-updater')
-    const update = await check()
+    // Re-check to get a fresh rid (the stored pendingUpdateRaw may be stale,
+    // and the rid is a resource table handle that doesn't persist reliably).
+    const update = await invoke<any>('plugin:updater|check')
     if (!update) {
       throw new Error('Update no longer available')
     }
+    const rid = update.rid
+    if (!rid) {
+      throw new Error('Missing update resource id')
+    }
 
-    let downloaded = 0
-    let contentLength = 0
-
-    await update.downloadAndInstall((event: any) => {
+    const channel = new Channel<any>()
+    channel.onmessage = (event: any) => {
       if (event.event === 'Started') {
-        contentLength = event.data?.contentLength || 0
+        const total = event.data?.total || event.data?.contentLength || 0
+        const resumed = event.data?.resumedFrom || 0
+        if (total > 0) {
+          aboutProgress.value = Math.min(100, Math.round((resumed / total) * 100))
+        }
       } else if (event.event === 'Progress') {
-        downloaded += event.data?.chunkLength || 0
-        if (contentLength > 0) {
-          aboutProgress.value = Math.min(100, Math.round((downloaded / contentLength) * 100))
+        const total = event.data?.total || 0
+        const downloaded = event.data?.downloaded || 0
+        if (total > 0) {
+          aboutProgress.value = Math.min(100, Math.round((downloaded / total) * 100))
         }
       } else if (event.event === 'Finished') {
         aboutProgress.value = 100
       }
-    })
+    }
+
+    await invoke('download_and_install_update_resumable', { rid, onEvent: channel })
 
     showToast(t('about.update_complete'), 'success')
 
