@@ -53,25 +53,70 @@ async function handleDoSync() {
   }
 }
 
+// Trash deletion uses a two-click confirm (Tauri's webview has no native
+// confirm() dialog, so window.confirm silently returns false — which made the
+// delete button appear to do nothing). First click arms the confirm chip; a
+// second click within the window actually deletes. Any id not armed is ignored.
+const armedDeleteId = ref<string | null>(null)
+const armedEmpty = ref(false)
+let armTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearArm() {
+  armedDeleteId.value = null
+  armedEmpty.value = false
+  if (armTimer) { clearTimeout(armTimer); armTimer = null }
+}
+function armDelete(id: string) {
+  clearArm()
+  armedDeleteId.value = id
+  armTimer = setTimeout(clearArm, 3500)
+}
+function armEmpty() {
+  clearArm()
+  armedEmpty.value = true
+  armTimer = setTimeout(clearArm, 3500)
+}
+
+function onTrashModalClose() {
+  clearArm()
+  appStore.trashModalOpen = false
+}
+
+async function handleRestoreTrash(id: string) {
+  clearArm()
+  try {
+    await appStore.restoreTrash(id)
+    showToast(t('trash.restored'), 'success')
+  } catch (e: any) {
+    showToast(t('trash.restore_failed', { error: e?.SyncError || e?.message || e }), 'error')
+  }
+}
+
 async function handleDeleteTrashForever(id: string) {
-  if (window.confirm(t('trash.confirm_delete_forever'))) {
-    try {
-      await appStore.deleteTrashForever(id)
-      showToast(t('trash.deleted') || 'Permanently deleted', 'success')
-    } catch (e: any) {
-      showToast(String(e), 'error')
-    }
+  if (armedDeleteId.value !== id) {
+    armDelete(id)
+    return
+  }
+  clearArm()
+  try {
+    await appStore.deleteTrashForever(id)
+    showToast(t('trash.deleted'), 'success')
+  } catch (e: any) {
+    showToast(t('trash.delete_failed', { error: e?.SyncError || e?.message || e }), 'error')
   }
 }
 
 async function handleEmptyTrash() {
-  if (window.confirm(t('trash.confirm_empty'))) {
-    try {
-      await appStore.emptyTrash()
-      showToast(t('trash.deleted') || 'Trash emptied', 'success')
-    } catch (e: any) {
-      showToast(String(e), 'error')
-    }
+  if (!armedEmpty.value) {
+    armEmpty()
+    return
+  }
+  clearArm()
+  try {
+    await appStore.emptyTrash()
+    showToast(t('trash.emptied'), 'success')
+  } catch (e: any) {
+    showToast(t('trash.empty_failed', { error: e?.SyncError || e?.message || e }), 'error')
   }
 }
 
@@ -417,7 +462,7 @@ onMounted(async () => {
     <AppModal
       :show="appStore.trashModalOpen"
       :title="t('trash.title')"
-      @close="appStore.trashModalOpen = false"
+      @close="onTrashModalClose"
       width-class="w-[36rem]"
     >
       <div v-if="appStore.trashLoading" class="loading-pulse text-center py-12" style="color: var(--ink-3)">
@@ -439,21 +484,28 @@ onMounted(async () => {
               {{ item.platform_id }} · {{ item.item_type === 'mcp' ? t('trash.type_mcp') : t('trash.type_skill') }}
             </div>
           </div>
-          <div class="flex gap-2">
-            <button class="btn btn-secondary btn-sm" @click="appStore.restoreTrash(item.id)">{{ t('trash.restore') }}</button>
-            <button class="btn btn-danger btn-sm" @click="handleDeleteTrashForever(item.id)">{{ t('trash.delete_forever') }}</button>
+          <div class="flex gap-2 items-center">
+            <button class="btn btn-secondary btn-sm" :disabled="armedDeleteId === item.id" @click="handleRestoreTrash(item.id)">{{ t('trash.restore') }}</button>
+            <button
+              class="btn btn-sm trash-confirm-btn"
+              :class="armedDeleteId === item.id ? 'trash-confirm-btn--armed' : 'btn-danger'"
+              @click="handleDeleteTrashForever(item.id)"
+            >
+              {{ armedDeleteId === item.id ? t('trash.confirm_delete_hint') : t('trash.delete_forever') }}
+            </button>
           </div>
         </div>
       </div>
       <template #footer>
         <button
           v-if="appStore.trashItems.length > 0"
-          class="btn btn-danger"
+          class="btn trash-confirm-btn"
+          :class="armedEmpty ? 'trash-confirm-btn--armed' : 'btn-danger'"
           @click="handleEmptyTrash"
         >
-          {{ t('trash.empty_trash') }}
+          {{ armedEmpty ? t('trash.confirm_empty_hint') : t('trash.empty_trash') }}
         </button>
-        <button class="btn btn-secondary" @click="appStore.trashModalOpen = false">{{ t('action.close') }}</button>
+        <button class="btn btn-secondary" @click="onTrashModalClose">{{ t('action.close') }}</button>
       </template>
     </AppModal>
 
@@ -588,5 +640,15 @@ onMounted(async () => {
 @keyframes update-progress-slide {
   0% { transform: translateX(-110%); }
   100% { transform: translateX(320%); }
+}
+
+/* Two-click delete confirm: a quiet danger button turns into a solid danger
+   chip on first click (mirrors the session-card delete pattern). Tauri's
+   webview has no native confirm() dialog, so we can't rely on window.confirm. */
+.trash-confirm-btn--armed {
+  background: var(--danger);
+  color: #fff;
+  border-color: var(--danger);
+  white-space: nowrap;
 }
 </style>

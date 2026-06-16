@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 import { useMcpStore } from '@/stores/mcp'
+import { useAppStore } from '@/stores/app'
 import { useToast } from '@/composables/useToast'
 import * as api from '@/lib/api'
 import { ref, computed, watch } from 'vue'
@@ -8,6 +9,7 @@ import AppModal from '@/components/ui/AppModal.vue'
 
 const { t } = useI18n()
 const store = useMcpStore()
+const appStore = useAppStore()
 const { showToast } = useToast()
 
 const newServerName = ref('')
@@ -73,6 +75,7 @@ async function handlePreviewConfirm() {
   try {
     const wasEdit = previewFromEdit.value
     const wasAdd = store.previewMode === 'add' && !previewFromEdit.value
+    const wasDelete = store.previewMode === 'delete'
     const changedName = store.previewData?.server_name
     await store.confirmPreview()
     // Refresh the edited server's detail so the read-only view stays in sync.
@@ -82,7 +85,12 @@ async function handlePreviewConfirm() {
         store.serverDetails[changedName] = { config_text: newDetail.config_text, format: newDetail.format }
       } catch { /* ignore refresh error */ }
     }
-    showToast(wasEdit || store.previewMode === 'add' ? t('mcp.saved') : t('mcp.deleted'), 'success')
+    showToast(wasEdit || wasAdd ? t('mcp.saved') : t('mcp.deleted'), 'success')
+    // Deleting an MCP server moves its config into the trash on the backend;
+    // refresh the sidebar badge so the count reflects it immediately.
+    if (wasDelete) {
+      appStore.refreshTrashCount()
+    }
     previewFromEdit.value = false
     // Reset add form if it was a fresh add
     if (wasAdd) {

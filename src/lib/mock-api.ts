@@ -185,6 +185,10 @@ export async function listSessionTerminals() {
 export async function resumeSession() { await delay(300); return 'claude --resume session-0' }
 export async function getSessionMessages() { await delay(); return [] }
 export async function deleteSession() { await delay(200) }
+export async function deleteSessions(_platformId: string, sessionIds: string[]) {
+  await delay(300)
+  return { deleted: sessionIds.length, failed: [] }
+}
 export async function searchSessionMessages(platformId: string, query: string) {
   await delay();
   const q = query.toLowerCase();

@@ -14,6 +14,49 @@ const { showToast } = useToast()
 const resumingId = ref<string | null>(null)
 const confirmDeleteId = ref<string | null>(null)
 
+// Batch delete: a two-click confirm keeps it consistent with the single-delete
+// pattern but uses a dialog-free chip. `confirmBatch` flips to true on first
+// click of the delete button; a second click within the window fires bulkDelete.
+const confirmBatch = ref(false)
+let confirmBatchTimer: ReturnType<typeof setTimeout> | null = null
+
+function armConfirmBatch() {
+  confirmBatch.value = true
+  if (confirmBatchTimer) clearTimeout(confirmBatchTimer)
+  confirmBatchTimer = setTimeout(() => { confirmBatch.value = false }, 3500)
+}
+function disarmConfirmBatch() {
+  confirmBatch.value = false
+  if (confirmBatchTimer) { clearTimeout(confirmBatchTimer); confirmBatchTimer = null }
+}
+
+async function handleBulkDelete() {
+  if (store.selectedCount === 0) {
+    showToast(t('session.batch_select_none'), 'error')
+    return
+  }
+  if (!confirmBatch.value) {
+    armConfirmBatch()
+    return
+  }
+  disarmConfirmBatch()
+  const count = store.selectedCount
+  try {
+    const result = await store.bulkDelete()
+    if (result.failed.length === 0) {
+      showToast(t('session.batch_deleted', { deleted: result.deleted }), 'success')
+    } else {
+      showToast(
+        t('session.batch_deleted_with_failed', { deleted: result.deleted, failed: result.failed.length }),
+        result.deleted > 0 ? 'warning' : 'error',
+        6000,
+      )
+    }
+  } catch (e: any) {
+    showToast(t('session.batch_delete_failed', { error: e?.SyncError || e?.message || e }), 'error')
+  }
+}
+
 // Map store data into the { value, label, disabled } shape AppSelect expects.
 const pathSelectOptions = computed(() =>
   store.pathOptions.map(p => ({
@@ -207,7 +250,41 @@ function clearSessionSearch() {
                   />
                 </div>
               </div>
+              <button
+                class="btn btn-sm"
+                :class="store.selectionMode ? 'btn-primary' : 'btn-secondary'"
+                @click="store.selectionMode ? store.exitSelection() : store.enterSelection()"
+              >
+                {{ store.selectionMode ? t('session.batch_cancel') : t('session.batch_select') }}
+              </button>
             </div>
+          </div>
+
+          <!-- Batch selection toolbar -->
+          <div v-if="store.selectionMode" class="ah-batch-bar flex items-center justify-between gap-3 flex-wrap">
+            <div class="flex items-center gap-3">
+              <span class="text-xs font-medium" style="color: var(--ink-2)">
+                {{ t('session.batch_select_none') && store.selectedCount === 0
+                  ? t('session.batch_select_none')
+                  : `${store.selectedCount} / ${store.sessions.length}` }}
+              </span>
+              <button class="btn btn-secondary btn-sm" @click="store.selectAllLoaded()">{{ t('session.batch_select_all') }}</button>
+              <button class="btn btn-secondary btn-sm" :disabled="store.selectedCount === 0" @click="store.clearSelection()">{{ t('session.batch_clear_selection') }}</button>
+            </div>
+            <button
+              class="btn btn-sm"
+              :class="confirmBatch ? 'session-card__delete is-confirming' : 'btn-danger'"
+              :style="confirmBatch ? { width: 'auto' } : null"
+              :disabled="store.isBulkDeleting || store.selectedCount === 0"
+              :title="confirmBatch ? t('session.batch_delete_confirm', { n: store.selectedCount }) : ''"
+              @click="handleBulkDelete"
+            >
+              {{ store.isBulkDeleting
+                ? t('session.deleting')
+                : confirmBatch
+                  ? t('session.confirm_delete')
+                  : t('session.batch_delete_n', { n: store.selectedCount }) }}
+            </button>
           </div>
 
           <!-- Session Cards -->
@@ -220,9 +297,19 @@ function clearSessionSearch() {
               v-for="session in store.sessions"
               :key="session.id"
               class="ah-session-card session-card"
+              :class="{ 'session-card--selected': store.selectionMode && store.selectedIds.has(session.id) }"
             >
               <div class="session-card__head">
-                <h3 class="ah-session-card__title truncate">{{ session.title || t('session.untitled') }}</h3>
+                <div class="flex items-center gap-2 min-w-0">
+                  <label v-if="store.selectionMode" class="session-card__check" @click.stop>
+                    <input
+                      type="checkbox"
+                      :checked="store.selectedIds.has(session.id)"
+                      @change="store.toggleSelected(session.id)"
+                    />
+                  </label>
+                  <h3 class="ah-session-card__title truncate">{{ session.title || t('session.untitled') }}</h3>
+                </div>
                 <span class="text-xs whitespace-nowrap" style="color: var(--ink-3)">
                   {{ formatSessionTime(session.updated_at, locale) }}
                 </span>
@@ -232,7 +319,7 @@ function clearSessionSearch() {
                 <span v-if="session.model" class="ah-session-card__model">{{ session.model }}</span>
                 <span v-if="session.tokens_used != null" class="ah-session-card__tokens">{{ t('session.tokens_value', { count: formatInt(session.tokens_used) }) }}</span>
               </div>
-              <div class="session-card__actions">
+              <div v-if="!store.selectionMode" class="session-card__actions">
                 <button class="btn btn-secondary btn-sm" @click="store.openMessages(session)">{{ t('session.view_messages') }}</button>
                 <button
                   class="btn btn-primary btn-sm"
@@ -412,5 +499,37 @@ function clearSessionSearch() {
   color: #fff;
   background: var(--danger);
   border-color: var(--danger);
+}
+/* Batch selection toolbar — mirrors the filter bar spacing. */
+.ah-batch-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-mid);
+}
+.session-card--selected {
+  background: var(--accent-soft);
+  border-color: var(--accent-mid);
+}
+.session-card--selected::before {
+  background: var(--accent);
+}
+.session-card__check {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.session-card__check input {
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+  accent-color: var(--accent);
 }
 </style>
