@@ -2,7 +2,10 @@ use std::fs;
 
 use serde_json::Value;
 
-use super::parser::{apply_json_server, apply_toml_server, build_sync_config, parse_server_config_input_with_format};
+use super::parser::{
+    apply_json_server, apply_toml_server, build_sync_config, parse_server_config_input_with_format,
+    remove_json_server,
+};
 use super::registry::{find_mcp_platform, McpFormat};
 
 /// Cross-platform sync write: extracts universal core fields from `source_config`,
@@ -73,12 +76,10 @@ fn delete_json_server(def: &super::registry::McpPlatformDef, name: &str) -> Resu
         return Err("Config file not found".into());
     }
     let content = fs::read_to_string(&def.config_path).map_err(|e| e.to_string())?;
-    let mut doc: Value =
-        serde_json::from_str(&content).map_err(|e| format!("Invalid JSON: {}", e))?;
-    if let Some(servers) = doc.get_mut(&def.mcp_key).and_then(|v| v.as_object_mut()) {
-        servers.remove(name);
-    }
-    let out = serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())?;
+    // Surgical text edit: only the target server is removed; every other field
+    // (including unrelated top-level keys in e.g. .claude.json) keeps its
+    // original order and formatting. Falls back to "not found" error otherwise.
+    let out = remove_json_server(&content, &def.mcp_key, name)?;
     fs::write(&def.config_path, out).map_err(|e| e.to_string())
 }
 

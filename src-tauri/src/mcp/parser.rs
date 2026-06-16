@@ -387,6 +387,124 @@ pub(crate) fn apply_json_server(
     }
 }
 
+/// Surgically remove a single server from a JSON config document by editing
+/// the raw text, preserving the original formatting and key order of every
+/// other field (both inside and outside `mcp_key`).
+///
+/// Returns an error if the document isn't valid JSON, or if `mcp_key`/`name`
+/// isn't found (so callers can decide how to surface "nothing to delete").
+pub(crate) fn remove_json_server(
+    before: &str,
+    mcp_key: &str,
+    name: &str,
+) -> Result<String, String> {
+    // Empty or `{}` — nothing to remove.
+    if before.trim().is_empty() || before.trim() == "{}" {
+        return Err(format!("Server '{}' not found", name));
+    }
+    let parsed: Value = serde_json::from_str(before).map_err(|e| e.to_string())?;
+    if !parsed.is_object() {
+        return Err("Not a JSON object".into());
+    }
+
+    let root_open = first_non_ws(before).ok_or("Empty JSON")?;
+    if before.as_bytes().get(root_open) != Some(&b'{') {
+        return Err("Not a JSON object".into());
+    }
+
+    let mcp_field =
+        find_json_object_field(before, root_open, mcp_key)?.ok_or_else(|| {
+            format!("'{}' section not found, cannot delete '{}'", mcp_key, name)
+        })?;
+
+    let servers_open = skip_json_ws(before, mcp_field.value_start);
+    if before.as_bytes().get(servers_open) != Some(&b'{') {
+        return Err(format!("'{}' is not an object", mcp_key));
+    }
+
+    let server_field = find_json_object_field(before, servers_open, name)?
+        .ok_or_else(|| format!("Server '{}' not found", name))?;
+
+    let servers_close = find_matching_delim(before, servers_open, b'{', b'}')?;
+
+    let result = remove_json_member(before, server_field.key_start, server_field.value_end, servers_open, servers_close);
+
+    // Validate the result is still well-formed JSON before returning.
+    serde_json::from_str::<Value>(&result).map_err(|e| e.to_string())?;
+    Ok(result)
+}
+
+/// Remove the bytes in `[key_start, value_end)` (a full `"key": value` member)
+/// from a JSON object, cleaning up the surrounding comma/whitespace so the
+/// result stays valid JSON with no dangling commas or stray blank lines.
+///
+/// `obj_open` / `obj_close` bound the enclosing object; the member is assumed
+/// to live strictly inside it.
+fn remove_json_member(
+    text: &str,
+    key_start: usize,
+    value_end: usize,
+    obj_open: usize,
+    obj_close: usize,
+) -> String {
+    let bytes = text.as_bytes();
+
+    // 1) Extend `value_end` forward to swallow a trailing comma (and the
+    //    newline/whitespace that follows it). If a trailing comma exists, the
+    //    next non-ws char is either `}` (empty trailing) or another member.
+    let mut after = value_end;
+    while after < obj_close && matches!(bytes[after], b' ' | b'\t') {
+        after += 1;
+    }
+    if bytes.get(after) == Some(&b',') {
+        // Swallow the comma...
+        let mut cut_end = after + 1;
+        // ...and the line break that follows it (so no blank line is left).
+        if bytes.get(cut_end) == Some(&b'\n') {
+            cut_end += 1;
+            if bytes.get(cut_end) == Some(&b'\r') {
+                cut_end += 1;
+            }
+        }
+        // Splice [..key_start) + [cut_end..), dropping the member + its comma.
+        let mut result = String::with_capacity(text.len());
+        result.push_str(&text[..key_start]);
+        result.push_str(&text[cut_end..]);
+        return result;
+    }
+
+    // 2) No trailing comma → this is the last member. Its preceding comma
+    //    belongs to the previous member; remove it along with the line that
+    //    hosted this member (from the newline before its indentation back to
+    //    `value_end`). This avoids leaving a trailing comma before `}`.
+    let mut cut_start = key_start;
+    // Walk back over this member's leading indentation + the newline that
+    // starts its line.
+    while cut_start > obj_open && matches!(bytes[cut_start - 1], b' ' | b'\t') {
+        cut_start -= 1;
+    }
+    if cut_start > obj_open && bytes[cut_start - 1] == b'\n' {
+        cut_start -= 1;
+        if cut_start > obj_open && bytes[cut_start - 1] == b'\r' {
+            cut_start -= 1;
+        }
+    }
+    // Now remove the preceding comma if present (the previous member's
+    // trailing comma).
+    let mut comma_start = cut_start;
+    while comma_start > obj_open && matches!(bytes[comma_start - 1], b' ' | b'\t') {
+        comma_start -= 1;
+    }
+    if comma_start > obj_open && bytes[comma_start - 1] == b',' {
+        cut_start = comma_start - 1;
+    }
+
+    let mut result = String::with_capacity(text.len());
+    result.push_str(&text[..cut_start]);
+    result.push_str(&text[value_end..]);
+    result
+}
+
 fn format_new_json_doc(mcp_key: &str, name: &str, config: &Value) -> Result<String, String> {
     let property = format_json_mcp_property(mcp_key, name, config, "  ", "    ", true)?;
     Ok(format!("{{\n{}\n}}", property))
@@ -1512,6 +1630,230 @@ command = \"b\"
         // Round-trip: the produced text must be valid TOML.
         let _: toml::Value = toml::from_str(&text).expect("display text must be valid TOML");
     }
+
+    // --- remove_json_server (surgical JSON delete) tests ---
+
+    fn root_key_order(json: &str) -> Vec<String> {
+        // Without preserve_order, serde_json itself sorts keys, so we can't
+        // rely on it for order. Instead scan raw text for root-depth keys.
+        let bytes = json.as_bytes();
+        let mut keys = Vec::new();
+        // depth counts nesting. The root object's `{` brings it to 1, so root
+        // keys are captured exactly when depth == 1.
+        let mut depth: i32 = 0;
+        let mut in_string = false;
+        let mut escaped = false;
+        let mut i = 0;
+        while i < bytes.len() {
+            let ch = bytes[i];
+            if escaped {
+                escaped = false;
+                i += 1;
+                continue;
+            }
+            if in_string {
+                match ch {
+                    b'\\' => escaped = true,
+                    b'"' => in_string = false,
+                    _ => {}
+                }
+                i += 1;
+                continue;
+            }
+            match ch {
+                b'"' => {
+                    in_string = true;
+                    if depth == 1 {
+                        // root-level key: capture until closing quote
+                        let start = i + 1;
+                        let mut j = start;
+                        while j < bytes.len() {
+                            match bytes[j] {
+                                b'\\' => j += 2,
+                                b'"' => break,
+                                _ => j += 1,
+                            }
+                        }
+                        if let Ok(raw) = std::str::from_utf8(&bytes[start..j]) {
+                            let decoded: String =
+                                serde_json::from_str(&format!("\"{}\"", raw)).unwrap_or_default();
+                            keys.push(decoded);
+                        }
+                    }
+                }
+                b'{' | b'[' => depth += 1,
+                b'}' | b']' => depth -= 1,
+                _ => {}
+            }
+            i += 1;
+        }
+        keys
+    }
+
+    #[test]
+    fn test_remove_json_server_preserves_unrelated_top_level_keys_order() {
+        // The core regression: deleting a server must NOT re-sort every other
+        // field in the document (the old BTreeMap re-serialization did this).
+        let before = r#"{
+  "numStartups": 42,
+  "mcpServers": {
+    "context7": { "command": "npx" },
+    "filesystem": { "command": "node" }
+  },
+  "projects": {}
+}"#;
+        let after = remove_json_server(before, "mcpServers", "context7").unwrap();
+
+        // Top-level key order must be unchanged.
+        let keys = root_key_order(&after);
+        assert_eq!(
+            keys,
+            vec!["numStartups", "mcpServers", "projects"],
+            "top-level key order must be preserved, got:\n{}",
+            after
+        );
+
+        // The targeted server is gone, the sibling survives.
+        let parsed: Value = serde_json::from_str(&after).unwrap();
+        assert!(
+            !parsed["mcpServers"].as_object().unwrap().contains_key("context7"),
+            "context7 must be removed"
+        );
+        assert_eq!(parsed["mcpServers"]["filesystem"]["command"], "node");
+        assert_eq!(parsed["numStartups"], 42);
+    }
+
+    #[test]
+    fn test_remove_json_server_first_of_multiple() {
+        let before = r#"{
+  "mcpServers": {
+    "alpha": { "command": "a" },
+    "beta": { "command": "b" }
+  }
+}"#;
+        let after = remove_json_server(before, "mcpServers", "alpha").unwrap();
+        let parsed: Value = serde_json::from_str(&after).unwrap();
+        assert!(!parsed["mcpServers"].as_object().unwrap().contains_key("alpha"));
+        assert_eq!(parsed["mcpServers"]["beta"]["command"], "b");
+        // No leading comma left behind.
+        assert!(
+            !after.contains("\"mcpServers\": {\n,"),
+            "no dangling comma before first entry, got:\n{}",
+            after
+        );
+        assert!(after.contains("\"beta\""));
+    }
+
+    #[test]
+    fn test_remove_json_server_last_of_multiple() {
+        let before = r#"{
+  "mcpServers": {
+    "alpha": { "command": "a" },
+    "beta": { "command": "b" }
+  }
+}"#;
+        let after = remove_json_server(before, "mcpServers", "beta").unwrap();
+        let parsed: Value = serde_json::from_str(&after).unwrap();
+        assert!(!parsed["mcpServers"].as_object().unwrap().contains_key("beta"));
+        assert_eq!(parsed["mcpServers"]["alpha"]["command"], "a");
+        // No trailing comma before the closing brace.
+        assert!(
+            !after.contains("\"a\"\n    },\n  }") && !after.contains(",\n  }"),
+            "no dangling comma before close, got:\n{}",
+            after
+        );
+    }
+
+    #[test]
+    fn test_remove_json_server_middle_of_three() {
+        let before = r#"{
+  "mcpServers": {
+    "alpha": { "command": "a" },
+    "beta": { "command": "b" },
+    "gamma": { "command": "c" }
+  }
+}"#;
+        let after = remove_json_server(before, "mcpServers", "beta").unwrap();
+        let parsed: Value = serde_json::from_str(&after).unwrap();
+        let servers = parsed["mcpServers"].as_object().unwrap();
+        assert!(!servers.contains_key("beta"));
+        assert_eq!(servers["alpha"]["command"], "a");
+        assert_eq!(servers["gamma"]["command"], "c");
+        // Valid JSON (already asserted by parse) and exactly two entries.
+        assert_eq!(servers.len(), 2);
+    }
+
+    #[test]
+    fn test_remove_json_server_only_server_leaves_empty() {
+        let before = r#"{
+  "mcpServers": {
+    "only": { "command": "x" }
+  }
+}"#;
+        let after = remove_json_server(before, "mcpServers", "only").unwrap();
+        let parsed: Value = serde_json::from_str(&after).unwrap();
+        assert!(parsed["mcpServers"].as_object().unwrap().is_empty());
+        assert!(parsed["mcpServers"].is_object());
+    }
+
+    #[test]
+    fn test_remove_json_server_not_found_errors() {
+        let before = r#"{
+  "mcpServers": {
+    "alpha": { "command": "a" }
+  }
+}"#;
+        let res = remove_json_server(before, "mcpServers", "ghost");
+        assert!(res.is_err(), "deleting a non-existent server must error");
+        assert!(
+            res.unwrap_err().contains("not found"),
+            "error should mention not found"
+        );
+    }
+
+    #[test]
+    fn test_remove_json_server_no_mcp_key_errors() {
+        let before = r#"{ "other": 1 }"#;
+        let res = remove_json_server(before, "mcpServers", "alpha");
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_remove_json_server_preserves_inner_formatting() {
+        // Multi-line, nested objects, arrays, comments-ish spacing — everything
+        // outside the deleted entry should be byte-identical to the input.
+        let before = r#"{
+  "mcpServers": {
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"],
+      "env": {
+        "API_KEY": "secret"
+      }
+    },
+    "filesystem": {
+      "command": "node",
+      "args": ["server.js"]
+    }
+  }
+}"#;
+        let after = remove_json_server(before, "mcpServers", "context7").unwrap();
+        let parsed: Value = serde_json::from_str(&after).unwrap();
+        assert!(parsed["mcpServers"].as_object().unwrap().contains_key("filesystem"));
+        assert!(!after.contains("context7"));
+        assert!(after.contains("\"filesystem\""));
+        assert!(after.contains("\"server.js\""));
+    }
+
+    #[test]
+    fn test_remove_json_server_inline_spacing() {
+        // Compact, single-line-ish formatting with inline objects.
+        let before = "{\n  \"mcpServers\": {\n    \"a\": { \"command\": \"x\" },\n    \"b\": { \"command\": \"y\" }\n  }\n}";
+        let after = remove_json_server(before, "mcpServers", "a").unwrap();
+        let parsed: Value = serde_json::from_str(&after).unwrap();
+        assert_eq!(parsed["mcpServers"]["b"]["command"], "y");
+        assert!(!parsed["mcpServers"].as_object().unwrap().contains_key("a"));
+    }
 }
 
 fn compute_text_diff(before: &str, after: &str) -> Vec<DiffLine> {
@@ -1595,12 +1937,9 @@ pub fn preview_delete_mcp_server(
 
     let after_text = match def.format {
         McpFormat::Json => {
-            let mut doc: Value =
-                serde_json::from_str(&before_text).map_err(|e| format!("Invalid JSON: {}", e))?;
-            if let Some(servers) = doc.get_mut(&def.mcp_key).and_then(|v| v.as_object_mut()) {
-                servers.remove(name);
-            }
-            serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())?
+            // Use the same surgical text edit as the real delete so the preview
+            // matches what actually gets written byte-for-byte.
+            remove_json_server(&before_text, &def.mcp_key, name)?
         }
         McpFormat::Toml => {
             let ranges = find_toml_server_section_ranges(&before_text, &def.mcp_key, name);
