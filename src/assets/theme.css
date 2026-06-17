@@ -829,6 +829,8 @@
   color: var(--ink); letter-spacing: -0.01em;
 }
 .ah-modal__body { padding: 16px 24px; }
+.ah-modal--bare { overflow-y: auto; }
+.ah-modal__body--bare { padding: 0; }
 .ah-modal__footer {
   padding: 0 24px 20px;
   display: flex; justify-content: flex-end; gap: 8px;

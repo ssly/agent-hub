@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import * as api from '@/lib/api'
 import { useSkillsStore } from './skills'
 import { useMcpStore } from './mcp'
@@ -8,6 +8,7 @@ import { useSessionsStore } from './sessions'
 
 export type TabId = 'skills' | 'mcp' | 'sessions' | 'switch'
 export type ViewId = 'skills' | 'detail' | 'diff' | 'search'
+export type UpdateStatus = 'idle' | 'checking' | 'available' | 'uptodate' | 'installing' | 'error'
 
 const VALID_TABS: TabId[] = ['skills', 'mcp', 'sessions', 'switch']
 
@@ -30,6 +31,25 @@ export const useAppStore = defineStore('app', () => {
   // Only store metadata (version/body/date), NOT the raw Update object.
   // The Update class uses private fields (#backend) that break when wrapped by Vue/Pinia Proxy.
   const availableUpdate = ref<{ version: string; body?: string; date?: string } | null>(null)
+
+  // Updater state — kept in the store so the sidebar can surface download
+  // progress even after the About modal is closed mid-download.
+  const updateStatus = ref<UpdateStatus>('idle')
+  const updateProgress = ref(0)
+  const updateDownloaded = ref(0)
+  const updateTotal = ref(0)
+  const updateError = ref('')
+  const updateInfo = ref<{ version: string; body?: string; date?: string } | null>(null)
+  const isDownloading = computed(() => updateStatus.value === 'installing')
+
+  function resetUpdateState() {
+    updateStatus.value = 'idle'
+    updateInfo.value = null
+    updateProgress.value = 0
+    updateDownloaded.value = 0
+    updateTotal.value = 0
+    updateError.value = ''
+  }
 
   async function init() {
     try { locale.value = await api.getLocale() } catch {}
@@ -146,6 +166,8 @@ export const useAppStore = defineStore('app', () => {
     currentTab, currentView, sidebarCollapsed, appVersion, trashCount, locale,
     trashModalOpen, trashItems, trashLoading,
     aboutModalOpen, availableUpdate,
+    updateStatus, updateProgress, updateDownloaded, updateTotal, updateError, updateInfo,
+    isDownloading, resetUpdateState,
     init, refreshTrashCount, switchTab, setView, toggleSidebar, toggleTheme, isNightTheme, switchLocale,
     openTrash, restoreTrash, deleteTrashForever, emptyTrash, openAbout,
   }

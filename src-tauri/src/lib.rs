@@ -83,6 +83,7 @@ pub fn run() {
             switch::commands::get_auth_profile_content,
             switch::commands::update_auth_profile_content,
             switch::commands::clear_active_auth,
+            switch::commands::delete_active_auth,
             switch::commands::get_codex_usage,
         ])
         .run(tauri::generate_context!())

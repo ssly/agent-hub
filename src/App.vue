@@ -17,6 +17,7 @@ import SwitchView from '@/components/switch/SwitchView.vue'
 import SearchResults from '@/components/search/SearchResults.vue'
 import DiffView from '@/components/diff/DiffView.vue'
 import AppModal from '@/components/ui/AppModal.vue'
+import aboutHeroUrl from '@/assets/about-hero.png'
 
 // Detect Tauri context for plugin usage (updater works only in desktop build)
 const isTauri = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__
@@ -121,12 +122,14 @@ async function handleEmptyTrash() {
 }
 
 // ----- About / Version modal + updater -----
-const aboutUpdateStatus = ref<'idle' | 'checking' | 'available' | 'uptodate' | 'installing' | 'error'>('idle')
-const aboutUpdateInfo = ref<any>(null)
-const aboutProgress = ref(0)
-const aboutDownloaded = ref(0)
-const aboutTotal = ref(0)
-const aboutError = ref('')
+// Updater state lives in the store so the sidebar can surface download
+// progress after the About modal is closed mid-download.
+const aboutUpdateStatus = computed(() => appStore.updateStatus)
+const aboutUpdateInfo = computed(() => appStore.updateInfo)
+const aboutProgress = computed(() => appStore.updateProgress)
+const aboutDownloaded = computed(() => appStore.updateDownloaded)
+const aboutTotal = computed(() => appStore.updateTotal)
+const aboutError = computed(() => appStore.updateError)
 const UPDATE_TIMEOUT_MINUTES = 5
 
 const aboutProgressText = computed(() => {
@@ -142,12 +145,7 @@ const aboutProgressText = computed(() => {
 })
 
 function resetAboutState() {
-  aboutUpdateStatus.value = 'idle'
-  aboutUpdateInfo.value = null
-  aboutProgress.value = 0
-  aboutDownloaded.value = 0
-  aboutTotal.value = 0
-  aboutError.value = ''
+  appStore.resetUpdateState()
 }
 
 function formatBytes(bytes: number): string {
@@ -176,25 +174,25 @@ async function handleCheckUpdates() {
     showToast('Updater is only available in the desktop app.', 'error')
     return
   }
-  aboutUpdateStatus.value = 'checking'
-  aboutError.value = ''
-  aboutUpdateInfo.value = null
-  aboutProgress.value = 0
+  appStore.updateStatus = 'checking'
+  appStore.updateError = ''
+  appStore.updateInfo = null
+  appStore.updateProgress = 0
 
   try {
     const update = await invoke<any>('plugin:updater|check')
     if (update) {
       const meta = { version: update.version, body: update.body, date: update.date }
-      aboutUpdateInfo.value = meta
-      aboutUpdateStatus.value = 'available'
+      appStore.updateInfo = meta
+      appStore.updateStatus = 'available'
       appStore.availableUpdate = meta
     } else {
-      aboutUpdateStatus.value = 'uptodate'
+      appStore.updateStatus = 'uptodate'
     }
   } catch (e: any) {
-    aboutError.value = e?.message || String(e)
-    aboutUpdateStatus.value = 'error'
-    showToast(t('about.check_failed') + (aboutError.value ? `: ${aboutError.value}` : ''), 'error')
+    appStore.updateError = e?.message || String(e)
+    appStore.updateStatus = 'error'
+    showToast(t('about.check_failed') + (appStore.updateError ? `: ${appStore.updateError}` : ''), 'error')
   }
 }
 
@@ -205,8 +203,8 @@ async function checkForUpdatesSilently() {
     if (update) {
       const meta = { version: update.version, body: update.body, date: update.date }
       appStore.availableUpdate = meta
-      aboutUpdateInfo.value = meta
-      aboutUpdateStatus.value = 'available'
+      appStore.updateInfo = meta
+      appStore.updateStatus = 'available'
       // Non-intrusive notification. User can click the version in the sidebar.
       showToast(t('about.new_version_toast', { version: update.version }), 'info')
     }
@@ -219,11 +217,11 @@ async function checkForUpdatesSilently() {
 async function handleInstallUpdate(useMirror = false) {
   if (!aboutUpdateInfo.value || !isTauri) return
 
-  aboutUpdateStatus.value = 'installing'
-  aboutProgress.value = 0
-  aboutDownloaded.value = 0
-  aboutTotal.value = 0
-  aboutError.value = ''
+  appStore.updateStatus = 'installing'
+  appStore.updateProgress = 0
+  appStore.updateDownloaded = 0
+  appStore.updateTotal = 0
+  appStore.updateError = ''
 
   try {
     // Re-check to get a fresh rid (the stored pendingUpdateRaw may be stale,
@@ -243,25 +241,25 @@ async function handleInstallUpdate(useMirror = false) {
       if (eventName === 'started') {
         const total = event.data?.total || event.data?.contentLength || 0
         const resumed = event.data?.resumedFrom || 0
-        aboutTotal.value = total
-        aboutDownloaded.value = resumed
+        appStore.updateTotal = total
+        appStore.updateDownloaded = resumed
         if (total > 0) {
-          aboutProgress.value = Math.min(100, Math.round((resumed / total) * 100))
+          appStore.updateProgress = Math.min(100, Math.round((resumed / total) * 100))
         }
       } else if (eventName === 'progress') {
         const total = event.data?.total || 0
         const downloaded = event.data?.downloaded || 0
-        if (total > 0) aboutTotal.value = total
-        aboutDownloaded.value = downloaded
+        if (total > 0) appStore.updateTotal = total
+        appStore.updateDownloaded = downloaded
         if (total > 0) {
-          aboutProgress.value = Math.min(100, Math.round((downloaded / total) * 100))
+          appStore.updateProgress = Math.min(100, Math.round((downloaded / total) * 100))
         }
       } else if (eventName === 'finished') {
-        const total = event.data?.total || aboutTotal.value
+        const total = event.data?.total || appStore.updateTotal
         const downloaded = event.data?.downloaded || total
-        aboutTotal.value = total
-        aboutDownloaded.value = downloaded
-        aboutProgress.value = 100
+        appStore.updateTotal = total
+        appStore.updateDownloaded = downloaded
+        appStore.updateProgress = 100
       }
     }
 
@@ -277,11 +275,11 @@ async function handleInstallUpdate(useMirror = false) {
     await relaunch()
   } catch (e: any) {
     const rawError = e?.message || e?.SyncError || String(e)
-    aboutError.value = /timed?\s*out|timeout/i.test(rawError)
+    appStore.updateError = /timed?\s*out|timeout/i.test(rawError)
       ? t('about.timeout_error', { minutes: UPDATE_TIMEOUT_MINUTES })
       : rawError
-    aboutUpdateStatus.value = 'error'
-    showToast((t('about.install_failed') || 'Install failed') + `: ${aboutError.value}`, 'error')
+    appStore.updateStatus = 'error'
+    showToast((t('about.install_failed') || 'Install failed') + `: ${appStore.updateError}`, 'error')
   }
 }
 
@@ -296,11 +294,15 @@ function handleOpenHomepage() {
 // Reset transient update state whenever the About modal is (re)opened
 watch(() => appStore.aboutModalOpen, (isOpen) => {
   if (isOpen) {
-    resetAboutState()
-    // If we have a pending update from background check, pre-fill the modal
-    if (appStore.availableUpdate) {
-      aboutUpdateInfo.value = appStore.availableUpdate
-      aboutUpdateStatus.value = 'available'
+    // Don't clobber an in-flight download: closing & reopening the About modal
+    // mid-download must preserve progress.
+    if (appStore.updateStatus !== 'installing') {
+      resetAboutState()
+      // If we have a pending update from background check, pre-fill the modal
+      if (appStore.availableUpdate) {
+        appStore.updateInfo = appStore.availableUpdate
+        appStore.updateStatus = 'available'
+      }
     }
   }
 })
@@ -513,44 +515,53 @@ onMounted(async () => {
     <AppModal
       :show="appStore.aboutModalOpen"
       :title="t('about.title')"
+      bare
+      :close-on-outside="!aboutUpdateStatus || aboutUpdateStatus !== 'installing'"
       @close="appStore.aboutModalOpen = false"
       width-class="w-[30rem]"
     >
-      <div class="space-y-4 text-sm">
-        <!-- Version -->
-        <div>
-          <div class="text-[11px] font-medium tracking-wide" style="color: var(--ink-3)">{{ t('about.version_label') }}</div>
-          <div class="font-mono text-lg" style="color: var(--ink)">v{{ appStore.appVersion }}</div>
-        </div>
-
-        <!-- Author -->
-        <div>
-          <div class="text-[11px] font-medium tracking-wide" style="color: var(--ink-3)">{{ t('about.author_label') }}</div>
-          <button
-            class="text-left px-1 py-0.5 rounded hover:bg-[var(--sunken)] transition-colors w-fit"
-            style="color: var(--accent)"
-            @click="handleOpenHomepage"
-          >
-            yeqiyeluo
-          </button>
-        </div>
-
-        <!-- Links -->
-        <div>
-          <div class="text-[11px] font-medium tracking-wide mb-1" style="color: var(--ink-3)">{{ t('about.links_label') }}</div>
-          <div class="flex flex-col gap-0.5">
-            <button
-              class="text-left px-1 py-0.5 rounded hover:bg-[var(--sunken)] transition-colors w-fit"
-              style="color: var(--accent)"
-              @click="handleOpenGithub"
-            >
-              {{ t('about.github') }}
-            </button>
+      <div class="about-modal">
+        <!-- Header: brand image (large, top-right) + identity text on the left.
+             No close button — click outside to dismiss (except during download). -->
+        <div class="about-head">
+          <div class="about-head__text">
+            <h2 class="about-name">Agent Hub</h2>
+            <div class="about-version font-mono">v{{ appStore.appVersion }}</div>
+            <p class="about-tagline">{{ t('about.tagline') }}</p>
+          </div>
+          <div class="about-head__brand">
+            <img :src="aboutHeroUrl" alt="" class="about-head__logo" draggable="false" />
           </div>
         </div>
 
+        <!-- Meta rows -->
+        <dl class="about-meta">
+          <div class="about-meta__row">
+            <dt class="about-meta__label">{{ t('about.author_label') }}</dt>
+            <dd class="about-meta__value">
+              <button
+                class="about-link"
+                :title="t('about.homepage')"
+                @click="handleOpenHomepage"
+              >
+                yeqiyeluo
+                <svg class="about-link__ext" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              </button>
+            </dd>
+          </div>
+          <div class="about-meta__row">
+            <dt class="about-meta__label">{{ t('about.links_label') }}</dt>
+            <dd class="about-meta__value">
+              <button class="about-link" @click="handleOpenGithub">
+                GitHub
+                <svg class="about-link__ext" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              </button>
+            </dd>
+          </div>
+        </dl>
+
         <!-- Check for Updates -->
-        <div class="pt-3 border-t space-y-2" style="border-color: var(--hairline)">
+        <div class="about-update">
           <button
             class="btn btn-primary w-full"
             :disabled="aboutUpdateStatus === 'checking' || aboutUpdateStatus === 'installing'"
@@ -561,20 +572,20 @@ onMounted(async () => {
           </button>
 
           <!-- Status -->
-          <div v-if="aboutUpdateStatus === 'uptodate'" class="text-center text-xs py-1" style="color: #16a34a">
+          <div v-if="aboutUpdateStatus === 'uptodate'" class="about-update__status about-update__status--ok">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
             {{ t('about.up_to_date') }}
           </div>
 
-          <div v-if="aboutUpdateStatus === 'available' && aboutUpdateInfo" class="space-y-2">
-            <div class="text-xs" style="color: var(--ink-3)">
+          <div v-if="aboutUpdateStatus === 'available' && aboutUpdateInfo" class="about-update__available">
+            <div class="about-update__headline">
               {{ t('about.update_available') }}
-              <span class="font-mono ml-1" style="color: var(--ink)">v{{ aboutUpdateInfo.version }}</span>
+              <span class="about-update__version font-mono">v{{ aboutUpdateInfo.version }}</span>
             </div>
 
             <div
               v-if="aboutUpdateInfo.body"
-              class="text-[11px] p-2 rounded max-h-[120px] overflow-auto font-mono whitespace-pre-wrap"
-              style="background: var(--sunken); color: var(--ink-2); border: 1px solid var(--border)"
+              class="about-update__body"
             >
               {{ aboutUpdateInfo.body }}
             </div>
@@ -587,26 +598,26 @@ onMounted(async () => {
             </button>
           </div>
 
-          <div v-if="aboutUpdateStatus === 'installing'" class="space-y-1">
-            <div class="text-xs" style="color: var(--ink-3)">
+          <div v-if="aboutUpdateStatus === 'installing'" class="about-update__progress">
+            <div class="about-update__headline">
               {{ t('about.installing', { minutes: UPDATE_TIMEOUT_MINUTES }) }}
             </div>
-            <div class="h-1.5 rounded bg-[var(--sunken)] overflow-hidden">
+            <div class="about-progressbar">
               <div
                 :class="[
-                  'h-1.5 rounded bg-[var(--accent)]',
+                  'about-progressbar__fill',
                   aboutTotal > 0 ? 'transition-all duration-150' : 'update-progress-indeterminate',
                 ]"
                 :style="aboutTotal > 0 ? { width: aboutProgress + '%' } : undefined"
               ></div>
             </div>
-            <div class="text-right text-[10px] font-mono tabular-nums" style="color: var(--ink-3)">
+            <div class="about-update__meta font-mono tabular-nums">
               {{ aboutProgressText }}
             </div>
           </div>
 
-          <div v-if="aboutUpdateStatus === 'error' && aboutError" class="space-y-2">
-            <div class="text-xs text-red-500 break-all">
+          <div v-if="aboutUpdateStatus === 'error' && aboutError" class="about-update__error">
+            <div class="about-update__errtext">
               {{ t(aboutUpdateInfo ? 'about.install_failed' : 'about.check_failed') }}: {{ aboutError }}
             </div>
             <div v-if="aboutUpdateInfo" class="grid grid-cols-2 gap-2">
@@ -617,7 +628,7 @@ onMounted(async () => {
                 {{ t('about.retry_mirror') }}
               </button>
             </div>
-            <div v-if="aboutUpdateInfo" class="text-[10px]" style="color: var(--ink-4)">
+            <div v-if="aboutUpdateInfo" class="about-update__meta">
               {{ t('about.mirror_notice') }}
             </div>
           </div>
@@ -640,6 +651,181 @@ onMounted(async () => {
 @keyframes update-progress-slide {
   0% { transform: translateX(-110%); }
   100% { transform: translateX(320%); }
+}
+
+/* ----- About modal ----- */
+.about-modal {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Header row: brand mark pinned top-right, identity text on the left */
+/* Header: identity text on the left, large brand image on the right.
+   The image fills the right portion of the modal header; text is
+   constrained so it never runs under the image. */
+.about-head {
+  display: flex;
+  align-items: stretch;
+  gap: 18px;
+  padding: 22px 24px 8px;
+}
+.about-head__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.about-head__brand {
+  flex: 0 0 auto;
+  width: 168px;
+  height: 168px;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--sunken);
+  box-shadow: var(--shadow-soft);
+  pointer-events: none;
+}
+.about-head__logo {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.about-name {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+.about-version {
+  margin-top: 3px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+.about-tagline {
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink-3);
+}
+
+/* Meta rows */
+.about-meta {
+  margin: 0;
+  padding: 10px 24px 4px;
+  display: flex;
+  flex-direction: column;
+}
+.about-meta__row {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  align-items: center;
+  column-gap: 12px;
+  padding: 6px 0;
+}
+.about-meta__label {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--ink-4);
+}
+.about-meta__value {
+  margin: 0;
+}
+.about-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent);
+  background: transparent;
+  border: none;
+  padding: 2px 0;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-soft);
+}
+.about-link:hover { color: var(--accent-strong); }
+.about-link__ext { opacity: 0.55; }
+
+/* Update section */
+.about-update {
+  margin-top: 10px;
+  padding: 16px 24px 18px;
+  border-top: 1px solid var(--hairline);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.about-update__status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  font-size: 12px;
+  padding: 2px 0;
+}
+.about-update__status--ok { color: var(--success); }
+
+.about-update__available {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.about-update__headline {
+  font-size: 12.5px;
+  color: var(--ink-3);
+}
+.about-update__version {
+  margin-left: 4px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.about-update__body {
+  font-size: 11px;
+  line-height: 1.6;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  max-height: 140px;
+  overflow: auto;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  white-space: pre-wrap;
+  background: var(--sunken);
+  color: var(--ink-2);
+  border: 1px solid var(--border);
+}
+
+.about-update__progress,
+.about-update__error {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.about-progressbar {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--sunken);
+  overflow: hidden;
+}
+.about-progressbar__fill {
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+}
+.about-update__meta {
+  font-size: 10px;
+  text-align: right;
+  color: var(--ink-4);
+}
+.about-update__errtext {
+  font-size: 12px;
+  color: var(--danger);
+  word-break: break-all;
 }
 
 /* Two-click delete confirm: a quiet danger button turns into a solid danger

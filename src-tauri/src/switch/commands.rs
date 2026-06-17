@@ -357,6 +357,23 @@ pub fn clear_active_auth(agent_type: String) -> Result<String, String> {
     Ok(backup_id)
 }
 
+/// Delete the live auth file (e.g. ~/.codex/auth.json) **without** backing it
+/// up to the account pool first. Used by the "Clear Account" button so the user
+/// can sign out of {agent} while keeping every saved profile in the pool intact.
+///
+/// Unlike `clear_active_auth`, this never touches `~/.agent-hub/switch/<agent>/`.
+#[tauri::command]
+pub fn delete_active_auth(agent_type: String) -> Result<(), String> {
+    // Validate the agent type up front so we surface a clear error rather than
+    // silently deleting an unrelated file.
+    let path = agent_config_path(&agent_type)?;
+    if !path.exists() {
+        return Err("no_active_auth".to_string());
+    }
+    std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 // --- Codex quota via internal endpoint (for the Switch view) ---
 
 #[derive(serde::Deserialize)]
@@ -377,13 +394,18 @@ pub struct UsageWindow {
     pub remaining_percent: u8,
     pub reset_after_seconds: u64,
     pub reset_at: u64,
+    /// Duration of the rate-limit window in seconds.
+    /// Plus/Pro: primary=18000 (5h), secondary=604800 (7d).
+    /// Free: primary≈2592000 (30d), no secondary window.
+    /// Lets the front-end label the window dynamically instead of hard-coding 5h/7d.
+    pub window_seconds: u64,
 }
 
 #[derive(serde::Serialize, Debug, Clone)]
 pub struct CodexUsageResponse {
     pub plan_type: String,
-    pub primary_window: UsageWindow,
-    pub secondary_window: UsageWindow,
+    pub primary_window: Option<UsageWindow>,
+    pub secondary_window: Option<UsageWindow>,
 }
 
 #[tauri::command]
@@ -438,37 +460,55 @@ pub async fn get_codex_usage() -> Result<CodexUsageResponse, String> {
 
     let raw: serde_json::Value = resp.json().await.map_err(|e| format!("解析用量响应失败: {}", e))?;
 
-    let rate = raw.get("rate_limit").ok_or("响应缺少 rate_limit 字段")?;
-    let primary = rate.get("primary_window").ok_or("缺少 primary_window")?;
-    let secondary = rate.get("secondary_window").ok_or("缺少 secondary_window")?;
-
-    let p_used = primary.get("used_percent").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
-    let s_used = secondary.get("used_percent").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
-
-    let p_after = primary.get("reset_after_seconds").and_then(|v| v.as_u64()).unwrap_or(0);
-    let s_after = secondary.get("reset_after_seconds").and_then(|v| v.as_u64()).unwrap_or(0);
-
-    let p_at = primary.get("reset_at").and_then(|v| v.as_u64()).unwrap_or(0);
-    let s_at = secondary.get("reset_at").and_then(|v| v.as_u64()).unwrap_or(0);
-
     let plan = raw.get("plan_type")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown")
         .to_string();
 
+    // The rate_limit payload may be absent entirely (e.g. API-key auth without a
+    // subscription) — treat that as "no usage data" rather than a hard error.
+    let rate = match raw.get("rate_limit") {
+        Some(v) => v,
+        None => {
+            return Ok(CodexUsageResponse {
+                plan_type: plan,
+                primary_window: None,
+                secondary_window: None,
+            });
+        }
+    };
+
+    // Windows are optional. Plus/Pro return both a 5h primary and a 7d secondary;
+    // Free accounts only expose a monthly primary window, so secondary is null.
+    let primary = map_usage_window(rate.get("primary_window"));
+    let secondary = map_usage_window(rate.get("secondary_window"));
+
     Ok(CodexUsageResponse {
         plan_type: plan,
-        primary_window: UsageWindow {
-            used_percent: p_used,
-            remaining_percent: 100u8.saturating_sub(p_used),
-            reset_after_seconds: p_after,
-            reset_at: p_at,
-        },
-        secondary_window: UsageWindow {
-            used_percent: s_used,
-            remaining_percent: 100u8.saturating_sub(s_used),
-            reset_after_seconds: s_after,
-            reset_at: s_at,
-        },
+        primary_window: primary,
+        secondary_window: secondary,
+    })
+}
+
+/// Parse a single rate-limit window from the raw API value.
+/// Returns `None` when the window is missing or null — this is expected for
+/// Free accounts (no 5h/7d windows) and must not be treated as an error.
+fn map_usage_window(node: Option<&serde_json::Value>) -> Option<UsageWindow> {
+    let win = node?.as_object()?;
+    let used = win.get("used_percent").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+    let after = win.get("reset_after_seconds").and_then(|v| v.as_u64()).unwrap_or(0);
+    let at = win.get("reset_at").and_then(|v| v.as_u64()).unwrap_or(0);
+    // OpenAI exposes the window length as either "limit_window_seconds" (current)
+    // or "window_seconds" (older payloads). Fall back to 0 when absent.
+    let window_seconds = win.get("limit_window_seconds")
+        .or_else(|| win.get("window_seconds"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    Some(UsageWindow {
+        used_percent: used,
+        remaining_percent: 100u8.saturating_sub(used),
+        reset_after_seconds: after,
+        reset_at: at,
+        window_seconds,
     })
 }

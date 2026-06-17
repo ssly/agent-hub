@@ -244,12 +244,14 @@ export async function deleteAuthProfile() { await delay() }
 export async function getAuthProfileContent() { await delay(); return 'sk-ant-api03-mock-key-content...' }
 export async function updateAuthProfileContent() { await delay() }
 export async function clearActiveAuth() { await delay() }
+export async function deleteActiveAuth() { await delay() }
 export async function getCodexUsage() {
   await delay()
+  // Simulate a Free plan: only a monthly primary window, no 5h/7d secondary.
   return {
-    plan_type: 'plus',
-    primary_window: { used_percent: 17, remaining_percent: 83, reset_after_seconds: 11528, reset_at: 1781463697 },
-    secondary_window: { used_percent: 14, remaining_percent: 86, reset_after_seconds: 340296, reset_at: 1781792465 },
+    plan_type: 'free',
+    primary_window: { used_percent: 5, remaining_percent: 95, reset_after_seconds: 2505600, reset_at: 1782799999, window_seconds: 2592000 },
+    secondary_window: null,
   }
 }
 

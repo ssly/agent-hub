@@ -13,7 +13,8 @@ export const useSwitchStore = defineStore('switch', () => {
   const addFormOpen = ref(false)
   const switchConfirmId = ref<string | null>(null)
 
-  // Codex usage (5h / 7d windows) for the currently active account
+  // Codex usage windows for the currently active account.
+  // Plus/Pro: primary (5h) + secondary (7d). Free: primary (monthly) only.
   const codexUsage = ref<CodexUsage | null>(null)
   const codexUsageLoading = ref(false)
   const codexUsageError = ref<string | null>(null)
@@ -28,6 +29,11 @@ export const useSwitchStore = defineStore('switch', () => {
   const editSaving = ref(false)
   const deleteArmed = ref(false)
 
+  // "Clear active account" confirmation modal (deletes the live auth file,
+  // e.g. ~/.codex/auth.json, but never the account pool).
+  const clearActiveModalOpen = ref(false)
+  const clearActiveLoading = ref(false)
+
   async function selectAgent(agentType: string) {
     selectedAgent.value = agentType
     localStorage.setItem('ah-switch-agent', agentType)
@@ -40,6 +46,7 @@ export const useSwitchStore = defineStore('switch', () => {
     editContentLoading.value = false
     editSaving.value = false
     deleteArmed.value = false
+    clearActiveModalOpen.value = false
     await loadProfiles()
     // Auto-refresh Codex usage when entering the Codex view (1h cooldown)
     if (agentType === 'codex') ensureFreshCodexUsage()
@@ -108,6 +115,32 @@ export const useSwitchStore = defineStore('switch', () => {
     deleteArmed.value = false
   }
 
+  function openClearActiveModal() {
+    clearActiveModalOpen.value = true
+  }
+  function closeClearActiveModal() {
+    if (clearActiveLoading.value) return
+    clearActiveModalOpen.value = false
+  }
+  // Delete the live auth file (e.g. ~/.codex/auth.json) without backing it up.
+  // The account pool is never touched. Returns null on success, or an error
+  // string on failure so the component can surface a toast (the store stays
+  // free of i18n deps).
+  async function deleteActiveAuth(): Promise<string | null> {
+    if (!selectedAgent.value || clearActiveLoading.value) return null
+    clearActiveLoading.value = true
+    try {
+      await api.deleteActiveAuth(selectedAgent.value)
+      await loadProfiles()
+      clearActiveModalOpen.value = false
+      return null
+    } catch (e: any) {
+      return String(e?.message || e)
+    } finally {
+      clearActiveLoading.value = false
+    }
+  }
+
   function resetState() {
     addFormOpen.value = false
     switchConfirmId.value = null
@@ -118,13 +151,17 @@ export const useSwitchStore = defineStore('switch', () => {
     editContentLoading.value = false
     editSaving.value = false
     deleteArmed.value = false
+    clearActiveModalOpen.value = false
+    clearActiveLoading.value = false
   }
 
   return {
     selectedAgent, profiles, currentKey, addFormOpen, switchConfirmId,
     editModalOpen, editingProfileId, editNote, editContent, editContentLoading, editSaving, deleteArmed,
+    clearActiveModalOpen, clearActiveLoading,
     codexUsage, codexUsageLoading, codexUsageError, codexUsageLastQuery,
     selectAgent, loadProfiles, openEditModal, closeEditModal, resetState,
     ensureFreshCodexUsage, refreshCodexUsage,
+    openClearActiveModal, closeClearActiveModal, deleteActiveAuth,
   }
 })

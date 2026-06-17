@@ -134,18 +134,25 @@ export const getAuthProfileContent = (agentType: string, id: string) =>
 export const updateAuthProfileContent = (agentType: string, id: string, content: string) =>
   invoke<void>('update_auth_profile_content', { agentType, id, content })
 export const clearActiveAuth = (agentType: string) => invoke<void>('clear_active_auth', { agentType })
+// Delete the live auth file (e.g. ~/.codex/auth.json) WITHOUT backing it up.
+// The account pool (~/.agent-hub/switch/<agent>/) is left untouched.
+export const deleteActiveAuth = (agentType: string) => invoke<void>('delete_active_auth', { agentType })
 
-// Codex usage (5h / 7d windows) for the currently active account.
+// Codex usage windows for the currently active account.
+// Plus/Pro return a 5h primary window and a 7d secondary window; Free accounts
+// only expose a monthly primary window (secondary is null).
 export interface UsageWindow {
   used_percent: number
   remaining_percent: number
   reset_after_seconds: number
   reset_at: number
+  // Duration of the window in seconds (5h=18000, 7d=604800, monthly≈2592000).
+  window_seconds: number
 }
 export interface CodexUsage {
   plan_type: string
-  primary_window: UsageWindow
-  secondary_window: UsageWindow
+  primary_window: UsageWindow | null
+  secondary_window: UsageWindow | null
 }
 export const getCodexUsage = () => invoke<CodexUsage>('get_codex_usage')
 

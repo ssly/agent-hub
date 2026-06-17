@@ -5,7 +5,7 @@ import { useSwitchStore } from '@/stores/switch'
 import { useToast } from '@/composables/useToast'
 import * as api from '@/lib/api'
 import AppModal from '@/components/ui/AppModal.vue'
-import { RefreshCw, Gauge } from 'lucide-vue-next'
+import { RefreshCw, Gauge, Trash2 } from 'lucide-vue-next'
 
 const { t, locale } = useI18n()
 const store = useSwitchStore()
@@ -39,6 +39,53 @@ function fmtReset(secs?: number): string {
   }
   return t('switch.usage_reset_hm', { h, m })
 }
+
+// Pick a localized window label from its duration in seconds.
+// The backend now forwards `window_seconds` from OpenAI, so we label the
+// window by what the API actually says rather than hard-coding 5h/7d.
+//   ~2592000s (30d) → monthly   (Free plan)
+//   604800s   (7d)   → 7-day     (Plus/Pro secondary)
+//   18000s    (5h)   → 5-hour    (Plus/Pro primary)
+// Anything else falls back to a generic "Xh/Xd" label.
+function windowLabel(seconds?: number): string {
+  const s = seconds ?? 0
+  if (s > 0 && Math.abs(s - 2592000) <= 86400) return t('switch.usage_monthly_window')
+  if (s > 0 && Math.abs(s - 604800) <= 3600) return t('switch.usage_secondary_window')
+  if (s > 0 && Math.abs(s - 18000) <= 600) return t('switch.usage_primary_window')
+  // Generic fallback derived from the duration itself.
+  if (s >= 86400) {
+    const d = Math.round(s / 86400)
+    return t('switch.usage_reset_dh', { d, h: 0 })
+  }
+  if (s > 0) {
+    return t('switch.usage_reset_hm', { h: Math.round(s / 3600), m: 0 })
+  }
+  return t('switch.usage_primary_window')
+}
+
+// Build the list of windows that actually exist for this account.
+// Free accounts only have a primary (monthly) window; Plus/Pro also have a
+// secondary (7d) window. We drop nulls so the UI never renders an empty card.
+interface UsageCard { key: string; label: string; w: import('@/lib/api').UsageWindow }
+const usageWindows = computed<UsageCard[]>(() => {
+  const u = store.codexUsage
+  if (!u) return []
+  const cards: UsageCard[] = []
+  if (u.primary_window) {
+    cards.push({ key: 'primary', label: windowLabel(u.primary_window.window_seconds), w: u.primary_window })
+  }
+  if (u.secondary_window) {
+    cards.push({ key: 'secondary', label: windowLabel(u.secondary_window.window_seconds), w: u.secondary_window })
+  }
+  return cards
+})
+
+// Human-readable plan name for the badge (e.g. "free" → "Free").
+const planBadge = computed(() => {
+  const plan = (store.codexUsage?.plan_type || 'unknown')
+  const display = plan.charAt(0).toUpperCase() + plan.slice(1)
+  return t('switch.usage_plan_badge', { plan: display })
+})
 
 function fmtLastQuery(): string {
   if (!store.codexUsageLastQuery) return ''
@@ -190,6 +237,32 @@ async function confirmDelete() {
     showToast(String(e?.message || e), 'error')
   }
 }
+
+// --- Clear active account (delete the live auth file, keep the pool) ---
+// Path of the auth file that will be deleted, shown in the confirm modal.
+const clearActivePath = computed(() => {
+  switch (store.selectedAgent) {
+    case 'codex': return '~/.codex/auth.json'
+    case 'claude-code': return '~/.claude/settings.json'
+    default: return ''
+  }
+})
+// Display name of the agent for the "{agent} will be signed out" line.
+const clearActiveAgentName = computed(() => agentName.value || store.selectedAgent || '')
+
+async function handleConfirmClear() {
+  // Store returns null on success or an error string on failure.
+  const err = await store.deleteActiveAuth()
+  if (err) {
+    // "no_active_auth" is the backend sentinel for a missing auth file.
+    const msg = err === 'no_active_auth'
+      ? t('switch.clear_active_no_auth_error', { path: clearActivePath.value })
+      : err
+    showToast(msg, 'error')
+  } else {
+    showToast(t('switch.clear_active_done_toast'), 'success')
+  }
+}
 </script>
 
 <template>
@@ -205,6 +278,14 @@ async function confirmDelete() {
           <div class="flex gap-2 mb-4 flex-wrap items-center">
             <button class="btn btn-primary" @click="handleSaveCurrent">{{ t('switch.save_current') }}</button>
             <button class="btn btn-secondary" @click="store.addFormOpen = !store.addFormOpen">{{ t('switch.add_account') }}</button>
+            <button
+              class="btn btn-danger flex items-center gap-1"
+              :disabled="store.clearActiveLoading"
+              @click="store.openClearActiveModal()"
+            >
+              <Trash2 :size="14" />
+              {{ t('switch.clear_active') }}
+            </button>
             <div class="flex-1" />
             <span v-if="store.currentKey" class="text-xs truncate max-w-[200px]" style="color: var(--ink-3); font-family: var(--font-mono)">
               {{ t('switch.current_key') }}: {{ store.currentKey }}
@@ -321,14 +402,20 @@ async function confirmDelete() {
               {{ t('switch.usage_empty_hint') }}
             </div>
 
-            <!-- Data: 5h + 7d windows -->
+            <!-- No windows returned (e.g. some accounts return rate_limit but no usable windows) -->
+            <div v-else-if="usageWindows.length === 0" class="text-sm py-2 flex items-center justify-between gap-3" style="color: var(--ink-3)">
+              <span>{{ t('switch.usage_no_data') }}</span>
+              <button class="btn btn-secondary btn-sm" @click="handleRefreshUsage">{{ t('switch.usage_retry') }}</button>
+            </div>
+
+            <!-- Data: render whatever windows the API returned (1 for Free, 2 for Plus/Pro) -->
             <div v-else class="space-y-3 text-sm">
+              <div class="text-xs" style="color: var(--ink-3)">
+                <span class="inline-flex items-center px-2 py-0.5 rounded-full" style="background: var(--sunken); color: var(--ink-2)">{{ planBadge }}</span>
+              </div>
               <div
-                v-for="win in [
-                  { label: t('switch.usage_primary_window'), w: store.codexUsage.primary_window },
-                  { label: t('switch.usage_secondary_window'), w: store.codexUsage.secondary_window },
-                ]"
-                :key="win.label"
+                v-for="win in usageWindows"
+                :key="win.key"
                 class="p-3 rounded-lg"
                 style="background: var(--sunken)"
               >
@@ -402,6 +489,42 @@ async function confirmDelete() {
             @click="handleSaveEdit"
           >
             {{ t('switch.save_note') }}
+          </button>
+        </div>
+      </template>
+    </AppModal>
+
+    <!-- Clear Active Account Modal -->
+    <AppModal
+      :show="store.clearActiveModalOpen"
+      :title="t('switch.clear_active_title')"
+      width-class="w-[40rem]"
+      @close="store.closeClearActiveModal()"
+    >
+      <div class="space-y-3 text-sm">
+        <p style="color: var(--ink)">{{ t('switch.clear_active_warning_path', { path: clearActivePath }) }}</p>
+        <p style="color: var(--ink)">{{ t('switch.clear_active_warning_logout', { agent: clearActiveAgentName }) }}</p>
+        <p class="p-3 rounded-lg" style="background: var(--sunken); color: var(--ink-2)">
+          {{ t('switch.clear_active_warning_pool') }}
+        </p>
+      </div>
+
+      <template #footer>
+        <div class="flex items-center gap-2 w-full">
+          <button
+            class="btn btn-danger"
+            :disabled="store.clearActiveLoading"
+            @click="handleConfirmClear"
+          >
+            {{ t('switch.confirm_clear') }}
+          </button>
+          <div class="flex-1" />
+          <button
+            class="btn btn-secondary"
+            :disabled="store.clearActiveLoading"
+            @click="store.closeClearActiveModal()"
+          >
+            {{ t('action.cancel') }}
           </button>
         </div>
       </template>

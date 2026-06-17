@@ -149,7 +149,6 @@
     "deleted": "已删除。",
     "delete_failed": "删除失败：{error}",
     "saved": "已保存。",
-    "deleted": "已删除。",
     "import_hint": "粘贴 JSON 或 TOML 配置...",
     "parse_error": "解析错误：{error}",
     "sync": "同步",
@@ -240,6 +239,13 @@
     "clear_warning_title": "危险操作",
     "clear_warning_body": "操作不可撤销。系统将先自动保存当前 auth.json 为备份，再删除 ~/.codex/auth.json。",
     "confirm_clear": "确认清空",
+    "clear_active_title": "清空当前账号",
+    "clear_active_warning_path": "将删除文件：{path}",
+    "clear_active_warning_logout": "{agent} 将退出登录。",
+    "clear_active_warning_pool": "请确保当前账号已添加到账号池。账号池不会被删除。",
+    "clear_active_done_toast": "已清空当前账号",
+    "clear_active_no_auth_error": "未找到 {path}，无需清空",
+    "clear_active_failed_toast": "清空当前账号失败",
     "edit_content_btn": "编辑",
     "save_content": "保存内容",
     "content_saved_toast": "内容已更新",
@@ -256,6 +262,9 @@
     "usage_title": "Codex 用量（{name}）",
     "usage_primary_window": "5 小时窗",
     "usage_secondary_window": "7 天窗",
+    "usage_monthly_window": "月度额度",
+    "usage_plan_badge": "{plan} 套餐",
+    "usage_no_data": "该账号未返回用量窗口。",
     "usage_remaining": "{n}% 剩余",
     "usage_used_reset": "已用 {used}% · 重置 {reset}",
     "usage_loading": "正在查询 Codex 用量…",
@@ -263,7 +272,7 @@
     "usage_retry": "重试",
     "usage_refresh": "刷新",
     "usage_refresh_toast": "用量已刷新",
-    "usage_empty_hint": "点击「刷新」获取 5 小时窗和 7 天窗的已用/剩余百分比及重置时间。",
+    "usage_empty_hint": "点击「刷新」获取用量窗口（Plus/Pro 显示 5 小时窗 + 7 天窗；Free 仅显示月度额度）。",
     "usage_last_query": "上次查询：{time}",
     "usage_reset_now": "即将重置",
     "usage_reset_hm": "{h} 小时 {m} 分钟后",
@@ -307,6 +316,7 @@
   },
   "about": {
     "title": "关于 Agent Hub",
+    "tagline": "统一管理本地 AI Agent 平台的 Skill、MCP Server、会话与账号",
     "version_label": "当前版本",
     "author_label": "作者",
     "links_label": "链接",
@@ -328,6 +338,7 @@
     "retry_mirror": "使用国内镜像重试",
     "mirror_notice": "国内镜像仅在你主动选择时使用，安装包仍会进行签名校验。",
     "new_version_toast": "发现新版本 v{version}，点击左侧版本号查看详情并更新",
-    "update_available_short": "有更新"
+    "update_available_short": "有更新",
+    "downloading_title": "正在下载更新 {percent}%，点击查看"
   }
 }

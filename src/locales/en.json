@@ -149,7 +149,6 @@
     "deleted": "Deleted.",
     "delete_failed": "Delete failed: {error}",
     "saved": "Saved.",
-    "deleted": "Deleted.",
     "import_hint": "Paste JSON or TOML config...",
     "parse_error": "Parse error: {error}",
     "sync": "Sync",
@@ -240,6 +239,13 @@
     "clear_warning_title": "Danger",
     "clear_warning_body": "This cannot be undone. The system will first auto-save the current auth.json as a backup, then delete ~/.codex/auth.json.",
     "confirm_clear": "Confirm Clear",
+    "clear_active_title": "Clear Active Account",
+    "clear_active_warning_path": "This will delete the file: {path}",
+    "clear_active_warning_logout": "{agent} will be signed out.",
+    "clear_active_warning_pool": "Make sure the current account has already been added to the account pool. The pool itself will NOT be deleted.",
+    "clear_active_done_toast": "Active account cleared",
+    "clear_active_no_auth_error": "No {path} found, nothing to clear.",
+    "clear_active_failed_toast": "Failed to clear active account",
     "edit_content_btn": "Edit",
     "save_content": "Save Content",
     "content_saved_toast": "Content updated",
@@ -256,6 +262,9 @@
     "usage_title": "Codex Usage ({name})",
     "usage_primary_window": "5-hour window",
     "usage_secondary_window": "7-day window",
+    "usage_monthly_window": "Monthly window",
+    "usage_plan_badge": "{plan} plan",
+    "usage_no_data": "No usage windows returned for this account.",
     "usage_remaining": "{n}% remaining",
     "usage_used_reset": "Used {used}% · resets {reset}",
     "usage_loading": "Querying Codex usage…",
@@ -263,7 +272,7 @@
     "usage_retry": "Retry",
     "usage_refresh": "Refresh",
     "usage_refresh_toast": "Usage refreshed",
-    "usage_empty_hint": "Click \"Refresh\" to get used/remaining percent and reset time for the 5h and 7d windows.",
+    "usage_empty_hint": "Click \"Refresh\" to load usage windows (Plus/Pro show 5h + 7d; Free shows a monthly window).",
     "usage_last_query": "Last query: {time}",
     "usage_reset_now": "resets soon",
     "usage_reset_hm": "in {h}h {m}m",
@@ -307,6 +316,7 @@
   },
   "about": {
     "title": "About Agent Hub",
+    "tagline": "Unify skills, MCP servers, sessions and accounts across local AI agent platforms",
     "version_label": "Version",
     "author_label": "Author",
     "links_label": "Links",
@@ -328,6 +338,7 @@
     "retry_mirror": "Retry via China Mirror",
     "mirror_notice": "The mirror is used only when you choose it. The downloaded package is still signature-verified.",
     "new_version_toast": "New version v{version} found. Click the version in the sidebar to view details and update.",
-    "update_available_short": "Update"
+    "update_available_short": "Update",
+    "downloading_title": "Downloading update {percent}% — click to view"
   }
 }
