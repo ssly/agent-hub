@@ -27,6 +27,10 @@ use tauri_plugin_updater::Update;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 const UPDATE_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
+/// Error returned when a download is cancelled by the user.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+const CANCELLED_ERROR: &str = "__cancelled__";
+
 // --- View types ---
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -831,6 +835,18 @@ pub fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+/// Signal the resumable updater to abort the current download. The download
+/// loop checks this flag each iteration and returns early with a sentinel
+/// error so the frontend knows the cancellation was intentional.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[tauri::command]
+pub fn cancel_update_download(
+    cancel_flag: tauri::State<'_, crate::UpdateCancelFlag>,
+) -> Result<(), CommandError> {
+    cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+    Ok(())
+}
+
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tauri::command(async)]
 pub async fn download_and_install_update_resumable<R: Runtime>(
@@ -839,7 +855,11 @@ pub async fn download_and_install_update_resumable<R: Runtime>(
     rid: ResourceId,
     on_event: Channel<ResumableDownloadEvent>,
     use_mirror: bool,
+    cancel_flag: tauri::State<'_, crate::UpdateCancelFlag>,
 ) -> Result<(), CommandError> {
+    // Reset the cancel flag before starting a new download.
+    cancel_flag.store(false, std::sync::atomic::Ordering::Relaxed);
+
     let update = webview
         .resources_table()
         .get::<Update>(rid)
@@ -922,6 +942,13 @@ pub async fn download_and_install_update_resumable<R: Runtime>(
 
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
+        // Check the cancellation flag each iteration so the user can abort
+        // mid-download (e.g. when switching to a China mirror).
+        if cancel_flag.load(std::sync::atomic::Ordering::Relaxed) {
+            drop(file);
+            let _ = fs::remove_file(&partial_path);
+            return Err(CommandError::SyncError(CANCELLED_ERROR.to_string()));
+        }
         let chunk = chunk.map_err(|err| CommandError::SyncError(err.to_string()))?;
         file.write_all(&chunk)
             .map_err(|err| CommandError::SyncError(err.to_string()))?;
@@ -960,6 +987,12 @@ pub async fn download_and_install_update_resumable(
     Err(CommandError::SyncError(
         "Resumable updater is not available on this platform.".to_string(),
     ))
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+#[tauri::command]
+pub fn cancel_update_download() -> Result<(), CommandError> {
+    Ok(())
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]

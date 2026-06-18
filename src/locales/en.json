@@ -336,6 +336,8 @@
     "timeout_error": "The download did not finish within {minutes} minutes. Retry or use the China mirror.",
     "retry_github": "Retry GitHub Download",
     "retry_mirror": "Retry via China Mirror",
+    "use_mirror": "Download via China Mirror",
+    "switch_to_mirror": "Switch to China Mirror",
     "mirror_notice": "The mirror is used only when you choose it. The downloaded package is still signature-verified.",
     "new_version_toast": "New version v{version} found. Click the version in the sidebar to view details and update.",
     "update_available_short": "Update",

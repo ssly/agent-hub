@@ -275,12 +275,33 @@ async function handleInstallUpdate(useMirror = false) {
     await relaunch()
   } catch (e: any) {
     const rawError = e?.message || e?.SyncError || String(e)
+    // 如果是用户主动取消（切换到镜像），不显示错误
+    if (rawError.includes('__cancelled__')) {
+      return
+    }
     appStore.updateError = /timed?\s*out|timeout/i.test(rawError)
       ? t('about.timeout_error', { minutes: UPDATE_TIMEOUT_MINUTES })
       : rawError
     appStore.updateStatus = 'error'
     showToast((t('about.install_failed') || 'Install failed') + `: ${appStore.updateError}`, 'error')
   }
+}
+
+async function handleSwitchToMirror() {
+  if (!aboutUpdateInfo.value || !isTauri) return
+
+  try {
+    // 通知后端取消当前下载
+    await invoke('cancel_update_download')
+  } catch {
+    // 忽略取消命令的错误
+  }
+
+  // 等待后端下载循环检测到取消标志并退出
+  await new Promise(resolve => setTimeout(resolve, 300))
+
+  // 开始镜像下载
+  await handleInstallUpdate(true)
 }
 
 function handleOpenGithub() {
@@ -596,6 +617,13 @@ onMounted(async () => {
             >
               {{ t('about.install_restart') }}
             </button>
+
+            <button
+              class="btn btn-secondary w-full"
+              @click="handleInstallUpdate(true)"
+            >
+              {{ t('about.use_mirror') }}
+            </button>
           </div>
 
           <div v-if="aboutUpdateStatus === 'installing'" class="about-update__progress">
@@ -614,6 +642,12 @@ onMounted(async () => {
             <div class="about-update__meta font-mono tabular-nums">
               {{ aboutProgressText }}
             </div>
+            <button
+              class="btn btn-secondary w-full"
+              @click="handleSwitchToMirror"
+            >
+              {{ t('about.switch_to_mirror') }}
+            </button>
           </div>
 
           <div v-if="aboutUpdateStatus === 'error' && aboutError" class="about-update__error">

@@ -15,10 +15,15 @@ mod trash;
 
 use state::AppState;
 
+/// Atomic flag used to signal the resumable updater to abort the current
+/// download. Set by `cancel_update_download`, checked in the download loop.
+pub type UpdateCancelFlag = std::sync::atomic::AtomicBool;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .manage(std::sync::Mutex::new(AppState::new()))
+        .manage(UpdateCancelFlag::new(false))
         .setup(|app| {
             #[cfg(desktop)]
             app.handle()
@@ -66,6 +71,7 @@ pub fn run() {
             commands::scan_invalid_skills_cmd,
             commands::get_app_version,
             commands::download_and_install_update_resumable,
+            commands::cancel_update_download,
             commands::list_session_platforms,
             commands::list_sessions,
             commands::list_session_terminals,

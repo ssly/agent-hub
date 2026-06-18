@@ -336,6 +336,8 @@
     "timeout_error": "下载在 {minutes} 分钟内未完成，请重试或选择国内镜像。",
     "retry_github": "重试 GitHub 下载",
     "retry_mirror": "使用国内镜像重试",
+    "use_mirror": "使用国内镜像下载",
+    "switch_to_mirror": "切换到国内镜像",
     "mirror_notice": "国内镜像仅在你主动选择时使用，安装包仍会进行签名校验。",
     "new_version_toast": "发现新版本 v{version}，点击左侧版本号查看详情并更新",
     "update_available_short": "有更新",
