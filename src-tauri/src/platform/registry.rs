@@ -20,9 +20,9 @@ pub fn builtin_platforms() -> Vec<PlatformDef> {
             skill_dir: home.join(".claude/skills"),
         },
         PlatformDef {
-            id: "codex-cli".into(),
-            display_name: "Codex CLI".into(),
-            description: "OpenAI Codex CLI agent skills".into(),
+            id: "codex".into(),
+            display_name: "Codex".into(),
+            description: "OpenAI Codex agent skills".into(),
             presence_path: home.join(".codex"),
             skill_dir: home.join(".codex/skills"),
         },

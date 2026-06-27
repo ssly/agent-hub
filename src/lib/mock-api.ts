@@ -15,7 +15,7 @@ const PLATFORMS = [
   },
   {
     id: 'codex',
-    display_name: 'Codex CLI',
+    display_name: 'Codex',
     skill_dir: '~/.codex/skills',
     skill_count: 5,
   },
@@ -72,7 +72,7 @@ function makeMcpServers(platformId: string) {
 
 const SESSION_PLATFORMS = [
   { id: 'claude-code', display_name: 'Claude Code', session_count: 28 },
-  { id: 'codex', display_name: 'Codex CLI', session_count: 5 },
+  { id: 'codex', display_name: 'Codex', session_count: 5 },
 ]
 
 function makeSessions(offset: number, limit: number) {
@@ -146,7 +146,6 @@ export async function readSkillFile(_platformId: string, _skillName: string, _fo
   return `// Mock content for ${filePath}\nexport function main() {\n  console.log("Hello from ${_skillName}");\n}\n`
 }
 export async function deleteSkill() { await delay() }
-export async function scanInvalidSkills() { await delay(); return [] }
 
 // MCP
 export async function listMcpPlatforms() { await delay(); return MCP_PLATFORMS }

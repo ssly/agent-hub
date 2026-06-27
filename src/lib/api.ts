@@ -60,7 +60,6 @@ export const readSkillFile = (platformId: string, skillName: string, folder: str
   invoke<string>('read_skill_file', { platformId, skillName, folder, filePath })
 export const deleteSkill = (platformId: string, skillName: string, folder: string) =>
   invoke<void>('delete_skill_cmd', { platformId, skillName, folder })
-export const scanInvalidSkills = () => invoke<any[]>('scan_invalid_skills_cmd')
 
 // MCP
 export const listMcpPlatforms = () => invoke<any[]>('list_mcp_platforms')

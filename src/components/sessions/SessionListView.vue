@@ -3,6 +3,7 @@ import { useI18n } from 'vue-i18n'
 import { useSessionsStore } from '@/stores/sessions'
 import { formatInt, formatSessionTime } from '@/lib/utils'
 import { useToast } from '@/composables/useToast'
+import { useHoverResetId, useHoverResetBool } from '@/composables/useHoverReset'
 import * as api from '@/lib/api'
 import { ref, computed } from 'vue'
 import AppModal from '@/components/ui/AppModal.vue'
@@ -12,23 +13,12 @@ const { t, locale } = useI18n()
 const store = useSessionsStore()
 const { showToast } = useToast()
 const resumingId = ref<string | null>(null)
-const confirmDeleteId = ref<string | null>(null)
+const { armedId: confirmDeleteId, arm: armDelete, reset: resetDelete } = useHoverResetId()
 
-// Batch delete: a two-click confirm keeps it consistent with the single-delete
-// pattern but uses a dialog-free chip. `confirmBatch` flips to true on first
-// click of the delete button; a second click within the window fires bulkDelete.
-const confirmBatch = ref(false)
-let confirmBatchTimer: ReturnType<typeof setTimeout> | null = null
-
-function armConfirmBatch() {
-  confirmBatch.value = true
-  if (confirmBatchTimer) clearTimeout(confirmBatchTimer)
-  confirmBatchTimer = setTimeout(() => { confirmBatch.value = false }, 3500)
-}
-function disarmConfirmBatch() {
-  confirmBatch.value = false
-  if (confirmBatchTimer) { clearTimeout(confirmBatchTimer); confirmBatchTimer = null }
-}
+// Batch delete uses the same two-step confirm pattern as single delete: first
+// click arms the chip, a second click fires bulkDelete. The chip disarms as
+// soon as the pointer leaves the button.
+const { armed: confirmBatch, arm: armBatch, reset: resetBatch } = useHoverResetBool()
 
 async function handleBulkDelete() {
   if (store.selectedCount === 0) {
@@ -36,10 +26,10 @@ async function handleBulkDelete() {
     return
   }
   if (!confirmBatch.value) {
-    armConfirmBatch()
+    armBatch()
     return
   }
-  disarmConfirmBatch()
+  resetBatch()
   const count = store.selectedCount
   try {
     const result = await store.bulkDelete()
@@ -94,11 +84,10 @@ async function handleResume(session: any) {
 
 async function handleDelete(session: any) {
   if (confirmDeleteId.value !== session.id) {
-    confirmDeleteId.value = session.id
-    setTimeout(() => { if (confirmDeleteId.value === session.id) confirmDeleteId.value = null }, 3000)
+    armDelete(session.id)
     return
   }
-  confirmDeleteId.value = null
+  resetDelete()
   try {
     await api.deleteSession(session.platform_id || store.selectedPlatformId!, session.id)
     await store.refreshPlatforms(true)
@@ -278,6 +267,7 @@ function clearSessionSearch() {
               :disabled="store.isBulkDeleting || store.selectedCount === 0"
               :title="confirmBatch ? t('session.batch_delete_confirm', { n: store.selectedCount }) : ''"
               @click="handleBulkDelete"
+              @mouseleave="resetBatch()"
             >
               {{ store.isBulkDeleting
                 ? t('session.deleting')
@@ -333,6 +323,7 @@ function clearSessionSearch() {
                   :class="{ 'is-confirming': confirmDeleteId === session.id }"
                   :title="confirmDeleteId === session.id ? t('session.confirm_delete') : t('session.delete')"
                   @click="handleDelete(session)"
+                  @mouseleave="resetDelete()"
                 >
                   <svg
                     v-if="confirmDeleteId !== session.id"

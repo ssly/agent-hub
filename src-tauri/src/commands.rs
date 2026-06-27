@@ -604,46 +604,12 @@ impl From<&crate::trash::TrashItem> for TrashItemView {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct InvalidSkillView {
-    pub path: String,
-    pub platform_id: String,
-    pub platform_name: String,
-    pub reason: String,
-}
-
-impl From<&crate::skill::InvalidSkill> for InvalidSkillView {
-    fn from(s: &crate::skill::InvalidSkill) -> Self {
-        Self {
-            path: s.path.clone(),
-            platform_id: s.platform_id.clone(),
-            platform_name: s.platform_name.clone(),
-            reason: s.reason.clone(),
-        }
-    }
-}
-
 #[tauri::command]
 pub fn list_trash_cmd() -> Vec<TrashItemView> {
     crate::trash::list_trash()
         .iter()
         .map(TrashItemView::from)
         .collect()
-}
-
-#[tauri::command]
-pub fn scan_invalid_skills_cmd(state: tauri::State<'_, SafeState>) -> Vec<InvalidSkillView> {
-    let s = state.lock().unwrap();
-    let mut invalid: Vec<InvalidSkillView> = Vec::new();
-    for platform in &s.platforms {
-        let items = crate::skill::scan_invalid_skills(
-            &platform.skill_dir,
-            &platform.id,
-            &platform.display_name,
-        );
-        invalid.extend(items.iter().map(InvalidSkillView::from));
-    }
-    invalid
 }
 
 #[tauri::command]
@@ -1213,6 +1179,9 @@ pub struct McpSyncTarget {
 pub fn get_mcp_sync_targets(platform_id: String, server_name: String) -> Vec<McpSyncTarget> {
     crate::mcp::builtin_mcp_platforms()
         .into_iter()
+        // Only JSON platforms can be sync targets. TOML platforms (Codex) use a
+        // different config structure and don't support cross-format MCP sync.
+        .filter(|def| matches!(def.format, crate::mcp::McpFormat::Json))
         .filter(|def| def.presence_path.exists())
         .filter(|def| def.id != platform_id)
         .map(|def| {

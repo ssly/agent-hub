@@ -3,8 +3,9 @@ import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useSkillsStore } from '@/stores/skills'
-import { formatBytes, avatarToneFromName } from '@/lib/utils'
+import { formatBytes } from '@/lib/utils'
 import { useToast } from '@/composables/useToast'
+import { useHoverResetId } from '@/composables/useHoverReset'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -40,8 +41,7 @@ function handleRowClick(name: string, folder: string) {
 }
 
 const activeKebabSkill = ref<{ name: string; folder: string } | null>(null)
-const confirmingDeleteSkill = ref<string | null>(null)
-let deleteConfirmTimeout: ReturnType<typeof setTimeout>
+const { armedId: confirmingDeleteSkill, arm: armConfirmDelete, reset: resetConfirmDelete } = useHoverResetId()
 
 function toggleKebab(skill: any) {
   if (activeKebabSkill.value?.name === skill.name && activeKebabSkill.value?.folder === skill.folder) {
@@ -49,7 +49,7 @@ function toggleKebab(skill: any) {
   } else {
     activeKebabSkill.value = { name: skill.name, folder: skill.folder || '' }
   }
-  confirmingDeleteSkill.value = null
+  resetConfirmDelete()
 }
 
 function handleKebabDiff(skill: any) {
@@ -74,17 +74,11 @@ async function handleDiffClick() {
 function handleKebabDelete(skill: any) {
   const key = `${skill.folder || ''}:${skill.name}`
   if (confirmingDeleteSkill.value !== key) {
-    confirmingDeleteSkill.value = key
-    clearTimeout(deleteConfirmTimeout)
-    deleteConfirmTimeout = setTimeout(() => {
-      if (confirmingDeleteSkill.value === key) {
-        confirmingDeleteSkill.value = null
-      }
-    }, 3000)
+    armConfirmDelete(key)
     return
   }
 
-  confirmingDeleteSkill.value = null
+  resetConfirmDelete()
   activeKebabSkill.value = null
   store.performDeleteSkill(skill.name, skill.folder || '')
     .then(() => {
@@ -98,7 +92,7 @@ function handleKebabDelete(skill: any) {
 
 function closeKebab() {
   activeKebabSkill.value = null
-  confirmingDeleteSkill.value = null
+  resetConfirmDelete()
 }
 
 onMounted(() => {
@@ -107,7 +101,6 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('click', closeKebab)
-  clearTimeout(deleteConfirmTimeout)
 })
 </script>
 
@@ -129,16 +122,13 @@ onUnmounted(() => {
         <div class="ah-kpi-row">
           <article
             v-for="(kpi, i) in [
-              { label: t('ui.skills_tab'), value: totalSkills, unit: t('ui.skills_tab'), tone: 'accent' },
-              { label: t('action.refresh'), value: enabledSkills, unit: t('ui.skills_tab'), tone: 'success' },
-              { label: t('skill.size'), value: totalSize, unit: '', tone: 'warning' },
+              { label: t('ui.skills_tab'), value: totalSkills, unit: t('ui.skills_tab') },
+              { label: t('action.refresh'), value: enabledSkills, unit: t('ui.skills_tab') },
+              { label: t('skill.size'), value: totalSize, unit: '' },
             ]"
             :key="i"
             class="ah-kpi"
           >
-            <div :class="['ah-kpi__chip', `ah-kpi__chip--${kpi.tone}`]">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
-            </div>
             <div class="ah-kpi__body">
               <p class="ah-kpi__label">{{ kpi.label }}</p>
               <p class="ah-kpi__value">
@@ -191,9 +181,6 @@ onUnmounted(() => {
               >
                 <!-- Name -->
                 <div class="ah-row__name">
-                  <div :class="['ah-avatar', `ah-avatar--${avatarToneFromName(skill.name)}`]">
-                    {{ (skill.name || '?').charAt(0).toUpperCase() }}
-                  </div>
                   <div class="ah-row__name-text">
                     <span class="ah-row__skill-name">{{ skill.name }}</span>
                     <span v-if="skill.version" class="ah-version-chip">v{{ skill.version }}</span>
@@ -230,6 +217,7 @@ onUnmounted(() => {
                       :class="confirmingDeleteSkill === `${skill.folder || ''}:${skill.name}` ? 'text-white' : 'text-danger hover:bg-danger-soft'"
                       :style="confirmingDeleteSkill === `${skill.folder || ''}:${skill.name}` ? { background: 'var(--danger)' } : {}"
                       @click.stop="handleKebabDelete(skill)"
+                      @mouseleave="resetConfirmDelete()"
                     >
                       {{ confirmingDeleteSkill === `${skill.folder || ''}:${skill.name}` ? t('skill.confirm_delete') : t('skill.delete') }}
                     </button>

@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { onMounted, watch, ref, computed } from 'vue'
+import { onMounted, watch, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { invoke, Channel } from '@tauri-apps/api/core'
 import { useAppStore } from '@/stores/app'
 import { useSkillsStore } from '@/stores/skills'
 import { useToast } from '@/composables/useToast'
+import { useHoverResetId, useHoverResetBool } from '@/composables/useHoverReset'
 import { formatInt, formatSessionTime } from '@/lib/utils'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import AppToolbar from '@/components/layout/AppToolbar.vue'
@@ -27,23 +28,6 @@ const skillsStore = useSkillsStore()
 const { showToast } = useToast()
 const { t, locale } = useI18n()
 
-const copyLabel = ref('')
-const displayCopyLabel = computed(() => copyLabel.value || t('action.copy'))
-
-const fixPromptText = computed(() => {
-  const paths = skillsStore.invalidSkills.map(item => item.path).join('\n')
-  return t('scan_invalid.fix_prompt', { paths })
-})
-
-function handleCopyFixPrompt() {
-  navigator.clipboard.writeText(fixPromptText.value).then(() => {
-    copyLabel.value = t('action.copied')
-    setTimeout(() => {
-      copyLabel.value = ''
-    }, 1500)
-  })
-}
-
 async function handleDoSync() {
   if (!skillsStore.syncTargetPlatformId) return
   try {
@@ -54,37 +38,22 @@ async function handleDoSync() {
   }
 }
 
-// Trash deletion uses a two-click confirm (Tauri's webview has no native
-// confirm() dialog, so window.confirm silently returns false — which made the
-// delete button appear to do nothing). First click arms the confirm chip; a
-// second click within the window actually deletes. Any id not armed is ignored.
-const armedDeleteId = ref<string | null>(null)
-const armedEmpty = ref(false)
-let armTimer: ReturnType<typeof setTimeout> | null = null
-
-function clearArm() {
-  armedDeleteId.value = null
-  armedEmpty.value = false
-  if (armTimer) { clearTimeout(armTimer); armTimer = null }
-}
-function armDelete(id: string) {
-  clearArm()
-  armedDeleteId.value = id
-  armTimer = setTimeout(clearArm, 3500)
-}
-function armEmpty() {
-  clearArm()
-  armedEmpty.value = true
-  armTimer = setTimeout(clearArm, 3500)
-}
+// Trash deletion uses a two-step confirm: first click arms the danger chip,
+// a second click deletes. The chip disarms the instant the pointer leaves the
+// button (no timer), so users cancel by simply moving away. Tauri's webview
+// has no native confirm() dialog, so we can't rely on window.confirm.
+const { armedId: armedDeleteId, arm: armDelete, reset: resetDelete } = useHoverResetId()
+const { armed: armedEmpty, arm: armEmpty, reset: resetEmpty } = useHoverResetBool()
 
 function onTrashModalClose() {
-  clearArm()
+  resetDelete()
+  resetEmpty()
   appStore.trashModalOpen = false
 }
 
 async function handleRestoreTrash(id: string) {
-  clearArm()
+  resetDelete()
+  resetEmpty()
   try {
     await appStore.restoreTrash(id)
     showToast(t('trash.restored'), 'success')
@@ -98,7 +67,7 @@ async function handleDeleteTrashForever(id: string) {
     armDelete(id)
     return
   }
-  clearArm()
+  resetDelete()
   try {
     await appStore.deleteTrashForever(id)
     showToast(t('trash.deleted'), 'success')
@@ -112,7 +81,7 @@ async function handleEmptyTrash() {
     armEmpty()
     return
   }
-  clearArm()
+  resetEmpty()
   try {
     await appStore.emptyTrash()
     showToast(t('trash.emptied'), 'success')
@@ -363,56 +332,6 @@ onMounted(async () => {
     </main>
     <AppToast />
 
-    <!-- Scan Invalid Skills Modal -->
-    <AppModal
-      :show="skillsStore.scanModalOpen"
-      :title="t('scan_invalid.title', { count: skillsStore.invalidSkills.length })"
-      @close="skillsStore.scanModalOpen = false"
-    >
-      <div class="space-y-4">
-        <p class="text-xs" style="color: var(--ink-3)">{{ t('scan_invalid.subtitle') }}</p>
-        <div class="space-y-1 max-h-[30vh] overflow-y-auto">
-          <div
-            v-for="item in skillsStore.invalidSkills"
-            :key="item.path"
-            class="flex items-start gap-2 p-3 rounded"
-            style="background: var(--sunken)"
-          >
-            <span class="text-yellow-500 font-bold">⚠️</span>
-            <div class="flex-1 min-w-0">
-              <div class="text-sm truncate" style="color: var(--ink)" :title="item.path">{{ item.path }}</div>
-              <div class="text-xs" style="color: var(--ink-3)">
-                {{ item.platform_name }} · <span class="text-red-500">{{ item.reason }}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div class="border-t pt-4" style="border-color: var(--hairline)">
-          <div class="flex items-center justify-between mb-2">
-            <span class="text-xs font-semibold" style="color: var(--ink-2)">{{ t('scan_invalid.fix_prompt_label') }}</span>
-            <button
-              class="text-xs cursor-pointer flex items-center gap-1"
-              style="color: var(--accent)"
-              @click="handleCopyFixPrompt"
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-              {{ displayCopyLabel }}
-            </button>
-          </div>
-          <textarea
-            readonly
-            class="w-full h-24 text-xs rounded p-2 resize-none font-mono"
-            style="background: var(--sunken); border: 1px solid var(--border); color: var(--ink)"
-            :value="fixPromptText"
-          />
-          <p class="text-[11px] mt-1" style="color: var(--ink-3)">{{ t('scan_invalid.copy_hint') }}</p>
-        </div>
-      </div>
-      <template #footer>
-        <button class="btn btn-secondary" @click="skillsStore.scanModalOpen = false">{{ t('action.close') }}</button>
-      </template>
-    </AppModal>
-
     <!-- Diff Platform Selection Modal -->
     <AppModal
       :show="skillsStore.diffPlatformModalOpen"
@@ -513,6 +432,7 @@ onMounted(async () => {
               class="btn btn-sm trash-confirm-btn"
               :class="armedDeleteId === item.id ? 'trash-confirm-btn--armed' : 'btn-danger'"
               @click="handleDeleteTrashForever(item.id)"
+              @mouseleave="resetDelete()"
             >
               {{ armedDeleteId === item.id ? t('trash.confirm_delete_hint') : t('trash.delete_forever') }}
             </button>
@@ -525,6 +445,7 @@ onMounted(async () => {
           class="btn trash-confirm-btn"
           :class="armedEmpty ? 'trash-confirm-btn--armed' : 'btn-danger'"
           @click="handleEmptyTrash"
+          @mouseleave="resetEmpty()"
         >
           {{ armedEmpty ? t('trash.confirm_empty_hint') : t('trash.empty_trash') }}
         </button>
@@ -862,8 +783,8 @@ onMounted(async () => {
   word-break: break-all;
 }
 
-/* Two-click delete confirm: a quiet danger button turns into a solid danger
-   chip on first click (mirrors the session-card delete pattern). Tauri's
+/* Two-step delete confirm: a quiet danger button turns into a solid danger
+   chip on first click; moving the pointer away disarms it instantly. Tauri's
    webview has no native confirm() dialog, so we can't rely on window.confirm. */
 .trash-confirm-btn--armed {
   background: var(--danger);

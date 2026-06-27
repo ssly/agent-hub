@@ -35,8 +35,8 @@ pub fn list_session_platforms() -> Result<Vec<SessionPlatform>, String> {
     let codex_count = codex::count_codex_sessions()?;
     if codex_count > 0 {
         platforms.push(SessionPlatform {
-            id: "codex-cli".to_string(),
-            display_name: "Codex CLI".to_string(),
+            id: "codex".to_string(),
+            display_name: "Codex".to_string(),
             session_count: codex_count,
         });
     }
@@ -62,7 +62,7 @@ pub fn list_sessions(
     let page_limit = limit.clamp(1, MAX_SESSION_PAGE_SIZE);
     let all_sessions = match platform_id {
         "claude-code" => claude::list_claude_sessions_all()?,
-        "codex-cli" => codex::list_codex_sessions_all()?,
+        "codex" => codex::list_codex_sessions_all()?,
         "kiro" => kiro::list_kiro_sessions_all()?,
         _ => return Err(format!("Unsupported platform: {}", platform_id)),
     };
@@ -424,7 +424,7 @@ pub fn get_session_messages(
 ) -> Result<Vec<SessionMessage>, String> {
     match platform_id {
         "claude-code" => claude::get_claude_messages(session_id, offset, limit),
-        "codex-cli" => codex::get_codex_messages(session_id, offset, limit),
+        "codex" => codex::get_codex_messages(session_id, offset, limit),
         "kiro" => kiro::get_kiro_messages(session_id, offset, limit),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
@@ -437,7 +437,7 @@ pub fn search_session_messages(
     let query_lower = query.to_lowercase();
     match platform_id {
         "claude-code" => claude::search_claude_messages(&query_lower),
-        "codex-cli" => codex::search_codex_messages(&query_lower),
+        "codex" => codex::search_codex_messages(&query_lower),
         "kiro" => kiro::search_kiro_messages(&query_lower),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
@@ -446,7 +446,7 @@ pub fn search_session_messages(
 pub fn delete_session(platform_id: &str, session_id: &str) -> Result<(), String> {
     match platform_id {
         "claude-code" => claude::delete_claude_session(session_id),
-        "codex-cli" => codex::delete_codex_session(session_id),
+        "codex" => codex::delete_codex_session(session_id),
         "kiro" => kiro::delete_kiro_session(session_id),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
@@ -465,7 +465,7 @@ pub fn delete_sessions(platform_id: &str, session_ids: &[String]) -> BatchDelete
         return BatchDeleteResult { deleted, failed };
     }
 
-    if platform_id == "codex-cli" {
+    if platform_id == "codex" {
         match codex::delete_codex_sessions(session_ids) {
             Ok(changed) => {
                 deleted = changed;
@@ -512,7 +512,7 @@ pub fn delete_sessions(platform_id: &str, session_ids: &[String]) -> BatchDelete
 fn build_resume_command(platform_id: &str, session_id: &str) -> Result<String, String> {
     match platform_id {
         "claude-code" => Ok(format!("claude --resume {}", shell_quote(session_id))),
-        "codex-cli" => Ok(format!("codex resume {}", shell_quote(session_id))),
+        "codex" => Ok(format!("codex resume {}", shell_quote(session_id))),
         "kiro" => {
             if !command_exists("kiro-cli") {
                 return Err("Kiro CLI is not available on PATH.".to_string());

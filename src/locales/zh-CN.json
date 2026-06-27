@@ -205,15 +205,6 @@
     "reason_http": "服务器错误",
     "reason_other": "未知错误"
   },
-  "scan_invalid": {
-    "title": "发现 {count} 个不合法的 Skill",
-    "subtitle": "以下 Skill 目录存在问题，建议修复",
-    "all_good": "所有 Skill 均合法",
-    "error": "检测失败: {error}",
-    "fix_prompt_label": "修复提示（可发送给 Agent）",
-    "copy_hint": "点击复制按钮，或将内容选中后复制",
-    "fix_prompt": "请帮我修复以下不合法的 Skill 目录。每个目录需要包含一个合法的 SKILL.md 文件（带有正确的 frontmatter，包含 name 字段，以及正文内容）。\n\n不合法的 Skill 路径:\n{paths}"
-  },
   "switch": {
     "title": "切换账号",
     "save_current": "保存当前",

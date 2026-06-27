@@ -36,8 +36,8 @@ pub fn builtin_mcp_platforms() -> Vec<McpPlatformDef> {
             mcp_key: "mcpServers".into(),
         },
         McpPlatformDef {
-            id: "codex-cli".into(),
-            display_name: "Codex CLI".into(),
+            id: "codex".into(),
+            display_name: "Codex".into(),
             presence_path: home.join(".codex"),
             config_path: home.join(".codex/config.toml"),
             format: McpFormat::Toml,

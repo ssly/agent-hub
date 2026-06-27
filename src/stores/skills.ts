@@ -17,8 +17,6 @@ export const useSkillsStore = defineStore('skills', () => {
   const searchQuery = ref('')
 
   // Modal States
-  const scanModalOpen = ref(false)
-  const invalidSkills = ref<any[]>([])
   const diffPlatformModalOpen = ref(false)
   const diffCandidates = ref<any[]>([])
   const syncPlatformModalOpen = ref(false)
@@ -122,12 +120,6 @@ export const useSkillsStore = defineStore('skills', () => {
     }
   }
 
-  async function scanInvalidSkills() {
-    const results = await api.scanInvalidSkills()
-    invalidSkills.value = results
-    scanModalOpen.value = true
-  }
-
   async function loadDiffCandidates() {
     if (!selectedPlatformId.value || !selectedSkillName.value) return
     diffCandidates.value = await api.getDiffCandidates(selectedPlatformId.value, selectedSkillName.value, selectedFolder.value)
@@ -164,11 +156,11 @@ export const useSkillsStore = defineStore('skills', () => {
     platforms, skills, selectedPlatformId, selectedSkillName, selectedFolder,
     skillSortBy, skillSortDir, collapsedFolders, diffResult,
     searchResults, searchLoading, searchQuery,
-    scanModalOpen, invalidSkills, diffPlatformModalOpen, diffCandidates,
+    diffPlatformModalOpen, diffCandidates,
     syncPlatformModalOpen, syncTargets, syncOverwrite, syncTargetPlatformId,
     selectedPlatform,
     refreshPlatforms, reloadPlatforms, loadSkills, selectPlatform, selectSkill,
     backToList, toggleFolder, toggleSort, doSearch,
-    scanInvalidSkills, loadDiffCandidates, startDiff, loadSyncTargets, startSync, performDeleteSkill,
+    loadDiffCandidates, startDiff, loadSyncTargets, startSync, performDeleteSkill,
   }
 })

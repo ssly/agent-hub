@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::session::models::{SessionMessage, SessionSummary};
 
-const PLATFORM_ID: &str = "codex-cli";
+const PLATFORM_ID: &str = "codex";
 
 pub fn count_codex_sessions() -> Result<usize, String> {
     let db_path = codex_db_path()?;

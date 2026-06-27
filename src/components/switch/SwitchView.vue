@@ -143,6 +143,11 @@ function handleOutsideClick() {
   if (store.switchConfirmId) store.switchConfirmId = null
 }
 
+// Moving the pointer off a card disarms only that card's confirm state.
+function handleCardLeave(profile: any) {
+  if (store.switchConfirmId === profile.id) store.switchConfirmId = null
+}
+
 onMounted(() => {
   window.addEventListener('click', handleOutsideClick)
   // Trigger a (cooldown-gated) usage fetch when entering the Codex view
@@ -334,6 +339,7 @@ async function handleConfirmClear() {
               :key="profile.id"
               :class="['ah-card', 'switch-card', profile.is_active ? 'switch-card--active' : '']"
               @click.stop="handleCardClick(profile)"
+              @mouseleave="handleCardLeave(profile)"
             >
               <div class="flex items-start justify-between gap-2">
                 <div class="flex-1 min-w-0">
@@ -443,8 +449,8 @@ async function handleConfirmClear() {
       width-class="w-[44rem]"
       @close="closeEditModal"
     >
-      <!-- body: clicking anywhere here disarms the delete confirmation -->
-      <div class="space-y-4" @click="store.deleteArmed = false">
+      <!-- body -->
+      <div class="space-y-4">
         <div class="flex flex-col gap-1.5">
           <label class="text-xs font-semibold" style="color: var(--ink-2)">{{ t('switch.note_label') }}</label>
           <input
@@ -473,11 +479,12 @@ async function handleConfirmClear() {
       </div>
 
       <template #footer>
-        <div class="flex items-center gap-2 w-full" @click="store.deleteArmed = false">
+        <div class="flex items-center gap-2 w-full">
           <button
             :class="store.deleteArmed ? 'btn btn-sm' : 'btn btn-danger btn-sm'"
             :style="store.deleteArmed ? { background: 'var(--danger)', color: '#fff', borderColor: 'var(--danger)' } : {}"
             @click.stop="store.deleteArmed ? confirmDelete() : armDelete()"
+            @mouseleave="store.deleteArmed = false"
           >
             {{ store.deleteArmed ? t('action.confirm') : t('switch.delete_btn') }}
           </button>
