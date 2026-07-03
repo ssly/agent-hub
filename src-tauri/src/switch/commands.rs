@@ -388,29 +388,17 @@ struct CodexAuthFile {
     account_id: Option<String>,
 }
 
-#[derive(serde::Serialize, Debug, Clone)]
-pub struct UsageWindow {
-    pub used_percent: u8,
-    pub remaining_percent: u8,
-    pub reset_after_seconds: u64,
-    pub reset_at: u64,
-    /// Duration of the rate-limit window in seconds.
-    /// Plus/Pro: primary=18000 (5h), secondary=604800 (7d).
-    /// Free: primary≈2592000 (30d), no secondary window.
-    /// Lets the front-end label the window dynamically instead of hard-coding 5h/7d.
-    pub window_seconds: u64,
+/// Resolved Codex auth: the bearer token + account id needed to call the
+/// (undocumented) ChatGPT backend-api WHAM endpoints from a Codex login.
+struct CodexAuth {
+    access_token: String,
+    account_id: String,
 }
 
-#[derive(serde::Serialize, Debug, Clone)]
-pub struct CodexUsageResponse {
-    pub plan_type: String,
-    pub primary_window: Option<UsageWindow>,
-    pub secondary_window: Option<UsageWindow>,
-}
-
-#[tauri::command]
-pub async fn get_codex_usage() -> Result<CodexUsageResponse, String> {
-    // Resolve auth file (respect CODEX_HOME if set)
+/// Read `~/.codex/auth.json` (honoring `CODEX_HOME`) and pull out the token +
+/// account id. Shared by the usage and reset-credits commands so both use the
+/// exact same auth source and error messages.
+fn resolve_codex_auth() -> Result<CodexAuth, String> {
     let codex_home: PathBuf = match std::env::var("CODEX_HOME") {
         Ok(dir) => PathBuf::from(dir),
         Err(_) => {
@@ -434,25 +422,67 @@ pub async fn get_codex_usage() -> Result<CodexUsageResponse, String> {
         .or(auth.account_id)
         .ok_or_else(|| "缺少 account_id，无法查询用量".to_string())?;
 
-    // Call the (undocumented) internal usage endpoint.
-    // We prefer /wham/usage as it reliably returns the JSON quota windows.
+    Ok(CodexAuth { access_token, account_id })
+}
+
+/// Build a reqwest client + a configured GET request to a WHAM endpoint.
+/// Headers mimic the official Codex CLI so the request is indistinguishable
+/// from the client's own rate-limit fetches.
+async fn wham_get(url: &str, auth: &CodexAuth) -> Result<reqwest::Response, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
         .map_err(|e| e.to_string())?;
 
-    let url = "https://chatgpt.com/backend-api/wham/usage";
-    let resp = client
+    client
         .get(url)
-        .header("Authorization", format!("Bearer {}", access_token))
-        .header("ChatGPT-Account-Id", &account_id)
+        .header("Authorization", format!("Bearer {}", auth.access_token))
+        .header("ChatGPT-Account-Id", &auth.account_id)
         .header("Accept", "application/json")
         .header("User-Agent", "Codex CLI")
         .header("Origin", "https://chatgpt.com")
         .header("Referer", "https://chatgpt.com/")
         .send()
         .await
-        .map_err(|e| format!("请求 Codex 用量接口失败: {}", e))?;
+        .map_err(|e| format!("请求 Codex 接口失败: {}", e))
+}
+
+#[derive(serde::Serialize, Debug, Clone)]
+pub struct UsageWindow {
+    pub used_percent: u8,
+    pub remaining_percent: u8,
+    pub reset_after_seconds: u64,
+    pub reset_at: u64,
+    /// Duration of the rate-limit window in seconds.
+    /// Plus/Pro: primary=18000 (5h), secondary=604800 (7d).
+    /// Free: primary≈2592000 (30d), no secondary window.
+    /// Lets the front-end label the window dynamically instead of hard-coding 5h/7d.
+    pub window_seconds: u64,
+}
+
+/// "Rate-limit reset" credits — the one-click window reset button on the
+/// ChatGPT web UI draws from this pool. `available_count` is how many resets
+/// the account still has left.
+#[derive(serde::Serialize, Debug, Clone, Default)]
+pub struct ResetCredits {
+    pub available_count: u32,
+}
+
+#[derive(serde::Serialize, Debug, Clone)]
+pub struct CodexUsageResponse {
+    pub plan_type: String,
+    pub primary_window: Option<UsageWindow>,
+    pub secondary_window: Option<UsageWindow>,
+    pub reset_credits: Option<ResetCredits>,
+}
+
+#[tauri::command]
+pub async fn get_codex_usage() -> Result<CodexUsageResponse, String> {
+    let auth = resolve_codex_auth()?;
+
+    // Call the (undocumented) internal usage endpoint.
+    // We prefer /wham/usage as it reliably returns the JSON quota windows.
+    let resp = wham_get("https://chatgpt.com/backend-api/wham/usage", &auth).await?;
 
     if !resp.status().is_success() {
         return Err(format!("Codex 用量接口返回错误: HTTP {}", resp.status()));
@@ -467,6 +497,8 @@ pub async fn get_codex_usage() -> Result<CodexUsageResponse, String> {
 
     // The rate_limit payload may be absent entirely (e.g. API-key auth without a
     // subscription) — treat that as "no usage data" rather than a hard error.
+    let reset_credits = map_reset_credits(raw.get("rate_limit_reset_credits"));
+
     let rate = match raw.get("rate_limit") {
         Some(v) => v,
         None => {
@@ -474,6 +506,7 @@ pub async fn get_codex_usage() -> Result<CodexUsageResponse, String> {
                 plan_type: plan,
                 primary_window: None,
                 secondary_window: None,
+                reset_credits,
             });
         }
     };
@@ -487,7 +520,108 @@ pub async fn get_codex_usage() -> Result<CodexUsageResponse, String> {
         plan_type: plan,
         primary_window: primary,
         secondary_window: secondary,
+        reset_credits,
     })
+}
+
+// --- Codex rate-limit reset credits (validity period) ---
+
+/// One banked reset credit from `/wham/rate-limit-reset-credits`.
+/// `expires_at` is an ISO-8601 UTC timestamp; we surface it so the front-end
+/// can show a countdown to when the credit expires (each credit is valid ~30d).
+#[derive(serde::Serialize, Debug, Clone)]
+pub struct ResetCreditEntry {
+    pub status: String,
+    /// ISO-8601 timestamp, e.g. "2026-07-31T20:03:43.074555Z".
+    pub expires_at: Option<String>,
+    /// ISO-8601 timestamp of when the credit was granted.
+    pub granted_at: Option<String>,
+    /// Human-readable title, e.g. "Full reset (Weekly + 5 hr)".
+    pub title: Option<String>,
+}
+
+#[derive(serde::Serialize, Debug, Clone, Default)]
+pub struct CodexResetCreditsResponse {
+    pub available_count: u32,
+    /// Soonest-expiring `available` credit (precomputed for the front-end).
+    pub next_expires_at: Option<String>,
+    /// All banked credits (available + redeemed), newest first.
+    pub credits: Vec<ResetCreditEntry>,
+}
+
+/// Fetch the separate reset-credits list endpoint. Unlike `/wham/usage` (which
+/// only carries `available_count`), this one returns per-credit `expires_at`,
+/// so we can display how long the credits are valid for. Borrowed from the
+/// open-source codex_quota.py / CodexBar pattern.
+#[tauri::command]
+pub async fn get_codex_reset_credits() -> Result<CodexResetCreditsResponse, String> {
+    let auth = resolve_codex_auth()?;
+    let resp = wham_get(
+        "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
+        &auth,
+    )
+    .await?;
+
+    if !resp.status().is_success() {
+        return Err(format!("重置券接口返回错误: HTTP {}", resp.status()));
+    }
+
+    let raw: serde_json::Value = resp.json().await.map_err(|e| format!("解析重置券响应失败: {}", e))?;
+
+    let available_count = raw
+        .get("available_count")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as u32;
+
+    let mut credits: Vec<ResetCreditEntry> = Vec::new();
+    if let Some(arr) = raw.get("credits").and_then(|v| v.as_array()) {
+        for c in arr {
+            credits.push(ResetCreditEntry {
+                status: c
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string(),
+                expires_at: c
+                    .get("expires_at")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                granted_at: c
+                    .get("granted_at")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                title: c
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+            });
+        }
+    }
+
+    // Soonest-expiring *available* credit → the front-end's "X 天后到期".
+    // Sort available credits by expires_at ascending and take the first.
+    let next_expires_at = credits
+        .iter()
+        .filter(|c| c.status == "available" && c.expires_at.is_some())
+        .min_by_key(|c| c.expires_at.clone().unwrap_or_default())
+        .and_then(|c| c.expires_at.clone());
+
+    Ok(CodexResetCreditsResponse {
+        available_count,
+        next_expires_at,
+        credits,
+    })
+}
+
+/// Parse the `rate_limit_reset_credits` node. Returns `None` when the node is
+/// absent or null — this is expected for plans that don't grant reset credits.
+fn map_reset_credits(node: Option<&serde_json::Value>) -> Option<ResetCredits> {
+    let obj = node?.as_object()?;
+    let available_count = obj
+        .get("available_count")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as u32;
+    Some(ResetCredits { available_count })
 }
 
 /// Parse a single rate-limit window from the raw API value.

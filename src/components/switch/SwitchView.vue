@@ -40,6 +40,21 @@ function fmtReset(secs?: number): string {
   return t('switch.usage_reset_hm', { h, m })
 }
 
+// Format the reset-credit expiry as a coarse countdown ("28 天后到期").
+// We don't show a precise timer — just days/hours, consistent with fmtReset.
+function fmtCreditExpiry(iso?: string | null): string {
+  if (!iso) return ''
+  const target = new Date(iso).getTime()
+  if (Number.isNaN(target)) return ''
+  const secs = Math.floor((target - Date.now()) / 1000)
+  if (secs <= 0) return t('switch.usage_credit_expired')
+  const d = Math.floor(secs / 86400)
+  const h = Math.floor((secs % 86400) / 3600)
+  if (d > 0) return t('switch.usage_credit_expires_dh', { d, h })
+  const m = Math.floor((secs % 3600) / 60)
+  return t('switch.usage_credit_expires_hm', { h, m })
+}
+
 // Pick a localized window label from its duration in seconds.
 // The backend now forwards `window_seconds` from OpenAI, so we label the
 // window by what the API actually says rather than hard-coding 5h/7d.
@@ -100,6 +115,12 @@ function fmtLastQuery(): string {
 
 async function handleRefreshUsage() {
   if (store.codexUsageLoading) return
+  // Cooldown gate: if a fresh payload exists, don't hit the API again —
+  // just tell the user to wait. No precise countdown shown.
+  if (store.codexUsage && store.codexUsageInCooldown()) {
+    showToast(t('switch.usage_cooldown_toast'), 'info')
+    return
+  }
   await store.refreshCodexUsage(false)
   if (store.codexUsageError) {
     showToast(t('switch.usage_failed'), 'error')
@@ -150,8 +171,9 @@ function handleCardLeave(profile: any) {
 
 onMounted(() => {
   window.addEventListener('click', handleOutsideClick)
-  // Trigger a (cooldown-gated) usage fetch when entering the Codex view
-  if (isCodex.value) store.ensureFreshCodexUsage()
+  // Codex usage is intentionally NOT auto-fetched on mount. The user must
+  // click "Refresh" on the usage panel to trigger a query; cached results
+  // from a previous session are shown directly if present.
 })
 onUnmounted(() => window.removeEventListener('click', handleOutsideClick))
 
@@ -433,6 +455,64 @@ async function handleConfirmClear() {
                   {{ t('switch.usage_used_reset', { used: win.w.used_percent, reset: fmtReset(win.w.reset_after_seconds) }) }}
                 </div>
               </div>
+              <!-- Rate-limit reset credits — one card per banked credit.
+                   Each credit has its own expiry (valid ~30d from grant), so we
+                   list them individually rather than collapsing to a total.
+                   Falls back to a single summary card when the detailed list
+                   endpoint returned no per-credit entries but usage still
+                   reported a count. -->
+              <template v-if="store.codexResetCredits?.credits.length || store.codexUsage?.reset_credits?.available_count">
+                <div class="text-xs pt-1 flex items-center gap-2" style="color: var(--ink-3)">
+                  <span>{{ t('switch.usage_reset_credits') }}</span>
+                  <span class="inline-flex items-center px-2 py-0.5 rounded-full" style="background: var(--accent-soft); color: var(--accent)">
+                    {{ t('switch.usage_reset_credits_count', { n: store.codexResetCredits?.available_count ?? store.codexUsage?.reset_credits?.available_count ?? 0 }) }}
+                  </span>
+                </div>
+
+                <!-- One card per credit (from the detailed reset-credits endpoint) -->
+                <div
+                  v-for="(credit, idx) in store.codexResetCredits?.credits ?? []"
+                  :key="idx"
+                  class="p-3 rounded-lg"
+                  style="background: var(--sunken)"
+                >
+                  <div class="flex justify-between items-center gap-2">
+                    <span class="font-medium truncate" style="color: var(--ink)">
+                      {{ credit.title || t('switch.usage_credit_default_title') }}
+                    </span>
+                    <span
+                      class="text-xs px-2 py-0.5 rounded-full flex-shrink-0"
+                      :style="credit.status === 'available'
+                        ? { background: 'var(--accent-soft)', color: 'var(--accent)' }
+                        : { background: 'var(--sunken)', color: 'var(--ink-3)' }"
+                    >
+                      {{ credit.status === 'available' ? t('switch.usage_credit_available') : t('switch.usage_credit_used') }}
+                    </span>
+                  </div>
+                  <div class="text-xs mt-1" style="color: var(--ink-3)">
+                    <template v-if="credit.status === 'available'">
+                      {{ fmtCreditExpiry(credit.expires_at) || t('switch.usage_credit_no_expiry') }}
+                    </template>
+                    <template v-else>
+                      {{ t('switch.usage_credit_redeemed') }}
+                    </template>
+                  </div>
+                </div>
+
+                <!-- Fallback: detailed endpoint returned nothing but usage reported a count -->
+                <div
+                  v-if="!store.codexResetCredits?.credits.length && store.codexUsage?.reset_credits"
+                  class="p-3 rounded-lg"
+                  style="background: var(--sunken)"
+                >
+                  <div class="flex justify-between items-center">
+                    <span class="font-medium" style="color: var(--ink)">{{ t('switch.usage_reset_credits') }}</span>
+                    <span class="font-semibold" style="color: var(--accent)">
+                      {{ t('switch.usage_reset_credits_count', { n: store.codexUsage.reset_credits.available_count }) }}
+                    </span>
+                  </div>
+                </div>
+              </template>
               <div class="text-xs pt-2 border-t" style="color: var(--ink-4); border-color: var(--hairline)">
                 {{ t('switch.usage_last_query', { time: fmtLastQuery() }) }}
               </div>

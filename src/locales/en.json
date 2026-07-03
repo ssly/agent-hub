@@ -88,7 +88,10 @@
     "confirm_delete": "Confirm Delete",
     "deleted": "Deleted.",
     "delete_failed": "Delete failed: {error}",
-    "confirm_delete_hint": "Click again to confirm deletion"
+    "confirm_delete_hint": "Click again to confirm deletion",
+    "location": "Location",
+    "open_folder": "Open Folder",
+    "open_folder_failed": "Failed to open folder"
   },
   "action": {
     "sync": "Sync",
@@ -263,11 +266,22 @@
     "usage_retry": "Retry",
     "usage_refresh": "Refresh",
     "usage_refresh_toast": "Usage refreshed",
-    "usage_empty_hint": "Click \"Refresh\" to load usage windows (Plus/Pro show 5h + 7d; Free shows a monthly window).",
+    "usage_empty_hint": "Click \"Refresh\" to query usage manually (Plus/Pro show 5h + 7d; Free shows a monthly window). Entering the view does not auto-query.",
     "usage_last_query": "Last query: {time}",
     "usage_reset_now": "resets soon",
     "usage_reset_hm": "in {h}h {m}m",
-    "usage_reset_dh": "in {d}d {h}h"
+    "usage_reset_dh": "in {d}d {h}h",
+    "usage_reset_credits": "Resets remaining",
+    "usage_reset_credits_count": "{n} available",
+    "usage_credit_expired": "Expired",
+    "usage_credit_expires_dh": "Expires in {d}d {h}h",
+    "usage_credit_expires_hm": "Expires in {h}h {m}m",
+    "usage_credit_available": "Available",
+    "usage_credit_used": "Used",
+    "usage_credit_redeemed": "Redeemed",
+    "usage_credit_no_expiry": "No expiry info",
+    "usage_credit_default_title": "Reset credit",
+    "usage_cooldown_toast": "Please wait a moment before querying again (1 min)"
   },
   "monitor": {
     "title": "Monitor",

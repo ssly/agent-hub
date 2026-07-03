@@ -1,6 +1,6 @@
 use super::{Platform, PlatformDef};
 use crate::config::Config;
-use crate::platform::registry::builtin_platforms;
+use crate::platform::registry::{builtin_platforms, join_relative};
 use crate::skill::scan_skills;
 
 pub fn discover_platforms(config: &Config) -> Vec<Platform> {
@@ -60,10 +60,13 @@ pub fn invalidate_platform_skills(platform: &mut Platform) {
 
 fn shellexpand_home(path: &str) -> std::path::PathBuf {
     if let Some(stripped) = path.strip_prefix("~/") {
+        // `stripped` may itself contain '/' or '\' (e.g. ".claude/skills");
+        // join each segment separately to avoid mixed-separator paths on Windows.
         dirs::home_dir()
-            .map(|h| h.join(stripped))
+            .map(|h| join_relative(h, stripped))
             .unwrap_or_else(|| std::path::PathBuf::from(path))
     } else {
+        // A literal path (possibly already containing native separators).
         std::path::PathBuf::from(path)
     }
 }

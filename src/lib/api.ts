@@ -41,6 +41,8 @@ export const listPlatforms = () => invoke<any[]>('list_platforms')
 export const getPlatformSkills = (platformId: string) => invoke<any[]>('get_platform_skills', { platformId })
 export const getSkillDetail = (platformId: string, skillName: string, folder: string) =>
   invoke<any>('get_skill_detail', { platformId, skillName, folder })
+export const openSkillFolder = (platformId: string, skillName: string, folder: string) =>
+  invoke<void>('open_skill_folder', { platformId, skillName, folder })
 export const getDiffCandidates = (platformId: string, skillName: string, folder: string) =>
   invoke<any[]>('get_diff_candidates', { platformId, skillName, folder })
 export const diffSkills = (sourcePlatformId: string, targetPlatformId: string, skillName: string, folder: string) =>
@@ -148,12 +150,36 @@ export interface UsageWindow {
   // Duration of the window in seconds (5h=18000, 7d=604800, monthly≈2592000).
   window_seconds: number
 }
+// "Rate-limit reset" credits — the one-click window reset button on the
+// ChatGPT web UI draws from this pool. `available_count` = resets remaining.
+export interface ResetCredits {
+  available_count: number
+}
 export interface CodexUsage {
   plan_type: string
   primary_window: UsageWindow | null
   secondary_window: UsageWindow | null
+  reset_credits: ResetCredits | null
 }
 export const getCodexUsage = () => invoke<CodexUsage>('get_codex_usage')
+
+// Codex rate-limit reset credits with validity period.
+// Comes from a SEPARATE endpoint (/wham/rate-limit-reset-credits) because the
+// usage endpoint only carries `available_count`, not the per-credit expiry.
+// Each credit is valid ~30 days from grant; `next_expires_at` is the soonest.
+export interface ResetCreditEntry {
+  status: string                 // "available" | "redeemed" | ...
+  expires_at: string | null      // ISO-8601, e.g. "2026-07-31T20:03:43Z"
+  granted_at: string | null      // ISO-8601
+  title: string | null           // e.g. "Full reset (Weekly + 5 hr)"
+}
+export interface CodexResetCredits {
+  available_count: number
+  next_expires_at: string | null // soonest-expiring available credit
+  credits: ResetCreditEntry[]
+}
+export const getCodexResetCredits = () =>
+  invoke<CodexResetCredits>('get_codex_reset_credits')
 
 // App
 export const getAppVersion = () => invoke<string>('get_app_version')

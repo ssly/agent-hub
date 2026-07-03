@@ -120,6 +120,7 @@ export async function getPlatformSkills(platformId: string) { await delay(); ret
 export async function getSkillDetail(_platformId: string, skillName: string, _folder: string) {
   await delay(200); return makeSkillDetail(skillName)
 }
+export async function openSkillFolder() { await delay(200) }
 export async function getDiffCandidates() { await delay(); return PLATFORMS.map(p => ({ id: p.id, display_name: p.display_name })) }
 export async function diffSkills() { await delay(); return { skill_name: 'code-review', source_platform: 'claude-code', target_platform: 'codex', file_diffs: [] } }
 export async function getSyncTargets() { await delay(); return PLATFORMS.map(p => ({ id: p.id, display_name: p.display_name })) }
@@ -251,6 +252,34 @@ export async function getCodexUsage() {
     plan_type: 'free',
     primary_window: { used_percent: 5, remaining_percent: 95, reset_after_seconds: 2505600, reset_at: 1782799999, window_seconds: 2592000 },
     secondary_window: null,
+    reset_credits: { available_count: 1 },
+  }
+}
+export async function getCodexResetCredits() {
+  await delay()
+  // Simulate multiple banked credits to exercise the per-card layout:
+  //   - one available, expiring in ~28d (the soonest one)
+  //   - one already redeemed
+  const availGranted = new Date(Date.now() - 2 * 86400_000).toISOString()
+  const availExpires = new Date(Date.now() + 28 * 86400_000).toISOString()
+  const usedGranted = new Date(Date.now() - 10 * 86400_000).toISOString()
+  return {
+    available_count: 1,
+    next_expires_at: availExpires,
+    credits: [
+      {
+        status: 'available',
+        expires_at: availExpires,
+        granted_at: availGranted,
+        title: 'Full reset (Weekly + 5 hr)',
+      },
+      {
+        status: 'redeemed',
+        expires_at: null,
+        granted_at: usedGranted,
+        title: 'Full reset (Weekly + 5 hr)',
+      },
+    ],
   }
 }
 

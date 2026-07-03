@@ -203,6 +203,60 @@ pub fn get_skill_detail(
     Ok(SkillDetail::from(skill))
 }
 
+/// Reveal a skill's directory in the OS file manager:
+///   - Windows: `explorer.exe <path>` (selects the folder)
+///   - macOS:   `open <path>`
+///   - Linux:   `xdg-open <path>`
+#[tauri::command]
+pub fn open_skill_folder(
+    state: tauri::State<'_, SafeState>,
+    platform_id: String,
+    skill_name: String,
+    folder: String,
+) -> Result<(), CommandError> {
+    let mut s = state.lock().unwrap();
+    let platform = s
+        .platforms
+        .iter_mut()
+        .find(|p| p.id == platform_id)
+        .ok_or_else(|| CommandError::NotFound(format!("Platform {} not found", platform_id)))?;
+    crate::platform::load_platform_skills(platform);
+    let skill = find_skill(platform, &skill_name, &folder)
+        .ok_or_else(|| CommandError::NotFound(format!("Skill {} not found", skill_name)))?;
+
+    let path = &skill.path;
+    if !path.exists() {
+        return Err(CommandError::General(format!(
+            "Skill path does not exist: {}",
+            path.display()
+        )));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer.exe")
+            .arg(path)
+            .spawn()
+            .map_err(|e| CommandError::General(format!("Failed to open folder: {e}")))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(path)
+            .spawn()
+            .map_err(|e| CommandError::General(format!("Failed to open folder: {e}")))?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .map_err(|e| CommandError::General(format!("Failed to open folder: {e}")))?;
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 pub fn get_diff_candidates(
     state: tauri::State<'_, SafeState>,

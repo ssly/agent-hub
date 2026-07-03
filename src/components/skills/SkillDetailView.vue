@@ -2,15 +2,19 @@
 import { ref, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSkillsStore } from '@/stores/skills'
+import { useToast } from '@/composables/useToast'
 import { formatBytes, avatarToneFromName } from '@/lib/utils'
 import * as api from '@/lib/api'
+import { FolderOpen } from 'lucide-vue-next'
 
 const { t } = useI18n()
 const store = useSkillsStore()
+const { showToast } = useToast()
 const detail = ref<any>(null)
 const activeFile = ref<string | null>(null)
 const fileContent = ref('')
 const loading = ref(true)
+const openingFolder = ref(false)
 
 async function loadDetail() {
   if (!store.selectedPlatformId || !store.selectedSkillName) return
@@ -37,6 +41,19 @@ async function loadFile(path: string) {
   }
 }
 
+// Reveal this skill's directory in the OS file manager.
+async function handleOpenFolder() {
+  if (!store.selectedPlatformId || !store.selectedSkillName || openingFolder.value) return
+  openingFolder.value = true
+  try {
+    await api.openSkillFolder(store.selectedPlatformId, store.selectedSkillName, store.selectedFolder)
+  } catch (e: any) {
+    showToast(t('skill.open_folder_failed'), 'error')
+  } finally {
+    openingFolder.value = false
+  }
+}
+
 onMounted(loadDetail)
 watch(() => [store.selectedSkillName, store.selectedFolder], loadDetail)
 </script>
@@ -56,7 +73,22 @@ watch(() => [store.selectedSkillName, store.selectedFolder], loadDetail)
             <h1 class="ah-hero__title">{{ detail.name }}</h1>
             <p v-if="detail.description" class="ah-hero__subtitle">{{ detail.description }}</p>
           </div>
+          <button
+            class="btn btn-secondary flex items-center gap-1.5 flex-shrink-0"
+            :disabled="openingFolder"
+            :title="t('skill.open_folder')"
+            @click="handleOpenFolder"
+          >
+            <FolderOpen :size="15" />
+            {{ t('skill.open_folder') }}
+          </button>
         </header>
+
+        <!-- Skill location path + open button -->
+        <div class="ah-skill-path">
+          <span class="ah-skill-path__label">{{ t('skill.location') }}</span>
+          <code class="ah-skill-path__value">{{ detail.path }}</code>
+        </div>
 
         <!-- Metadata Row -->
         <div class="ah-meta-row">

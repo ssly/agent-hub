@@ -42,6 +42,7 @@ pub fn run() {
             commands::list_platforms,
             commands::get_platform_skills,
             commands::get_skill_detail,
+            commands::open_skill_folder,
             commands::get_diff_candidates,
             commands::diff_skills_cmd,
             commands::get_sync_targets,
@@ -90,6 +91,7 @@ pub fn run() {
             switch::commands::clear_active_auth,
             switch::commands::delete_active_auth,
             switch::commands::get_codex_usage,
+            switch::commands::get_codex_reset_credits,
         ])
         .run(tauri::generate_context!())
         .expect("error while running agent-hub");

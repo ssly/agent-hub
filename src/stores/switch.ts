@@ -1,10 +1,9 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import * as api from '@/lib/api'
-import type { CodexUsage } from '@/lib/api'
+import type { CodexUsage, CodexResetCredits } from '@/lib/api'
 
-const QUOTA_COOLDOWN_MS = 60 * 60 * 1000 // 1h
-const QUOTA_LS_KEY = 'codex_quota_last_query'
+const QUOTA_COOLDOWN_MS = 60 * 1000 // 1 min — prevent rapid re-query on click spam
 
 export const useSwitchStore = defineStore('switch', () => {
   const selectedAgent = ref<string | null>(localStorage.getItem('ah-switch-agent'))
@@ -15,10 +14,17 @@ export const useSwitchStore = defineStore('switch', () => {
 
   // Codex usage windows for the currently active account.
   // Plus/Pro: primary (5h) + secondary (7d). Free: primary (monthly) only.
+  // Usage is NEVER auto-fetched — the user must click "Refresh" explicitly.
+  // Within the cooldown window (1 min), a manual refresh short-circuits and
+  // returns the cached payload instead of hitting the API again.
   const codexUsage = ref<CodexUsage | null>(null)
   const codexUsageLoading = ref(false)
   const codexUsageError = ref<string | null>(null)
-  const codexUsageLastQuery = ref<number>(parseInt(localStorage.getItem(QUOTA_LS_KEY) || '0', 10))
+  const codexUsageLastQuery = ref<number>(0)
+
+  // Codex rate-limit reset credits + their validity period. Fetched alongside
+  // usage on a manual refresh; failure here must NOT blank out the usage data.
+  const codexResetCredits = ref<CodexResetCredits | null>(null)
 
   // Edit modal state
   const editModalOpen = ref(false)
@@ -48,32 +54,43 @@ export const useSwitchStore = defineStore('switch', () => {
     deleteArmed.value = false
     clearActiveModalOpen.value = false
     await loadProfiles()
-    // Auto-refresh Codex usage when entering the Codex view (1h cooldown)
-    if (agentType === 'codex') ensureFreshCodexUsage()
+    // Codex usage is intentionally NOT auto-fetched here. The user must
+    // click "Refresh" on the usage panel to trigger a query.
   }
 
-  // Fetch Codex usage only if stale (older than the cooldown) or never fetched.
-  async function ensureFreshCodexUsage() {
-    if (codexUsageLoading.value) return
-    const stale = !codexUsage.value || (Date.now() - codexUsageLastQuery.value > QUOTA_COOLDOWN_MS)
-    if (stale) refreshCodexUsage(false)
+  // Whether the cached usage is still within the cooldown window.
+  function codexUsageInCooldown(): boolean {
+    if (!codexUsageLastQuery.value) return false
+    return Date.now() - codexUsageLastQuery.value < QUOTA_COOLDOWN_MS
   }
 
-  async function refreshCodexUsage(showToast = true) {
-    if (selectedAgent.value !== 'codex') return
+  // Manually refresh Codex usage. Behavior:
+  //   - Never auto-triggered; the component calls this on button click.
+  //   - If a fresh payload exists within the cooldown window (1 min), we skip
+  //     the API call and just reuse the cached value (component shows a toast).
+  //   - `force` bypasses the cooldown.
+  // Fetches usage + reset-credits in parallel. Reset-credits failure is
+  // non-fatal (we keep usage data and just null out the credits).
+  async function refreshCodexUsage(force = false) {
+    if (selectedAgent.value !== 'codex' || codexUsageLoading.value) return
+    if (!force && codexUsage.value && codexUsageInCooldown()) return
     codexUsageLoading.value = true
     codexUsageError.value = null
     try {
-      const data = await api.getCodexUsage()
-      codexUsage.value = data
-      codexUsageLastQuery.value = Date.now()
-      localStorage.setItem(QUOTA_LS_KEY, String(codexUsageLastQuery.value))
-      if (showToast) {
-        // surfaced by component to keep store free of i18n deps
+      const [usageRes, creditsRes] = await Promise.allSettled([
+        api.getCodexUsage(),
+        api.getCodexResetCredits(),
+      ])
+      if (usageRes.status === 'fulfilled') {
+        codexUsage.value = usageRes.value
+        codexUsageLastQuery.value = Date.now()
+      } else {
+        // Usage is the primary payload — if it fails, surface the error.
+        codexUsageError.value = String((usageRes.reason as any)?.message || usageRes.reason)
+        codexUsage.value = null
       }
-    } catch (e: any) {
-      codexUsageError.value = String(e?.message || e)
-      codexUsage.value = null
+      codexResetCredits.value =
+        creditsRes.status === 'fulfilled' ? creditsRes.value : null
     } finally {
       codexUsageLoading.value = false
     }
@@ -159,9 +176,9 @@ export const useSwitchStore = defineStore('switch', () => {
     selectedAgent, profiles, currentKey, addFormOpen, switchConfirmId,
     editModalOpen, editingProfileId, editNote, editContent, editContentLoading, editSaving, deleteArmed,
     clearActiveModalOpen, clearActiveLoading,
-    codexUsage, codexUsageLoading, codexUsageError, codexUsageLastQuery,
+    codexUsage, codexUsageLoading, codexUsageError, codexUsageLastQuery, codexResetCredits,
     selectAgent, loadProfiles, openEditModal, closeEditModal, resetState,
-    ensureFreshCodexUsage, refreshCodexUsage,
+    codexUsageInCooldown, refreshCodexUsage,
     openClearActiveModal, closeClearActiveModal, deleteActiveAuth,
   }
 })
