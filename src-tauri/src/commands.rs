@@ -875,6 +875,7 @@ pub async fn download_and_install_update_resumable<R: Runtime>(
     rid: ResourceId,
     on_event: Channel<ResumableDownloadEvent>,
     use_mirror: bool,
+    clear_cache: bool,
     cancel_flag: tauri::State<'_, crate::UpdateCancelFlag>,
 ) -> Result<(), CommandError> {
     // Reset the cancel flag before starting a new download.
@@ -890,8 +891,12 @@ pub async fn download_and_install_update_resumable<R: Runtime>(
     let cache_dir = update_cache_dir(&app)?;
     fs::create_dir_all(&cache_dir).map_err(|err| CommandError::SyncError(err.to_string()))?;
 
-    let cache_key = update_cache_key(&update);
+    let download_url = update_download_url(&update.download_url, use_mirror)?;
+    let cache_key = update_cache_key(&update, &download_url);
     let partial_path = cache_dir.join(format!("{}-{}.part", update.version, cache_key));
+    if clear_cache {
+        let _ = fs::remove_file(&partial_path);
+    }
     let mut resumed_from = fs::metadata(&partial_path)
         .map(|meta| meta.len())
         .unwrap_or(0);
@@ -901,7 +906,6 @@ pub async fn download_and_install_update_resumable<R: Runtime>(
         headers.insert(ACCEPT, HeaderValue::from_static("application/octet-stream"));
     }
 
-    let download_url = update_download_url(&update.download_url, use_mirror)?;
     let mut response = send_update_request(&update, &download_url, &headers, resumed_from).await?;
 
     if resumed_from > 0 {
@@ -1002,8 +1006,9 @@ pub async fn download_and_install_update_resumable(
     rid: u32,
     on_event: serde_json::Value,
     use_mirror: bool,
+    clear_cache: bool,
 ) -> Result<(), CommandError> {
-    let _ = (rid, on_event, use_mirror);
+    let _ = (rid, on_event, use_mirror, clear_cache);
     Err(CommandError::SyncError(
         "Resumable updater is not available on this platform.".to_string(),
     ))
@@ -1041,12 +1046,27 @@ fn update_cache_dir<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, Co
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn update_cache_key(update: &Update) -> String {
+fn update_cache_key(update: &Update, download_url: &Url) -> String {
+    update_cache_fingerprint(
+        download_url.as_str(),
+        &update.signature,
+        &update.version,
+        &update.target,
+    )
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn update_cache_fingerprint(
+    download_url: &str,
+    signature: &str,
+    version: &str,
+    target: &str,
+) -> String {
     let mut hasher = DefaultHasher::new();
-    update.download_url.as_str().hash(&mut hasher);
-    update.signature.hash(&mut hasher);
-    update.version.hash(&mut hasher);
-    update.target.hash(&mut hasher);
+    download_url.hash(&mut hasher);
+    signature.hash(&mut hasher);
+    version.hash(&mut hasher);
+    target.hash(&mut hasher);
     format!("{:016x}", hasher.finish())
 }
 
@@ -1122,7 +1142,10 @@ async fn send_update_request(
 
 #[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
 mod updater_tests {
-    use super::{update_download_url, ResumableDownloadEvent, UPDATE_DOWNLOAD_TIMEOUT};
+    use super::{
+        update_cache_fingerprint, update_download_url, ResumableDownloadEvent,
+        UPDATE_DOWNLOAD_TIMEOUT,
+    };
     use reqwest::Url;
 
     #[test]
@@ -1161,6 +1184,18 @@ mod updater_tests {
             super::CommandError::SyncError(message)
                 if message.contains("only available for GitHub")
         ));
+    }
+
+    #[test]
+    fn direct_and_mirror_downloads_use_different_cache_keys() {
+        let direct = "https://github.com/ssly/agent-hub/releases/download/v0.11.0/app.msi";
+        let mirror =
+            "https://gh-proxy.com/https://github.com/ssly/agent-hub/releases/download/v0.11.0/app.msi";
+
+        let direct_key = update_cache_fingerprint(direct, "sig", "0.11.0", "darwin-aarch64");
+        let mirror_key = update_cache_fingerprint(mirror, "sig", "0.11.0", "darwin-aarch64");
+
+        assert_ne!(direct_key, mirror_key);
     }
 
     #[test]

@@ -99,6 +99,7 @@ const aboutProgress = computed(() => appStore.updateProgress)
 const aboutDownloaded = computed(() => appStore.updateDownloaded)
 const aboutTotal = computed(() => appStore.updateTotal)
 const aboutError = computed(() => appStore.updateError)
+const aboutDownloadSource = computed(() => appStore.updateDownloadSource)
 const UPDATE_TIMEOUT_MINUTES = 5
 
 const aboutProgressText = computed(() => {
@@ -183,10 +184,11 @@ async function checkForUpdatesSilently() {
   }
 }
 
-async function handleInstallUpdate(useMirror = false) {
+async function handleInstallUpdate(useMirror = false, clearCache = false) {
   if (!aboutUpdateInfo.value || !isTauri) return
 
   appStore.updateStatus = 'installing'
+  appStore.updateDownloadSource = useMirror ? 'mirror' : 'direct'
   appStore.updateProgress = 0
   appStore.updateDownloaded = 0
   appStore.updateTotal = 0
@@ -236,6 +238,7 @@ async function handleInstallUpdate(useMirror = false) {
       rid,
       onEvent: channel,
       useMirror,
+      clearCache,
     })
 
     showToast(t('about.update_complete'), 'success')
@@ -256,21 +259,18 @@ async function handleInstallUpdate(useMirror = false) {
   }
 }
 
-async function handleSwitchToMirror() {
+async function handleSwitchUpdateSource() {
   if (!aboutUpdateInfo.value || !isTauri) return
+  const useMirror = aboutDownloadSource.value !== 'mirror'
 
   try {
-    // 通知后端取消当前下载
     await invoke('cancel_update_download')
   } catch {
-    // 忽略取消命令的错误
   }
 
-  // 等待后端下载循环检测到取消标志并退出
   await new Promise(resolve => setTimeout(resolve, 300))
 
-  // 开始镜像下载
-  await handleInstallUpdate(true)
+  await handleInstallUpdate(useMirror, true)
 }
 
 function handleOpenGithub() {
@@ -565,9 +565,9 @@ onMounted(async () => {
             </div>
             <button
               class="btn btn-secondary w-full"
-              @click="handleSwitchToMirror"
+              @click="handleSwitchUpdateSource"
             >
-              {{ t('about.switch_to_mirror') }}
+              {{ t(aboutDownloadSource === 'mirror' ? 'about.switch_to_direct' : 'about.switch_to_mirror') }}
             </button>
           </div>
 

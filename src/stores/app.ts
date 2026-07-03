@@ -9,6 +9,7 @@ import { useSessionsStore } from './sessions'
 export type TabId = 'skills' | 'mcp' | 'sessions' | 'switch'
 export type ViewId = 'skills' | 'detail' | 'diff' | 'search'
 export type UpdateStatus = 'idle' | 'checking' | 'available' | 'uptodate' | 'installing' | 'error'
+export type UpdateDownloadSource = 'direct' | 'mirror'
 
 const VALID_TABS: TabId[] = ['skills', 'mcp', 'sessions', 'switch']
 
@@ -40,6 +41,7 @@ export const useAppStore = defineStore('app', () => {
   const updateTotal = ref(0)
   const updateError = ref('')
   const updateInfo = ref<{ version: string; body?: string; date?: string } | null>(null)
+  const updateDownloadSource = ref<UpdateDownloadSource>('direct')
   const isDownloading = computed(() => updateStatus.value === 'installing')
 
   function resetUpdateState() {
@@ -49,6 +51,7 @@ export const useAppStore = defineStore('app', () => {
     updateDownloaded.value = 0
     updateTotal.value = 0
     updateError.value = ''
+    updateDownloadSource.value = 'direct'
   }
 
   async function init() {
@@ -166,7 +169,7 @@ export const useAppStore = defineStore('app', () => {
     currentTab, currentView, sidebarCollapsed, appVersion, trashCount, locale,
     trashModalOpen, trashItems, trashLoading,
     aboutModalOpen, availableUpdate,
-    updateStatus, updateProgress, updateDownloaded, updateTotal, updateError, updateInfo,
+    updateStatus, updateProgress, updateDownloaded, updateTotal, updateError, updateInfo, updateDownloadSource,
     isDownloading, resetUpdateState,
     init, refreshTrashCount, switchTab, setView, toggleSidebar, toggleTheme, isNightTheme, switchLocale,
     openTrash, restoreTrash, deleteTrashForever, emptyTrash, openAbout,
