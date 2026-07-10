@@ -38,7 +38,6 @@ Agent Hub 就是为此而生。一个桌面应用，统一管理所有平台。
 - **Skill 浏览** — 查看元数据（名称、版本、描述），在线预览任意文件内容
 - **跨平台 Diff** — 选择两个平台，逐行对比同一 Skill 的差异（Myers 算法）
 - **一键同步** — 将 Skill（或整个文件夹）从平台 A 同步到平台 B，目标已存在时展示差异供决策
-- **无效 Skill 扫描** — 检测缺失 SKILL.md、frontmatter 异常、内容为空等问题 Skill，并生成修复提示词
 - **全局搜索** — 跨平台搜索 Skill 名称和描述
 - **回收站** — 删除的 Skill 保留 7 天，随时可恢复
 
@@ -54,22 +53,14 @@ Agent Hub 就是为此而生。一个桌面应用，统一管理所有平台。
 - 浏览 **Claude Code**、**Codex CLI**、**Kiro** 的历史会话
 - 按项目路径过滤，分页浏览
 - 查看完整对话历史（用户消息 + 助手回复）
-- **恢复会话** — 在终端中继续历史会话，支持 Warp、iTerm、Ghostty、macOS Terminal、Windows Terminal、CMD
-
-### ⚡ 实时进程监控
-
-- 实时检测运行中的 Agent 实例（Claude Code、Codex、Gemini、Kiro）
-- 工作状态显示：Working / Waiting / Completed
-- 最近输出预览，点击展开查看完整内容
-- **完成钩子** — Agent 完成一轮对话时触发 shell 脚本钩子
-- **桌面通知** — 系统原生通知，支持配置冷却时间防止刷屏
+- **恢复会话** — 在终端中继续历史会话，支持 macOS：Warp、iTerm、Ghostty、Terminal · Windows：Windows Terminal、PowerShell、CMD
 
 ### 👤 账号切换
 
 - 保存和切换 **Claude Code**、**Codex CLI** 的认证配置
 - SHA-256 哈希比对，自动检测当前活跃账号
-- 一键清除当前认证（自动备份）
-- 编辑配置内容和备注
+- 一键清除当前认证，对已保存的配置支持编辑/删除
+- **Codex 用量面板** — 查询当前账号的 5 小时 / 7 天用量窗口及重置额度
 
 ### 🎨 其他
 
@@ -116,7 +107,6 @@ Agent Hub 就是为此而生。一个桌面应用，统一管理所有平台。
 | Hermes | `~/.hermes/skills/` |
 | Trae | `~/.trae/skills/` |
 | Kiro | `~/.kiro/skills/` |
-| OpenCode | `~/.config/opencode/skills/` |
 | Shared Pool | `~/.agents/skills/` |
 
 ### MCP Server 管理
@@ -128,7 +118,6 @@ Agent Hub 就是为此而生。一个桌面应用，统一管理所有平台。
 | Gemini | `~/.gemini/settings.json` | JSON |
 | Kiro | `~/.kiro/settings/mcp.json` | JSON |
 | Codex CLI | `~/.codex/config.toml` | TOML |
-| OpenCode | `~/.config/opencode/opencode.json` | JSON |
 
 ---
 
@@ -153,13 +142,13 @@ skill_dir = "~/.my-agent/skills"
 ### 环境要求
 
 - [Rust](https://rustup.rs/) (stable)
-- [Node.js](https://nodejs.org/) (TailwindCSS CLI)
+- [Node.js](https://nodejs.org/)（Vite + Vue 工具链）
 
 ### 快速开始
 
 ```bash
-npm install && npm run build:css   # 安装依赖，构建 CSS
-cargo tauri dev                     # 启动开发模式（热重载）
+npm install     # 安装前端依赖
+cargo tauri dev # 启动开发模式（热重载）
 ```
 
 | 修改内容 | 效果 |
@@ -184,11 +173,9 @@ Windows 产物：`src-tauri/target/release/bundle/`（`.exe`、`.msi`、`.nsis`�
 | 层 | 技术 |
 |----|------|
 | 后端 | Rust + Tauri 2.x |
-| 前端 | Vanilla JS + TailwindCSS v4 |
+| 前端 | Vue 3 + Pinia + vue-i18n + TailwindCSS v4（Vite）|
 | Diff 引擎 | similar（Myers diff algorithm）|
 | 数据库 | SQLite（rusqlite，bundled）|
-| 文件监听 | notify |
-| 进程信息 | sysinfo |
 | HTTP | reqwest（rustls-tls）|
 
 ---
