@@ -29,19 +29,35 @@ const activeAccountName = computed(() => {
   return active.note || t('switch.account_fallback', { n: idx + 1 })
 })
 
-function fmtReset(secs?: number): string {
+// Absolute timestamp formatted as "YYYY-MM-DD HH:mm:ss" in the user's local
+// timezone. Uniform across locales so zh-CN/en-US render identically, and the
+// seconds are included so the user gets the concrete moment, not just the hour.
+function fmtAbsDate(value: number | string | null | undefined): string {
+  if (value == null) return ''
+  const d = typeof value === 'number' ? new Date(value * 1000) : new Date(value)
+  if (Number.isNaN(d.getTime())) return ''
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  )
+}
+
+function fmtReset(secs?: number, resetAt?: number): string {
   if (!secs || secs <= 0) return t('switch.usage_reset_now')
   const h = Math.floor(secs / 3600)
   const m = Math.floor((secs % 3600) / 60)
-  if (h >= 24) {
-    const d = Math.floor(h / 24)
-    return t('switch.usage_reset_dh', { d, h: h % 24 })
-  }
-  return t('switch.usage_reset_hm', { h, m })
+  const rel = h >= 24
+    ? t('switch.usage_reset_dh', { d: Math.floor(h / 24), h: h % 24 })
+    : t('switch.usage_reset_hm', { h, m })
+  // Append the absolute reset time when the backend provides reset_at (unix sec).
+  const abs = resetAt ? t('switch.usage_reset_at', { date: fmtAbsDate(resetAt) }) : ''
+  return abs ? `${rel} ${abs}` : rel
 }
 
-// Format the reset-credit expiry as a coarse countdown ("28 天后到期").
-// We don't show a precise timer — just days/hours, consistent with fmtReset.
+// Format the reset-credit expiry as a coarse countdown ("28 天后到期")
+// with the absolute expiry date appended as a small hint, since the user
+// explicitly asked for the concrete expiry time to be visible on the page.
 function fmtCreditExpiry(iso?: string | null): string {
   if (!iso) return ''
   const target = new Date(iso).getTime()
@@ -50,9 +66,23 @@ function fmtCreditExpiry(iso?: string | null): string {
   if (secs <= 0) return t('switch.usage_credit_expired')
   const d = Math.floor(secs / 86400)
   const h = Math.floor((secs % 86400) / 3600)
-  if (d > 0) return t('switch.usage_credit_expires_dh', { d, h })
-  const m = Math.floor((secs % 3600) / 60)
-  return t('switch.usage_credit_expires_hm', { h, m })
+  const rel = d > 0
+    ? t('switch.usage_credit_expires_dh', { d, h })
+    : t('switch.usage_credit_expires_hm', { h, m: Math.floor((secs % 3600) / 60) })
+  const abs = t('switch.usage_credit_expires_at', { date: fmtAbsDate(iso) })
+  return `${rel} ${abs}`
+}
+
+// The reset-credit title comes back from the Codex backend as a fixed English
+// string (e.g. "Full reset (Weekly + 5 hr)"). Map it to a localized label so
+// the panel reads fully translated under zh-CN.
+const CREDIT_TITLE_MAP: Record<string, string> = {
+  'full reset (weekly + 5 hr)': 'switch.usage_credit_title_full',
+}
+function fmtCreditTitle(title?: string | null): string {
+  if (!title) return t('switch.usage_credit_default_title')
+  const key = CREDIT_TITLE_MAP[title.toLowerCase()]
+  return key ? t(key) : title
 }
 
 // Pick a localized window label from its duration in seconds.
@@ -372,7 +402,7 @@ async function handleConfirmClear() {
                     <span v-if="profile.is_active" class="switch-active-badge">{{ t('switch.active_badge') }}</span>
                   </div>
                   <div class="text-xs" style="color: var(--ink-3)">
-                    {{ profile.saved_at ? profile.saved_at.substring(0, 19).replace('T', ' ') + ' UTC' : '' }}
+                    {{ profile.saved_at ? fmtAbsDate(profile.saved_at) : '' }}
                     {{ profile.key ? ` · ${profile.key}` : '' }}
                   </div>
                 </div>
@@ -452,7 +482,7 @@ async function handleConfirmClear() {
                   <span class="font-semibold" style="color: var(--accent)">{{ t('switch.usage_remaining', { n: win.w.remaining_percent }) }}</span>
                 </div>
                 <div class="text-xs mt-1" style="color: var(--ink-3)">
-                  {{ t('switch.usage_used_reset', { used: win.w.used_percent, reset: fmtReset(win.w.reset_after_seconds) }) }}
+                  {{ t('switch.usage_used_reset', { used: win.w.used_percent, reset: fmtReset(win.w.reset_after_seconds, win.w.reset_at) }) }}
                 </div>
               </div>
               <!-- Rate-limit reset credits — one card per banked credit.
@@ -478,7 +508,7 @@ async function handleConfirmClear() {
                 >
                   <div class="flex justify-between items-center gap-2">
                     <span class="font-medium truncate" style="color: var(--ink)">
-                      {{ credit.title || t('switch.usage_credit_default_title') }}
+                      {{ fmtCreditTitle(credit.title) }}
                     </span>
                     <span
                       class="text-xs px-2 py-0.5 rounded-full flex-shrink-0"
