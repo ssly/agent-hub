@@ -6,6 +6,7 @@ export const useSkillsStore = defineStore('skills', () => {
   const platforms = ref<any[]>([])
   const skills = ref<any[]>([])
   const selectedPlatformId = ref<string | null>(null)
+  const workspaceDirectory = ref('')
   const selectedSkillName = ref<string | null>(null)
   const selectedFolder = ref('')
   const skillSortBy = ref<'size' | 'name'>('size')
@@ -61,14 +62,23 @@ export const useSkillsStore = defineStore('skills', () => {
 
   async function loadSkills() {
     if (!selectedPlatformId.value) return
-    skills.value = await api.getPlatformSkills(selectedPlatformId.value)
+    skills.value = await api.getPlatformSkills(selectedPlatformId.value, workspaceDirectory.value)
   }
 
-  async function selectPlatform(id: string) {
+  async function selectPlatform(id: string, workspaceDir = '') {
     selectedPlatformId.value = id
+    workspaceDirectory.value = workspaceDir
     selectedSkillName.value = null
     selectedFolder.value = ''
     await loadSkills()
+  }
+
+  function clearPlatform(id: string, workspaceDir = '') {
+    selectedPlatformId.value = id
+    workspaceDirectory.value = workspaceDir
+    selectedSkillName.value = null
+    selectedFolder.value = ''
+    skills.value = []
   }
 
   function selectSkill(name: string, folder: string = '') {
@@ -109,7 +119,7 @@ export const useSkillsStore = defineStore('skills', () => {
     searchQuery.value = query
     searchLoading.value = true
     try {
-      const results = await api.searchSkills(query)
+      const results = await api.searchSkills(query, workspaceDirectory.value)
       if (searchQuery.value === query) {
         searchResults.value = results
       }
@@ -153,13 +163,13 @@ export const useSkillsStore = defineStore('skills', () => {
   }
 
   return {
-    platforms, skills, selectedPlatformId, selectedSkillName, selectedFolder,
+    platforms, skills, selectedPlatformId, workspaceDirectory, selectedSkillName, selectedFolder,
     skillSortBy, skillSortDir, collapsedFolders, diffResult,
     searchResults, searchLoading, searchQuery,
     diffPlatformModalOpen, diffCandidates,
     syncPlatformModalOpen, syncTargets, syncOverwrite, syncTargetPlatformId,
     selectedPlatform,
-    refreshPlatforms, reloadPlatforms, loadSkills, selectPlatform, selectSkill,
+    refreshPlatforms, reloadPlatforms, loadSkills, selectPlatform, clearPlatform, selectSkill,
     backToList, toggleFolder, toggleSort, doSearch,
     loadDiffCandidates, startDiff, loadSyncTargets, startSync, performDeleteSkill,
   }

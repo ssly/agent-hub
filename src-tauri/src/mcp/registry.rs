@@ -65,3 +65,44 @@ pub fn builtin_mcp_platforms() -> Vec<McpPlatformDef> {
 pub fn find_mcp_platform(id: &str) -> Option<McpPlatformDef> {
     builtin_mcp_platforms().into_iter().find(|p| p.id == id)
 }
+
+/// Return the MCP definition for a selected project directory.
+pub fn find_workspace_mcp_platform(
+    id: &str,
+    workspace: &std::path::Path,
+) -> Option<McpPlatformDef> {
+    let mut def = find_mcp_platform(id)?;
+    def.presence_path = workspace.to_path_buf();
+    def.config_path = match id {
+        // Claude Code uses a repository-root .mcp.json for project scope.
+        "claude-code" => workspace.join(".mcp.json"),
+        "cursor" => workspace.join(".cursor").join("mcp.json"),
+        "codex" => workspace.join(".codex").join("config.toml"),
+        "gemini" => workspace.join(".gemini").join("settings.json"),
+        "kiro" => workspace.join(".kiro").join("settings").join("mcp.json"),
+        _ => return None,
+    };
+    Some(def)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_project_mcp_config_paths() {
+        let root = PathBuf::from("/tmp/example-project");
+        assert_eq!(
+            find_workspace_mcp_platform("claude-code", &root)
+                .unwrap()
+                .config_path,
+            root.join(".mcp.json")
+        );
+        assert_eq!(
+            find_workspace_mcp_platform("codex", &root)
+                .unwrap()
+                .config_path,
+            root.join(".codex").join("config.toml")
+        );
+    }
+}

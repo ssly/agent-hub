@@ -6,6 +6,7 @@ export const useMcpStore = defineStore('mcp', () => {
   const platforms = ref<any[]>([])
   const servers = ref<any[]>([])
   const selectedPlatformId = ref<string | null>(null)
+  const workspaceDirectory = ref('')
   const expandedServer = ref<string | null>(null)
   const serverDetails = ref<Record<string, { config_text: string; format: string }>>({})
 
@@ -26,23 +27,35 @@ export const useMcpStore = defineStore('mcp', () => {
   const previewAddName = ref('')
   const previewAddConfig = ref('')
 
-  async function refreshPlatforms() {
-    platforms.value = await api.listMcpPlatforms()
+  async function refreshPlatforms(workspaceDir = workspaceDirectory.value) {
+    workspaceDirectory.value = workspaceDir
+    platforms.value = await api.listMcpPlatforms(workspaceDir)
     const exists = platforms.value.some(p => p.id === selectedPlatformId.value)
     if (!exists && platforms.value.length > 0) {
-      await selectPlatform(platforms.value[0].id)
+      await selectPlatform(platforms.value[0].id, workspaceDir)
     }
   }
 
-  async function selectPlatform(id: string) {
+  async function selectPlatform(id: string, workspaceDir = workspaceDirectory.value) {
     selectedPlatformId.value = id
+    workspaceDirectory.value = workspaceDir
     expandedServer.value = null
     serverDetails.value = {}
     try {
-      servers.value = await api.getMcpServers(id)
+      servers.value = await api.getMcpServers(id, workspaceDirectory.value)
     } catch {
       servers.value = []
     }
+    const platform = platforms.value.find(item => item.id === id)
+    if (platform) platform.server_count = servers.value.length
+  }
+
+  function clearPlatform(id: string, workspaceDir = workspaceDirectory.value) {
+    selectedPlatformId.value = id
+    workspaceDirectory.value = workspaceDir
+    servers.value = []
+    expandedServer.value = null
+    serverDetails.value = {}
   }
 
   async function toggleServer(name: string) {
@@ -52,7 +65,7 @@ export const useMcpStore = defineStore('mcp', () => {
     }
     expandedServer.value = name
     if (!serverDetails.value[name] && selectedPlatformId.value) {
-      const detail = await api.getMcpServer(selectedPlatformId.value, name)
+      const detail = await api.getMcpServer(selectedPlatformId.value, name, workspaceDirectory.value)
       serverDetails.value[name] = { config_text: detail.config_text, format: detail.format }
     }
   }
@@ -138,12 +151,12 @@ export const useMcpStore = defineStore('mcp', () => {
   }
 
   return {
-    platforms, servers, selectedPlatformId, expandedServer, serverDetails,
+    platforms, servers, selectedPlatformId, workspaceDirectory, expandedServer, serverDetails,
     addModalOpen, syncModalOpen, syncTargets, syncTargetPlatformId, syncServerName,
     deleteConfirmServerName,
     previewModalOpen, previewLoading, previewData, previewMode,
     previewAddName, previewAddConfig,
-    refreshPlatforms, selectPlatform, toggleServer, createServer, deleteServer,
+    refreshPlatforms, selectPlatform, clearPlatform, toggleServer, createServer, deleteServer,
     loadSyncTargets, performSync,
     loadAddPreview, loadDeletePreview, confirmPreview, cancelPreview,
   }

@@ -10,6 +10,7 @@
     "updater:default",
     "process:default",
     "notification:default",
+    "dialog:default",
     "shell:allow-open"
   ]
 }

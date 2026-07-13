@@ -63,3 +63,9 @@ pub struct BatchDeleteResult {
     pub failed: Vec<BatchDeleteFailure>,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SessionExportResult {
+    pub path: String,
+    pub session_count: usize,
+    pub message_count: usize,
+}

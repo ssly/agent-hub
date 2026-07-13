@@ -20,6 +20,25 @@ const { armedId: confirmDeleteId, arm: armDelete, reset: resetDelete } = useHove
 // soon as the pointer leaves the button.
 const { armed: confirmBatch, arm: armBatch, reset: resetBatch } = useHoverResetBool()
 
+async function handleBulkExport() {
+  if (store.selectedCount === 0) {
+    showToast(t('session.batch_select_none'), 'error')
+    return
+  }
+  try {
+    const result = await store.bulkExport(locale.value)
+    if (result) {
+      showToast(
+        t('session.batch_exported', { sessions: result.session_count, messages: result.message_count }),
+        'success',
+        6000,
+      )
+    }
+  } catch (e: any) {
+    showToast(t('session.batch_export_failed', { error: e?.SyncError || e?.message || e }), 'error')
+  }
+}
+
 async function handleBulkDelete() {
   if (store.selectedCount === 0) {
     showToast(t('session.batch_select_none'), 'error')
@@ -260,21 +279,32 @@ function clearSessionSearch() {
               <button class="btn btn-secondary btn-sm" @click="store.selectAllLoaded()">{{ t('session.batch_select_all') }}</button>
               <button class="btn btn-secondary btn-sm" :disabled="store.selectedCount === 0" @click="store.clearSelection()">{{ t('session.batch_clear_selection') }}</button>
             </div>
-            <button
-              class="btn btn-sm"
-              :class="confirmBatch ? 'session-card__delete is-confirming' : 'btn-danger'"
-              :style="confirmBatch ? { width: 'auto' } : null"
-              :disabled="store.isBulkDeleting || store.selectedCount === 0"
-              :title="confirmBatch ? t('session.batch_delete_confirm', { n: store.selectedCount }) : ''"
-              @click="handleBulkDelete"
-              @mouseleave="resetBatch()"
-            >
-              {{ store.isBulkDeleting
-                ? t('session.deleting')
-                : confirmBatch
-                  ? t('session.confirm_delete')
-                  : t('session.batch_delete_n', { n: store.selectedCount }) }}
-            </button>
+            <div class="flex items-center gap-2">
+              <button
+                class="btn btn-primary btn-sm"
+                :disabled="store.isBulkExporting || store.isBulkDeleting || store.selectedCount === 0"
+                @click="handleBulkExport"
+              >
+                {{ store.isBulkExporting
+                  ? t('session.batch_exporting')
+                  : t('session.batch_export_n', { n: store.selectedCount }) }}
+              </button>
+              <button
+                class="btn btn-sm"
+                :class="confirmBatch ? 'session-card__delete is-confirming' : 'btn-danger'"
+                :style="confirmBatch ? { width: 'auto' } : null"
+                :disabled="store.isBulkDeleting || store.isBulkExporting || store.selectedCount === 0"
+                :title="confirmBatch ? t('session.batch_delete_confirm', { n: store.selectedCount }) : ''"
+                @click="handleBulkDelete"
+                @mouseleave="resetBatch()"
+              >
+                {{ store.isBulkDeleting
+                  ? t('session.deleting')
+                  : confirmBatch
+                    ? t('session.confirm_delete')
+                    : t('session.batch_delete_n', { n: store.selectedCount }) }}
+              </button>
+            </div>
           </div>
 
           <!-- Session Cards -->

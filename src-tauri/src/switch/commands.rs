@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
+use base64::Engine as _;
 use chrono::Utc;
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::model::{AuthProfile, ListSwitchResponse, ProfileMeta};
@@ -36,23 +36,6 @@ fn agent_slug(agent_type: &str) -> Result<&'static str, String> {
     }
 }
 
-fn hash_file(path: &PathBuf) -> Option<Vec<u8>> {
-    let bytes = std::fs::read(path).ok()?;
-    let mut hasher = Sha256::new();
-    hasher.update(&bytes);
-    Some(hasher.finalize().to_vec())
-}
-
-fn hash_env_field(path: &PathBuf) -> Option<Vec<u8>> {
-    let content = std::fs::read_to_string(path).ok()?;
-    let val: serde_json::Value = serde_json::from_str(&content).ok()?;
-    let env = val.get("env").cloned().unwrap_or(serde_json::Value::Null);
-    let env_str = serde_json::to_string(&env).ok()?;
-    let mut hasher = Sha256::new();
-    hasher.update(env_str.as_bytes());
-    Some(hasher.finalize().to_vec())
-}
-
 fn now_iso() -> String {
     Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
@@ -78,6 +61,81 @@ fn mask_key(key: &str) -> String {
         return key.to_string();
     }
     format!("{}...{}", &key[..8], &key[key.len() - 4..])
+}
+
+/// Decode the payload (second segment) of a JWT without signature validation.
+/// Used only to read display fields (email, name) from the Codex `id_token` —
+/// never for trust decisions — so skipping verification is intentional.
+fn decode_jwt_payload(token: &str) -> Option<serde_json::Value> {
+    let mut parts = token.split('.');
+    parts.next()?; // header
+    let payload = parts.next()?;
+    // JWT uses base64url *without* padding; add back padding for the decoder.
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .or_else(|_| {
+            let padded = match payload.len() % 4 {
+                2 => format!("{payload}=="),
+                3 => format!("{payload}="),
+                _ => payload.to_string(),
+            };
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(&padded)
+        })
+        .ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// The stable identity of a credential — what makes two snapshots "the same
+/// account" even after the secret rotates. This is intentionally *not* the
+/// secret itself, because Codex `access_token`s refresh frequently and would
+/// otherwise make a just-saved account look like a stranger on every reload.
+///
+/// - codex → the ChatGPT `account_id` (tokens.account_id / account_id),
+///   which is invariant across token refreshes.
+/// - claude-code → the `ANTHROPIC_API_KEY` itself, which is a long-lived key
+///   that only changes when the user actually switches accounts.
+fn extract_account_identity(agent_type: &str, content: &str) -> Option<String> {
+    let val: serde_json::Value = serde_json::from_str(content).ok()?;
+    match agent_type {
+        "codex" => val
+            .get("tokens")
+            .and_then(|t| t.get("account_id"))
+            .or_else(|| val.get("account_id"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        "claude-code" => val
+            .get("env")
+            .and_then(|env| env.get("ANTHROPIC_API_KEY"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        _ => None,
+    }
+}
+
+/// A human-readable label for the account — used as the auto-generated `note`
+/// when the current account is auto-saved into the pool. Falls back to `None`
+/// when no name can be derived, leaving the caller to use a default label.
+///
+/// - codex → the email inside the `id_token` JWT payload
+///   (ChatGPT accounts are best identified by email).
+/// - claude-code → no derivable label (key-only auth).
+fn extract_account_name(agent_type: &str, content: &str) -> Option<String> {
+    let val: serde_json::Value = serde_json::from_str(content).ok()?;
+    match agent_type {
+        "codex" => val
+            .get("tokens")
+            .and_then(|t| t.get("id_token"))
+            .and_then(|v| v.as_str())
+            .and_then(decode_jwt_payload)
+            .and_then(|p| {
+                p.get("email")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+            }),
+        "claude-code" => None,
+        _ => None,
+    }
 }
 
 fn check_duplicate_key(
@@ -122,68 +180,94 @@ fn check_duplicate_key(
 #[tauri::command]
 pub fn list_switch_profiles(agent_type: String) -> Result<ListSwitchResponse, String> {
     let dir = profiles_dir(&agent_type)?;
-    let active_hash = if agent_type == "claude-code" {
-        agent_config_path(&agent_type).ok().and_then(|p| hash_env_field(&p))
-    } else {
-        agent_config_path(&agent_type).ok().and_then(|p| hash_file(&p))
-    };
 
+    // Read the live auth file once: derive the stable identity, the masked key
+    // for the toolbar, and a human-readable name (email) for auto-save.
     let config_path = agent_config_path(&agent_type).ok();
-    let current_key = config_path
+    let live_content = config_path
         .as_ref()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|c| extract_key(&agent_type, &c))
+        .and_then(|p| std::fs::read_to_string(p).ok());
+    let active_identity = live_content
+        .as_ref()
+        .and_then(|c| extract_account_identity(&agent_type, c));
+    let current_key = live_content
+        .as_ref()
+        .and_then(|c| extract_key(&agent_type, c))
         .map(|k| mask_key(&k));
 
-    let mut profiles: Vec<AuthProfile> = Vec::new();
-
-    let entries = match std::fs::read_dir(&dir) {
-        Ok(e) => e,
-        Err(_) => {
-            return Ok(ListSwitchResponse {
-                profiles: Vec::new(),
-                current_key,
-            })
-        }
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let meta_path = path.join("meta.json");
-        let cfg_path = path.join("config.json");
-        let Ok(meta_str) = std::fs::read_to_string(&meta_path) else {
-            continue;
-        };
-        let Ok(meta) = serde_json::from_str::<ProfileMeta>(&meta_str) else {
-            continue;
-        };
-        if !cfg_path.exists() {
-            continue;
-        }
-        let profile_hash = if agent_type == "claude-code" {
-            hash_env_field(&cfg_path)
-        } else {
-            hash_file(&cfg_path)
-        };
-        let is_active = match (&active_hash, &profile_hash) {
-            (Some(a), Some(b)) => a == b,
-            _ => false,
-        };
-        let profile_key = std::fs::read_to_string(&cfg_path)
-            .ok()
-            .and_then(|c| extract_key(&agent_type, &c))
-            .map(|k| mask_key(&k));
-        profiles.push(AuthProfile {
-            id: meta.id,
-            note: meta.note,
-            saved_at: meta.saved_at,
-            is_active,
-            key: profile_key,
-        });
+    // First pass: read every saved profile and derive its stable identity.
+    struct RawProfile {
+        meta: ProfileMeta,
+        identity: Option<String>,
+        key: Option<String>,
     }
+    let mut raw: Vec<RawProfile> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let meta_path = path.join("meta.json");
+            let cfg_path = path.join("config.json");
+            let Ok(meta_str) = std::fs::read_to_string(&meta_path) else {
+                continue;
+            };
+            let Ok(meta) = serde_json::from_str::<ProfileMeta>(&meta_str) else {
+                continue;
+            };
+            if !cfg_path.exists() {
+                continue;
+            }
+            let content = match std::fs::read_to_string(&cfg_path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            raw.push(RawProfile {
+                identity: extract_account_identity(&agent_type, &content),
+                key: extract_key(&agent_type, &content).map(|k| mask_key(&k)),
+                meta,
+            });
+        }
+    }
+
+    // Auto-save: if a live account exists but no saved profile shares its
+    // stable identity, persist it so the current account always appears in the
+    // list (and gets selected). This never duplicates a refresh-stale snapshot
+    // because the comparison is by identity, not by secret/hash.
+    if let (Some(identity), Some(_)) = (&active_identity, &live_content) {
+        let already_saved = raw.iter().any(|r| r.identity.as_deref() == Some(identity));
+        if !already_saved {
+            let note = extract_account_name(&agent_type, live_content.as_ref().unwrap())
+                .unwrap_or_default();
+            if let Ok(id) = save_current_auth_profile_inner(&agent_type, note.clone(), true) {
+                raw.push(RawProfile {
+                    identity: active_identity.clone(),
+                    key: current_key.clone(),
+                    meta: ProfileMeta {
+                        id,
+                        note,
+                        saved_at: now_iso(),
+                    },
+                });
+            }
+        }
+    }
+
+    // Mark the active profile (if any) by identity match.
+    let mut profiles: Vec<AuthProfile> = raw
+        .into_iter()
+        .map(|r| AuthProfile {
+            is_active: match (&active_identity, &r.identity) {
+                (Some(a), Some(b)) => a == b,
+                _ => false,
+            },
+            id: r.meta.id,
+            note: r.meta.note,
+            saved_at: r.meta.saved_at,
+            key: r.key,
+        })
+        .collect();
 
     profiles.sort_by(|a, b| b.saved_at.cmp(&a.saved_at));
     Ok(ListSwitchResponse {
@@ -192,20 +276,31 @@ pub fn list_switch_profiles(agent_type: String) -> Result<ListSwitchResponse, St
     })
 }
 
-#[tauri::command]
-pub fn save_current_auth_profile(agent_type: String, note: String) -> Result<String, String> {
-    let src = agent_config_path(&agent_type)?;
+/// Persist the live auth file as a new profile entry. The inner implementation
+/// used both by the user-facing `save_current_auth_profile` command and by the
+/// auto-save logic in `list_switch_profiles` (which passes `allow_duplicate` to
+/// bypass the duplicate-key guard — the current account may legitimately equal
+/// an existing profile after a token refresh and we never want auto-save to
+/// surface a "duplicate" error to the user).
+fn save_current_auth_profile_inner(
+    agent_type: &str,
+    note: String,
+    allow_duplicate: bool,
+) -> Result<String, String> {
+    let src = agent_config_path(agent_type)?;
     if !src.exists() {
         return Err("no_active_auth".to_string());
     }
     let content_bytes = std::fs::read(&src).map_err(|e| e.to_string())?;
     let content_str = String::from_utf8_lossy(&content_bytes).to_string();
-    if let Some(key) = extract_key(&agent_type, &content_str) {
-        check_duplicate_key(&agent_type, &key, None)?;
+    if !allow_duplicate {
+        if let Some(key) = extract_key(agent_type, &content_str) {
+            check_duplicate_key(agent_type, &key, None)?;
+        }
     }
 
     let id = Uuid::new_v4().to_string();
-    let dir = profiles_dir(&agent_type)?.join(&id);
+    let dir = profiles_dir(agent_type)?.join(&id);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
     std::fs::write(dir.join("config.json"), &content_bytes).map_err(|e| e.to_string())?;
@@ -222,7 +317,16 @@ pub fn save_current_auth_profile(agent_type: String, note: String) -> Result<Str
 }
 
 #[tauri::command]
-pub fn add_auth_profile(agent_type: String, content: String, note: String) -> Result<String, String> {
+pub fn save_current_auth_profile(agent_type: String, note: String) -> Result<String, String> {
+    save_current_auth_profile_inner(&agent_type, note, false)
+}
+
+#[tauri::command]
+pub fn add_auth_profile(
+    agent_type: String,
+    content: String,
+    note: String,
+) -> Result<String, String> {
     serde_json::from_str::<serde_json::Value>(&content).map_err(|_| "invalid_json".to_string())?;
     if let Some(key) = extract_key(&agent_type, &content) {
         check_duplicate_key(&agent_type, &key, None)?;
@@ -294,7 +398,11 @@ pub fn switch_auth_profile(agent_type: String, id: String) -> Result<(), String>
 }
 
 #[tauri::command]
-pub fn update_auth_profile_note(agent_type: String, id: String, note: String) -> Result<(), String> {
+pub fn update_auth_profile_note(
+    agent_type: String,
+    id: String,
+    note: String,
+) -> Result<(), String> {
     let dir = profiles_dir(&agent_type)?.join(&id);
     let meta_path = dir.join("meta.json");
     if !meta_path.exists() {
@@ -328,7 +436,11 @@ pub fn get_auth_profile_content(agent_type: String, id: String) -> Result<String
 }
 
 #[tauri::command]
-pub fn update_auth_profile_content(agent_type: String, id: String, content: String) -> Result<(), String> {
+pub fn update_auth_profile_content(
+    agent_type: String,
+    id: String,
+    content: String,
+) -> Result<(), String> {
     serde_json::from_str::<serde_json::Value>(&content).map_err(|_| "invalid_json".to_string())?;
 
     let dir = profiles_dir(&agent_type)?.join(&id);
@@ -402,27 +514,37 @@ fn resolve_codex_auth() -> Result<CodexAuth, String> {
     let codex_home: PathBuf = match std::env::var("CODEX_HOME") {
         Ok(dir) => PathBuf::from(dir),
         Err(_) => {
-            let home = dirs::home_dir()
-                .ok_or_else(|| "无法确定用户主目录".to_string())?;
+            let home = dirs::home_dir().ok_or_else(|| "无法确定用户主目录".to_string())?;
             home.join(".codex")
         }
     };
 
     let auth_path = codex_home.join("auth.json");
     if !auth_path.exists() {
-        return Err("未找到 Codex 认证文件（~/.codex/auth.json）。请先在终端运行 `codex login`。".to_string());
+        return Err(
+            "未找到 Codex 认证文件（~/.codex/auth.json）。请先在终端运行 `codex login`。"
+                .to_string(),
+        );
     }
 
-    let content = std::fs::read_to_string(&auth_path).map_err(|e| format!("读取 auth.json 失败: {}", e))?;
-    let auth: CodexAuthFile = serde_json::from_str(&content).map_err(|e| format!("解析 auth.json 失败: {}", e))?;
+    let content =
+        std::fs::read_to_string(&auth_path).map_err(|e| format!("读取 auth.json 失败: {}", e))?;
+    let auth: CodexAuthFile =
+        serde_json::from_str(&content).map_err(|e| format!("解析 auth.json 失败: {}", e))?;
 
-    let tokens = auth.tokens.ok_or_else(|| "auth.json 中没有 tokens 字段".to_string())?;
+    let tokens = auth
+        .tokens
+        .ok_or_else(|| "auth.json 中没有 tokens 字段".to_string())?;
     let access_token = tokens.access_token;
-    let account_id = tokens.account_id
+    let account_id = tokens
+        .account_id
         .or(auth.account_id)
         .ok_or_else(|| "缺少 account_id，无法查询用量".to_string())?;
 
-    Ok(CodexAuth { access_token, account_id })
+    Ok(CodexAuth {
+        access_token,
+        account_id,
+    })
 }
 
 /// Build a reqwest client + a configured GET request to a WHAM endpoint.
@@ -488,9 +610,13 @@ pub async fn get_codex_usage() -> Result<CodexUsageResponse, String> {
         return Err(format!("Codex 用量接口返回错误: HTTP {}", resp.status()));
     }
 
-    let raw: serde_json::Value = resp.json().await.map_err(|e| format!("解析用量响应失败: {}", e))?;
+    let raw: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("解析用量响应失败: {}", e))?;
 
-    let plan = raw.get("plan_type")
+    let plan = raw
+        .get("plan_type")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown")
         .to_string();
@@ -566,7 +692,10 @@ pub async fn get_codex_reset_credits() -> Result<CodexResetCreditsResponse, Stri
         return Err(format!("重置券接口返回错误: HTTP {}", resp.status()));
     }
 
-    let raw: serde_json::Value = resp.json().await.map_err(|e| format!("解析重置券响应失败: {}", e))?;
+    let raw: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("解析重置券响应失败: {}", e))?;
 
     let available_count = raw
         .get("available_count")
@@ -629,12 +758,19 @@ fn map_reset_credits(node: Option<&serde_json::Value>) -> Option<ResetCredits> {
 /// Free accounts (no 5h/7d windows) and must not be treated as an error.
 fn map_usage_window(node: Option<&serde_json::Value>) -> Option<UsageWindow> {
     let win = node?.as_object()?;
-    let used = win.get("used_percent").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
-    let after = win.get("reset_after_seconds").and_then(|v| v.as_u64()).unwrap_or(0);
+    let used = win
+        .get("used_percent")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as u8;
+    let after = win
+        .get("reset_after_seconds")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     let at = win.get("reset_at").and_then(|v| v.as_u64()).unwrap_or(0);
     // OpenAI exposes the window length as either "limit_window_seconds" (current)
     // or "window_seconds" (older payloads). Fall back to 0 when absent.
-    let window_seconds = win.get("limit_window_seconds")
+    let window_seconds = win
+        .get("limit_window_seconds")
         .or_else(|| win.get("window_seconds"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
@@ -645,4 +781,94 @@ fn map_usage_window(node: Option<&serde_json::Value>) -> Option<UsageWindow> {
         reset_at: at,
         window_seconds,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A minimal JWT: header.payload.signature, where the payload is
+    // base64url-no-pad of {"email":"user@example.com","name":"Test User"}.
+    fn jwt(email: &str) -> String {
+        let payload = format!(r#"{{"email":"{email}","name":"Test User"}}"#);
+        let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload);
+        format!("header.{b64}.signature")
+    }
+
+    #[test]
+    fn decode_jwt_payload_reads_email() {
+        let tok = jwt("someone@gmail.com");
+        let p = decode_jwt_payload(&tok).expect("payload decodes");
+        assert_eq!(p["email"].as_str(), Some("someone@gmail.com"));
+        assert_eq!(p["name"].as_str(), Some("Test User"));
+    }
+
+    #[test]
+    fn decode_jwt_payload_rejects_garbage() {
+        assert!(decode_jwt_payload("not-a-jwt").is_none());
+        assert!(decode_jwt_payload("only.onepart").is_none());
+        assert!(decode_jwt_payload("").is_none());
+    }
+
+    const CODEX_AUTH: &str = r#"{
+        "tokens": {
+            "id_token": "PLACEHOLDER",
+            "access_token": "sk-1234567890abcdef",
+            "refresh_token": "rt",
+            "account_id": "acct-abc-123"
+        },
+        "account_id": "acct-abc-123"
+    }"#;
+
+    #[test]
+    fn codex_identity_uses_account_id() {
+        let id = extract_account_identity("codex", CODEX_AUTH);
+        assert_eq!(id.as_deref(), Some("acct-abc-123"));
+    }
+
+    #[test]
+    fn codex_identity_prefers_tokens_account_id() {
+        let content = r#"{"tokens":{"account_id":"from-tokens"},"account_id":"from-top"}"#;
+        let id = extract_account_identity("codex", content);
+        assert_eq!(id.as_deref(), Some("from-tokens"));
+    }
+
+    #[test]
+    fn codex_identity_falls_back_to_top_level_account_id() {
+        let content = r#"{"account_id":"from-top"}"#;
+        let id = extract_account_identity("codex", content);
+        assert_eq!(id.as_deref(), Some("from-top"));
+    }
+
+    #[test]
+    fn codex_name_reads_email_from_id_token() {
+        let content = CODEX_AUTH.replace("PLACEHOLDER", &jwt("worker@corp.com"));
+        let name = extract_account_name("codex", &content);
+        assert_eq!(name.as_deref(), Some("worker@corp.com"));
+    }
+
+    #[test]
+    fn codex_name_none_without_id_token() {
+        let content = r#"{"tokens":{"account_id":"x"},"account_id":"x"}"#;
+        assert!(extract_account_name("codex", content).is_none());
+    }
+
+    #[test]
+    fn claude_identity_is_the_api_key() {
+        let content = r#"{"env":{"ANTHROPIC_API_KEY":"sk-ant-xyz123"}}"#;
+        let id = extract_account_identity("claude-code", content);
+        assert_eq!(id.as_deref(), Some("sk-ant-xyz123"));
+    }
+
+    #[test]
+    fn claude_name_is_never_derived() {
+        let content = r#"{"env":{"ANTHROPIC_API_KEY":"sk-ant-xyz123"}}"#;
+        assert!(extract_account_name("claude-code", content).is_none());
+    }
+
+    #[test]
+    fn extract_identity_invalid_json_returns_none() {
+        assert!(extract_account_identity("codex", "not json").is_none());
+        assert!(extract_account_identity("claude-code", "not json").is_none());
+    }
 }

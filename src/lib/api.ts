@@ -38,11 +38,12 @@ function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
 
 // Skills / Platforms
 export const listPlatforms = () => invoke<any[]>('list_platforms')
-export const getPlatformSkills = (platformId: string) => invoke<any[]>('get_platform_skills', { platformId })
-export const getSkillDetail = (platformId: string, skillName: string, folder: string) =>
-  invoke<any>('get_skill_detail', { platformId, skillName, folder })
-export const openSkillFolder = (platformId: string, skillName: string, folder: string) =>
-  invoke<void>('open_skill_folder', { platformId, skillName, folder })
+export const getPlatformSkills = (platformId: string, workspaceDir = '') =>
+  invoke<any[]>('get_platform_skills', { platformId, workspaceDir: workspaceDir || null })
+export const getSkillDetail = (platformId: string, skillName: string, folder: string, workspaceDir = '') =>
+  invoke<any>('get_skill_detail', { platformId, skillName, folder, workspaceDir: workspaceDir || null })
+export const openSkillFolder = (platformId: string, skillName: string, folder: string, workspaceDir = '') =>
+  invoke<void>('open_skill_folder', { platformId, skillName, folder, workspaceDir: workspaceDir || null })
 export const getDiffCandidates = (platformId: string, skillName: string, folder: string) =>
   invoke<any[]>('get_diff_candidates', { platformId, skillName, folder })
 export const diffSkills = (sourcePlatformId: string, targetPlatformId: string, skillName: string, folder: string) =>
@@ -54,19 +55,24 @@ export const syncSkill = (sourcePlatformId: string, targetPlatformId: string, sk
 export const syncFolder = (sourcePlatformId: string, targetPlatformId: string, folder: string) =>
   invoke<any>('sync_folder_cmd', { sourcePlatformId, targetPlatformId, folder })
 export const refreshPlatforms = () => invoke<any[]>('refresh_platforms')
-export const refreshPlatformSkills = (platformId: string) => invoke<any[]>('refresh_platform_skills', { platformId })
+export const refreshPlatformSkills = (platformId: string, workspaceDir = '') =>
+  invoke<any[]>('refresh_platform_skills', { platformId, workspaceDir: workspaceDir || null })
 export const getLocale = () => invoke<string>('get_locale')
 export const setLocale = (locale: string) => invoke<void>('set_locale', { locale })
-export const searchSkills = (query: string) => invoke<any[]>('search_skills', { query })
-export const readSkillFile = (platformId: string, skillName: string, folder: string, filePath: string) =>
-  invoke<string>('read_skill_file', { platformId, skillName, folder, filePath })
+export const searchSkills = (query: string, workspaceDir = '') =>
+  invoke<any[]>('search_skills', { query, workspaceDir: workspaceDir || null })
+export const readSkillFile = (platformId: string, skillName: string, folder: string, filePath: string, workspaceDir = '') =>
+  invoke<string>('read_skill_file', { platformId, skillName, folder, filePath, workspaceDir: workspaceDir || null })
 export const deleteSkill = (platformId: string, skillName: string, folder: string) =>
   invoke<void>('delete_skill_cmd', { platformId, skillName, folder })
 
 // MCP
-export const listMcpPlatforms = () => invoke<any[]>('list_mcp_platforms')
-export const getMcpServers = (platformId: string) => invoke<any[]>('get_mcp_servers', { platformId })
-export const getMcpServer = (platformId: string, name: string) => invoke<any>('get_mcp_server', { platformId, name })
+export const listMcpPlatforms = (workspaceDir = '') =>
+  invoke<any[]>('list_mcp_platforms', { workspaceDir: workspaceDir || null })
+export const getMcpServers = (platformId: string, workspaceDir = '') =>
+  invoke<any[]>('get_mcp_servers', { platformId, workspaceDir: workspaceDir || null })
+export const getMcpServer = (platformId: string, name: string, workspaceDir = '') =>
+  invoke<any>('get_mcp_server', { platformId, name, workspaceDir: workspaceDir || null })
 export const saveMcpServer = (platformId: string, name: string, configJson: string) =>
   invoke<void>('save_mcp_server_cmd', { platformId, name, configJson })
 export const deleteMcpServer = (platformId: string, name: string) =>
@@ -81,6 +87,19 @@ export const previewMcpChange = (platformId: string, serverName: string, configT
   invoke<any>('preview_mcp_change_cmd', { platformId, serverName, configText })
 export const syncMcpServer = (sourcePlatformId: string, targetPlatformId: string, serverName: string) =>
   invoke<void>('sync_mcp_server_cmd', { sourcePlatformId, targetPlatformId, serverName })
+
+// Claude Code native plugins
+export const listClaudePlugins = (workspaceDir = '') =>
+  invoke<any[]>('list_claude_plugins', { workspaceDir: workspaceDir || null })
+export const setClaudePluginEnabled = (pluginId: string, scope: string, enabled: boolean) =>
+  invoke<void>('set_claude_plugin_enabled', { pluginId, scope, enabled })
+
+export async function pickPluginDirectory(): Promise<string | null> {
+  if (!isTauri) return '/Users/demo/projects/agent-hub'
+  const { open } = await import('@tauri-apps/plugin-dialog')
+  const selected = await open({ directory: true, multiple: false })
+  return typeof selected === 'string' ? selected : null
+}
 
 // Sessions
 export const listSessionPlatforms = () => invoke<any[]>('list_session_platforms')
@@ -98,6 +117,35 @@ export const deleteSessions = (platformId: string, sessionIds: string[]) =>
     'delete_sessions',
     { platformId, sessionIds },
   )
+export interface SessionExportResult {
+  path: string
+  session_count: number
+  message_count: number
+}
+export async function exportSessionsHtml(
+  platformId: string,
+  sessionIds: string[],
+  locale: string,
+): Promise<SessionExportResult | null> {
+  const date = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+  const filename = `Agent-Hub-Sessions-${date}.html`
+  let outputPath = filename
+  if (isTauri) {
+    const { save } = await import('@tauri-apps/plugin-dialog')
+    const selected = await save({
+      defaultPath: filename,
+      filters: [{ name: 'HTML', extensions: ['html'] }],
+    })
+    if (!selected) return null
+    outputPath = selected
+  }
+  return invoke<SessionExportResult>('export_sessions_html', {
+    platformId,
+    sessionIds,
+    outputPath,
+    locale,
+  })
+}
 export const searchSessionMessages = (platformId: string, query: string) =>
   invoke<any[]>('search_session_messages', { platformId, query })
 

@@ -27,6 +27,7 @@ export const useSessionsStore = defineStore('sessions', () => {
   const selectionMode = ref(false)
   const selectedIds = ref<Set<string>>(new Set())
   const isBulkDeleting = ref(false)
+  const isBulkExporting = ref(false)
 
 
   async function refreshPlatforms(keepPathFilter = false) {
@@ -228,6 +229,18 @@ export const useSessionsStore = defineStore('sessions', () => {
     }
   }
 
+  async function bulkExport(locale: string): Promise<api.SessionExportResult | null> {
+    const platformId = selectedPlatformId.value
+    const ids = Array.from(selectedIds.value)
+    if (!platformId || ids.length === 0) return null
+    isBulkExporting.value = true
+    try {
+      return await api.exportSessionsHtml(platformId, ids, locale)
+    } finally {
+      isBulkExporting.value = false
+    }
+  }
+
   return {
     platforms, sessions, selectedPlatformId, selectedPathFilter, pathOptions,
     terminals, selectedTerminal, sessionTotal, sessionOffset, hasMore,
@@ -235,9 +248,9 @@ export const useSessionsStore = defineStore('sessions', () => {
     messagesModalOpen, messages, activeSession, messagesLoading, messagesLoadingMore,
     messagesOffset, messagesHasMore, messagesError,
     searchQuery, searchResults, isSearching, searchError,
-    selectionMode, selectedIds, selectedCount, isBulkDeleting,
+    selectionMode, selectedIds, selectedCount, isBulkDeleting, isBulkExporting,
     refreshPlatforms, refreshTerminals, loadSessions, selectPlatform,
     changePathFilter, loadMore, openMessages, loadMessages, doSearch,
-    enterSelection, exitSelection, toggleSelected, selectAllLoaded, clearSelection, bulkDelete,
+    enterSelection, exitSelection, toggleSelected, selectAllLoaded, clearSelection, bulkDelete, bulkExport,
   }
 })

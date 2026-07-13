@@ -3,7 +3,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useSkillsStore } from '@/stores/skills'
-import { useMcpStore } from '@/stores/mcp'
+import { usePluginsStore } from '@/stores/plugins'
 import { useSessionsStore } from '@/stores/sessions'
 import { useSwitchStore } from '@/stores/switch'
 
@@ -12,26 +12,22 @@ import { useToast } from '@/composables/useToast'
 const { t } = useI18n()
 const appStore = useAppStore()
 const skillsStore = useSkillsStore()
-const mcpStore = useMcpStore()
+const pluginsStore = usePluginsStore()
 const sessionsStore = useSessionsStore()
 const switchStore = useSwitchStore()
 const { showToast } = useToast()
 
 const breadcrumb = computed(() => {
-  if (appStore.currentTab === 'mcp') {
-    const p = mcpStore.platforms.find(p => p.id === mcpStore.selectedPlatformId)
-    return p?.display_name || t('mcp.title')
-  }
   if (appStore.currentTab === 'sessions') {
     const p = sessionsStore.platforms.find(p => p.id === sessionsStore.selectedPlatformId)
     return p?.display_name || t('session.title')
   }
-  if (appStore.currentTab === 'switch') {
+  if (appStore.currentTab === 'accounts') {
     const names: Record<string, string> = { codex: 'Codex', 'claude-code': 'Claude Code' }
     return switchStore.selectedAgent ? `${t('switch.title')} — ${names[switchStore.selectedAgent] || ''}` : t('switch.title')
   }
-  if (appStore.currentView === 'skills') {
-    return skillsStore.selectedPlatform?.display_name || ''
+  if (appStore.currentView === 'plugins') {
+    return t('plugin.title')
   }
   if (skillsStore.selectedSkillName) {
     return skillsStore.selectedFolder
@@ -41,13 +37,17 @@ const breadcrumb = computed(() => {
   return ''
 })
 
-const showBack = computed(() => appStore.currentTab === 'skills' && appStore.currentView !== 'skills')
-const showDiff = computed(() => appStore.currentTab === 'skills' && (appStore.currentView === 'detail' || appStore.currentView === 'diff'))
-const showSync = computed(() => appStore.currentTab === 'skills' && appStore.currentView === 'detail')
+const showBack = computed(() => appStore.currentTab === 'plugins' && appStore.currentView !== 'plugins')
+const showDiff = computed(() => pluginsStore.isGlobalScope
+  && appStore.currentTab === 'plugins'
+  && (appStore.currentView === 'detail' || appStore.currentView === 'diff'))
+const showSync = computed(() => pluginsStore.isGlobalScope
+  && appStore.currentTab === 'plugins'
+  && appStore.currentView === 'detail')
 
 function handleBack() {
   skillsStore.backToList()
-  appStore.setView('skills')
+  appStore.setView('plugins')
 }
 
 async function handleDiffClick() {

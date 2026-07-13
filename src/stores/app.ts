@@ -1,22 +1,24 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import * as api from '@/lib/api'
-import { useSkillsStore } from './skills'
-import { useMcpStore } from './mcp'
+import { usePluginsStore } from './plugins'
 import { useSwitchStore } from './switch'
 import { useSessionsStore } from './sessions'
 
-export type TabId = 'skills' | 'mcp' | 'sessions' | 'switch'
-export type ViewId = 'skills' | 'detail' | 'diff' | 'search'
+export type TabId = 'plugins' | 'sessions' | 'accounts'
+export type ViewId = 'plugins' | 'detail' | 'diff' | 'search'
 export type UpdateStatus = 'idle' | 'checking' | 'available' | 'uptodate' | 'installing' | 'error'
 export type UpdateDownloadSource = 'direct' | 'mirror'
 
-const VALID_TABS: TabId[] = ['skills', 'mcp', 'sessions', 'switch']
+const VALID_TABS: TabId[] = ['plugins', 'sessions', 'accounts']
 
 export const useAppStore = defineStore('app', () => {
-  const savedTab = localStorage.getItem('ah-tab') as TabId | null
-  const currentTab = ref<TabId>(savedTab && VALID_TABS.includes(savedTab) ? savedTab : 'skills')
-  const currentView = ref<ViewId>('skills')
+  const storedTab = localStorage.getItem('ah-tab')
+  const migratedTab = storedTab === 'skills' || storedTab === 'mcp'
+    ? 'plugins'
+    : storedTab === 'switch' ? 'accounts' : storedTab
+  const currentTab = ref<TabId>(VALID_TABS.includes(migratedTab as TabId) ? migratedTab as TabId : 'plugins')
+  const currentView = ref<ViewId>('plugins')
   const sidebarCollapsed = ref(false)
   const appVersion = ref('...')
   const trashCount = ref(0)
@@ -58,16 +60,13 @@ export const useAppStore = defineStore('app', () => {
     try { locale.value = await api.getLocale() } catch {}
     try { appVersion.value = await api.getAppVersion() } catch { appVersion.value = '0.0.0' }
 
-    const skillsStore = useSkillsStore()
-    await skillsStore.refreshPlatforms()
-
-    const mcpStore = useMcpStore()
-    await mcpStore.refreshPlatforms()
+    const pluginsStore = usePluginsStore()
+    await pluginsStore.refreshPlatforms()
 
     await refreshTrashCount()
 
-    // Restore the content of the last-opened tab (skills/mcp are already refreshed above).
-    if (currentTab.value === 'switch') {
+    // Restore the content of the last-opened tab (plugins are already refreshed above).
+    if (currentTab.value === 'accounts') {
       const switchStore = useSwitchStore()
       if (switchStore.selectedAgent) await switchStore.loadProfiles()
     } else if (currentTab.value === 'sessions') {
@@ -107,8 +106,8 @@ export const useAppStore = defineStore('app', () => {
   async function restoreTrash(id: string) {
     await api.restoreTrashItem(id)
     await openTrash()
-    const skillsStore = useSkillsStore()
-    await skillsStore.reloadPlatforms()
+    const pluginsStore = usePluginsStore()
+    await pluginsStore.refreshPlatforms()
   }
 
   async function deleteTrashForever(id: string) {
@@ -130,8 +129,8 @@ export const useAppStore = defineStore('app', () => {
   function switchTab(tab: TabId) {
     currentTab.value = tab
     localStorage.setItem('ah-tab', tab)
-    if (tab === 'skills') {
-      currentView.value = 'skills'
+    if (tab === 'plugins') {
+      currentView.value = 'plugins'
     }
   }
 

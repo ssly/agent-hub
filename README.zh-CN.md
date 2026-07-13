@@ -6,7 +6,7 @@
 
 **本地多 AI Agent 平台统一管理工具**
 
-统一管理 Claude Code · Codex CLI · Cursor · Gemini · Kiro 等平台的 Skill、MCP Server、会话历史和账号配置 —— 一个桌面应用搞定一切。
+统一管理 Claude Code · Codex CLI · Cursor · Gemini · Kiro 等平台的插件（Skill、MCP Server 与 Claude Code 原生插件）、会话历史和账号配置 —— 一个桌面应用搞定一切。
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Tauri 2.x](https://img.shields.io/badge/Tauri-2.x-blue?logo=tauri&logoColor=white)](https://v2.tauri.app/)
@@ -23,7 +23,8 @@
 
 如果你同时使用多个 AI 编程 Agent，大概率遇到过这些问题：
 - Claude Code 写好的 Skill 要手动复制到 Cursor、Gemini
-- MCP Server 配置散落在不同路径、不同格式（JSON、TOML）
+- MCP Server 配置散落在全局与项目路径中，格式也不一致（JSON、TOML）
+- Claude Code 插件、Skill 和 MCP Server 需要在不同工具里分别管理
 - 没有方便的方式浏览历史会话，切换账号也很麻烦
 
 Agent Hub 就是为此而生。一个桌面应用，统一管理所有平台。
@@ -32,7 +33,13 @@ Agent Hub 就是为此而生。一个桌面应用，统一管理所有平台。
 
 ## 功能特性
 
-### 🧩 Skill 管理
+### 🧩 统一插件工作区
+
+- **集中管理** — 在同一个 Agent 页面管理 Skill、MCP Server 与 Claude Code 原生插件
+- **全局 / 项目范围** — 可使用各 Agent 的全局用户目录，也可选择项目文件夹查看仓库内配置
+- **Claude Code 插件** — 浏览已安装的原生插件，并启用或停用用户范围插件；项目、本地和托管范围保持只读可见
+
+#### Skill 管理
 
 - **自动发现** — 自动检测已安装的 Agent 平台及其 Skill 目录
 - **Skill 浏览** — 查看元数据（名称、版本、描述），在线预览任意文件内容
@@ -41,21 +48,23 @@ Agent Hub 就是为此而生。一个桌面应用，统一管理所有平台。
 - **全局搜索** — 跨平台搜索 Skill 名称和描述
 - **回收站** — 删除的 Skill 保留 7 天，随时可恢复
 
-### 🔌 MCP Server 管理
+#### MCP Server 管理
 
 - 支持 **5 个平台**，JSON/TOML 格式自动转换
 - 手风琴式展开编辑，即改即存
 - 跨平台同步 — 提取通用字段（`command`、`args`、`env`），保留平台特有配置
 - 粘贴导入原始 JSON/TOML 配置
+- 项目范围的 MCP 配置会与项目 Skill 一起展示；为避免误改仓库，项目范围当前只读
 
 ### 📜 会话浏览器
 
 - 浏览 **Claude Code**、**Codex CLI**、**Kiro** 的历史会话
 - 按项目路径过滤，分页浏览
 - 查看完整对话历史（用户消息 + 助手回复）
+- **批量导出 HTML** — 将选中的会话导出为一个可搜索、自包含的 HTML 文件，任何现代浏览器都能直接打开
 - **恢复会话** — 在终端中继续历史会话，支持 macOS：Warp、iTerm、Ghostty、Terminal · Windows：Windows Terminal、PowerShell、CMD
 
-### 👤 账号切换
+### 👤 账号管理
 
 - 保存和切换 **Claude Code**、**Codex CLI** 的认证配置
 - SHA-256 哈希比对，自动检测当前活跃账号
@@ -95,7 +104,7 @@ Agent Hub 就是为此而生。一个桌面应用，统一管理所有平台。
 
 ## 支持平台
 
-### Skill 管理
+### 插件 / Skill 管理
 
 | 平台 | Skill 目录 |
 |------|-----------|
@@ -118,6 +127,8 @@ Agent Hub 就是为此而生。一个桌面应用，统一管理所有平台。
 | Gemini | `~/.gemini/settings.json` | JSON |
 | Kiro | `~/.kiro/settings/mcp.json` | JSON |
 | Codex CLI | `~/.codex/config.toml` | TOML |
+
+选择项目文件夹后，Agent Hub 会映射到各平台的仓库内目录（例如 Claude Code 使用 `.claude/skills/` 与 `.mcp.json`）。项目范围内容当前只读展示。
 
 ---
 
@@ -149,6 +160,7 @@ skill_dir = "~/.my-agent/skills"
 ```bash
 npm install     # 安装前端依赖
 cargo tauri dev # 启动开发模式（热重载）
+npm run dev:web # 使用 mock 数据在浏览器中调试界面
 ```
 
 | 修改内容 | 效果 |

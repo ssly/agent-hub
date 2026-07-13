@@ -1,3 +1,4 @@
+mod claude_plugin;
 mod commands;
 mod config;
 mod diff;
@@ -32,6 +33,8 @@ pub fn run() {
             app.handle().plugin(tauri_plugin_process::init())?;
             #[cfg(desktop)]
             app.handle().plugin(tauri_plugin_shell::init())?;
+            #[cfg(desktop)]
+            app.handle().plugin(tauri_plugin_dialog::init())?;
             // Monitor / completion hooks are currently disabled. Do not request
             // notification permission, start filesystem watchers, or spawn the
             // process polling thread while the feature is hidden.
@@ -80,6 +83,9 @@ pub fn run() {
             commands::search_session_messages,
             commands::delete_session,
             commands::delete_sessions,
+            commands::export_sessions_html,
+            claude_plugin::list_claude_plugins,
+            claude_plugin::set_claude_plugin_enabled,
             switch::commands::list_switch_profiles,
             switch::commands::save_current_auth_profile,
             switch::commands::add_auth_profile,

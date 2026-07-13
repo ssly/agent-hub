@@ -2,16 +2,17 @@
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useSkillsStore } from '@/stores/skills'
+import { usePluginsStore } from '@/stores/plugins'
 import { truncate } from '@/lib/utils'
 
 const { t } = useI18n()
 const appStore = useAppStore()
 const store = useSkillsStore()
+const pluginsStore = usePluginsStore()
 
-function handleClick(result: any) {
-  store.selectedPlatformId = result.platform_id
+async function handleClick(result: any) {
+  await pluginsStore.selectPlatform(result.platform_id)
   store.selectSkill(result.skill_name, result.folder || '')
-  store.loadSkills()
   appStore.setView('detail')
 }
 </script>

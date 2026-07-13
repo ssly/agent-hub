@@ -1,23 +1,54 @@
 <script setup lang="ts">
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { FolderOpen, Globe2, X } from 'lucide-vue-next'
 import { useAppStore } from '@/stores/app'
 import { useSkillsStore } from '@/stores/skills'
-import { useMcpStore } from '@/stores/mcp'
+import { usePluginsStore } from '@/stores/plugins'
 import { useSessionsStore } from '@/stores/sessions'
 import { useSwitchStore } from '@/stores/switch'
+import { useToast } from '@/composables/useToast'
+import { pickPluginDirectory } from '@/lib/api'
 
 const { t } = useI18n()
 const appStore = useAppStore()
 const skillsStore = useSkillsStore()
-const mcpStore = useMcpStore()
+const pluginsStore = usePluginsStore()
 const sessionsStore = useSessionsStore()
 const switchStore = useSwitchStore()
+const { showToast } = useToast()
+const isPickingDirectory = ref(false)
+
+const workspaceName = computed(() => {
+  if (!pluginsStore.workspaceDirectory) return t('plugin.scope_global')
+  const parts = pluginsStore.workspaceDirectory.split(/[\\/]/).filter(Boolean)
+  return parts[parts.length - 1] || pluginsStore.workspaceDirectory
+})
+
+async function handlePickDirectory() {
+  if (isPickingDirectory.value) return
+  isPickingDirectory.value = true
+  try {
+    const directory = await pickPluginDirectory()
+    if (!directory) return
+    await pluginsStore.setWorkspaceDirectory(directory)
+    appStore.setView('plugins')
+  } catch (error: any) {
+    showToast(t('plugin.scope_pick_failed', { error: error?.message || String(error) }), 'error')
+  } finally {
+    isPickingDirectory.value = false
+  }
+}
+
+async function handleUseGlobalDirectory() {
+  await pluginsStore.setWorkspaceDirectory(null)
+  appStore.setView('plugins')
+}
 
 const tabs = [
-  { id: 'skills' as const, labelKey: 'ui.skills_tab' },
-  { id: 'mcp' as const, labelKey: 'ui.mcp_tab' },
+  { id: 'plugins' as const, labelKey: 'ui.plugins_tab' },
   { id: 'sessions' as const, labelKey: 'ui.sessions_tab' },
-  { id: 'switch' as const, labelKey: 'ui.switch_tab' },
+  { id: 'accounts' as const, labelKey: 'ui.accounts_tab' },
 ]
 
 function handleTabClick(tabId: typeof tabs[number]['id']) {
@@ -30,7 +61,7 @@ function handleTabClick(tabId: typeof tabs[number]['id']) {
     ]).finally(() => {
       sessionsStore.isLoading = false
     })
-  } else if (tabId === 'switch') {
+  } else if (tabId === 'accounts') {
     if (!switchStore.selectedAgent) {
       switchStore.selectAgent(localStorage.getItem('ah-switch-agent') || 'codex')
     } else {
@@ -43,43 +74,38 @@ function handleTabClick(tabId: typeof tabs[number]['id']) {
 }
 
 async function handleRefresh() {
-  if (appStore.currentTab === 'mcp') {
-    await mcpStore.refreshPlatforms()
+  if (appStore.currentTab === 'plugins') {
+    await pluginsStore.refreshPlatforms()
   } else if (appStore.currentTab === 'sessions') {
     sessionsStore.isLoading = true
     await Promise.all([sessionsStore.refreshPlatforms(true), sessionsStore.refreshTerminals()])
     sessionsStore.isLoading = false
-  } else if (appStore.currentTab === 'switch') {
+  } else if (appStore.currentTab === 'accounts') {
     if (switchStore.selectedAgent) await switchStore.loadProfiles()
-  } else {
-    await skillsStore.refreshPlatforms()
   }
 }
 
 function getSidebarItems() {
-  if (appStore.currentTab === 'mcp') return mcpStore.platforms
   if (appStore.currentTab === 'sessions') return sessionsStore.platforms
-  if (appStore.currentTab === 'switch') return [
+  if (appStore.currentTab === 'accounts') return [
     { id: 'codex', display_name: 'Codex' },
     { id: 'claude-code', display_name: 'Claude Code' },
   ]
-  return skillsStore.platforms
+  return pluginsStore.platforms
 }
 
 function getSelectedId() {
-  if (appStore.currentTab === 'mcp') return mcpStore.selectedPlatformId
   if (appStore.currentTab === 'sessions') return sessionsStore.selectedPlatformId
-  if (appStore.currentTab === 'switch') return switchStore.selectedAgent
-  return skillsStore.selectedPlatformId
+  if (appStore.currentTab === 'accounts') return switchStore.selectedAgent
+  return pluginsStore.selectedPlatformId
 }
 
 function handleItemClick(id: string) {
-  if (appStore.currentTab === 'mcp') mcpStore.selectPlatform(id)
-  else if (appStore.currentTab === 'sessions') sessionsStore.selectPlatform(id)
-  else if (appStore.currentTab === 'switch') switchStore.selectAgent(id)
+  if (appStore.currentTab === 'sessions') sessionsStore.selectPlatform(id)
+  else if (appStore.currentTab === 'accounts') switchStore.selectAgent(id)
   else {
-    skillsStore.selectPlatform(id)
-    appStore.setView('skills')
+    pluginsStore.selectPlatform(id)
+    appStore.setView('plugins')
   }
 }
 
@@ -93,7 +119,7 @@ function handleSearch(e: Event) {
       appStore.setView('search')
     } else {
       skillsStore.searchResults = []
-      appStore.setView('skills')
+      appStore.setView('plugins')
     }
   }, 300)
 }
@@ -149,6 +175,37 @@ function handleSessionSearch(e: Event) {
         </button>
       </div>
 
+      <div v-if="appStore.currentTab === 'plugins'" class="ah-scope-picker">
+        <div class="ah-scope-picker__label">{{ t('plugin.scope_label') }}</div>
+        <div class="ah-scope-picker__control">
+          <button
+            type="button"
+            class="ah-scope-picker__main"
+            :disabled="isPickingDirectory"
+            :title="pluginsStore.workspaceDirectory || t('plugin.scope_global_hint')"
+            @click="handlePickDirectory"
+          >
+            <Globe2 v-if="pluginsStore.isGlobalScope" :size="14" />
+            <FolderOpen v-else :size="14" />
+            <span class="ah-scope-picker__text">
+              <strong>{{ workspaceName }}</strong>
+              <small v-if="pluginsStore.workspaceDirectory">{{ pluginsStore.workspaceDirectory }}</small>
+              <small v-else>{{ t('plugin.scope_choose') }}</small>
+            </span>
+          </button>
+          <button
+            v-if="!pluginsStore.isGlobalScope"
+            type="button"
+            class="ah-scope-picker__reset"
+            :title="t('plugin.scope_use_global')"
+            :aria-label="t('plugin.scope_use_global')"
+            @click="handleUseGlobalDirectory"
+          >
+            <X :size="13" />
+          </button>
+        </div>
+      </div>
+
       <!-- Platform List -->
       <div class="ah-platform-list flex-1 overflow-y-auto space-y-0.5">
         <button
@@ -159,14 +216,9 @@ function handleSessionSearch(e: Event) {
         >
           <div class="flex items-center justify-between">
             <span class="ah-platform-item__name">{{ item.display_name }}</span>
-            <span v-if="item.server_count != null" class="ah-platform-item__count">{{ item.server_count }}</span>
-            <span v-if="item.session_count != null" class="ah-platform-item__count">{{ item.session_count }}</span>
-          </div>
-          <div
-            v-if="getSelectedId() === item.id && item.skill_dir"
-            class="ah-platform-item__path"
-          >
-            {{ item.skill_dir }}
+            <span v-if="appStore.currentTab === 'sessions' && item.session_count != null" class="ah-platform-item__count">
+              {{ item.session_count }}
+            </span>
           </div>
         </button>
         <p v-if="getSidebarItems().length === 0" class="text-sm p-3" style="color: var(--ink-3)">
@@ -175,7 +227,7 @@ function handleSessionSearch(e: Event) {
       </div>
 
       <!-- Search (skills tab only) -->
-      <div v-if="appStore.currentTab === 'skills'" class="p-2.5" style="border-top: 1px solid var(--hairline)">
+      <div v-if="appStore.currentTab === 'plugins'" class="p-2.5" style="border-top: 1px solid var(--hairline)">
         <input
           type="text"
           :placeholder="t('ui.search_placeholder')"
@@ -236,6 +288,59 @@ function handleSessionSearch(e: Event) {
 </template>
 
 <style scoped>
+.ah-scope-picker {
+  padding: 10px;
+  border-bottom: 1px solid var(--hairline);
+}
+.ah-scope-picker__label {
+  margin: 0 4px 5px;
+  color: var(--ink-4);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.ah-scope-picker__control {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  border: 1px solid var(--hairline);
+  border-radius: 9px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.ah-scope-picker__main {
+  min-width: 0;
+  flex: 1;
+  padding: 8px 9px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-2);
+  text-align: left;
+  cursor: pointer;
+}
+.ah-scope-picker__main:hover { background: var(--hover); }
+.ah-scope-picker__main:disabled { cursor: wait; opacity: .6; }
+.ah-scope-picker__text { min-width: 0; display: grid; gap: 1px; }
+.ah-scope-picker__text strong,
+.ah-scope-picker__text small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ah-scope-picker__text strong { color: var(--ink); font-size: 12px; font-weight: 600; }
+.ah-scope-picker__text small { color: var(--ink-4); font-size: 10px; }
+.ah-scope-picker__reset {
+  width: 30px;
+  flex: 0 0 30px;
+  display: grid;
+  place-items: center;
+  border-left: 1px solid var(--hairline);
+  color: var(--ink-4);
+  cursor: pointer;
+}
+.ah-scope-picker__reset:hover { color: var(--ink); background: var(--hover); }
 .about-spin {
   animation: about-spin 0.8s linear infinite;
 }

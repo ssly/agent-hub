@@ -1,5 +1,6 @@
 mod claude;
 mod codex;
+mod export;
 mod kiro;
 mod models;
 
@@ -9,7 +10,10 @@ use std::process::Command;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
-pub use models::{SessionListPage, SessionMessage, SessionPlatform, SessionTerminalOption, SessionSearchResult, BatchDeleteResult, BatchDeleteFailure};
+pub use models::{
+    BatchDeleteFailure, BatchDeleteResult, SessionExportResult, SessionListPage, SessionMessage,
+    SessionPlatform, SessionSearchResult, SessionTerminalOption,
+};
 
 // Windows: suppress the console window that GUI apps otherwise allocate for each
 // child process. Applied to silent detection probes only, never to terminal spawns.
@@ -60,12 +64,7 @@ pub fn list_sessions(
     limit: usize,
 ) -> Result<SessionListPage, String> {
     let page_limit = limit.clamp(1, MAX_SESSION_PAGE_SIZE);
-    let all_sessions = match platform_id {
-        "claude-code" => claude::list_claude_sessions_all()?,
-        "codex" => codex::list_codex_sessions_all()?,
-        "kiro" => kiro::list_kiro_sessions_all()?,
-        _ => return Err(format!("Unsupported platform: {}", platform_id)),
-    };
+    let all_sessions = list_sessions_all(platform_id)?;
     let paths = build_path_options(&all_sessions);
     let filtered_sessions = filter_sessions_by_path(all_sessions, path_filter);
     let total = filtered_sessions.len();
@@ -83,6 +82,24 @@ pub fn list_sessions(
         has_more,
         sessions,
     })
+}
+
+fn list_sessions_all(platform_id: &str) -> Result<Vec<models::SessionSummary>, String> {
+    match platform_id {
+        "claude-code" => claude::list_claude_sessions_all(),
+        "codex" => codex::list_codex_sessions_all(),
+        "kiro" => kiro::list_kiro_sessions_all(),
+        _ => Err(format!("Unsupported platform: {}", platform_id)),
+    }
+}
+
+pub fn export_sessions_html(
+    platform_id: &str,
+    session_ids: &[String],
+    output_path: &str,
+    locale: &str,
+) -> Result<SessionExportResult, String> {
+    export::export_sessions_html(platform_id, session_ids, output_path, locale)
 }
 
 fn normalize_project_path(value: &str) -> Option<String> {
@@ -397,8 +414,7 @@ fn launch_terminal_with_command(terminal_id: &str, command: &str) -> Result<(), 
         _ => {
             // Default: use PowerShell Start-Process to avoid the cmd.exe flash
             let bat_str = bat_path.to_string_lossy().replace('\'', "''");
-            let ps_script =
-                format!("Start-Process cmd.exe -ArgumentList '/k','{}'", bat_str);
+            let ps_script = format!("Start-Process cmd.exe -ArgumentList '/k','{}'", bat_str);
             Command::new("powershell.exe")
                 .arg("-WindowStyle")
                 .arg("Hidden")
@@ -620,7 +636,11 @@ mod tests {
         assert_eq!(result.deleted, 0);
         assert_eq!(result.failed.len(), 3);
         // Confirms one failure did not abort the loop (best-effort).
-        let ids: Vec<&str> = result.failed.iter().map(|f| f.session_id.as_str()).collect();
+        let ids: Vec<&str> = result
+            .failed
+            .iter()
+            .map(|f| f.session_id.as_str())
+            .collect();
         assert!(ids.contains(&"a"));
         assert!(ids.contains(&"b"));
         assert!(ids.contains(&"c"));

@@ -7,6 +7,11 @@ import * as api from '@/lib/api'
 import { ref, computed, watch } from 'vue'
 import AppModal from '@/components/ui/AppModal.vue'
 
+const props = withDefaults(defineProps<{ embedded?: boolean; readonly?: boolean }>(), {
+  embedded: false,
+  readonly: false,
+})
+
 const { t } = useI18n()
 const store = useMcpStore()
 const appStore = useAppStore()
@@ -212,7 +217,7 @@ function stripTomlHeader(text: string, name: string): string {
 </script>
 
 <template>
-  <div class="p-6 view-enter">
+  <div :class="[props.embedded ? 'ah-embedded-view' : 'p-6 view-enter']">
     <div class="ah-view-content">
       <div v-if="!store.selectedPlatformId" class="flex flex-col items-center justify-center py-20 text-center">
         <p style="color: var(--ink-3)">{{ t('mcp.title') }}</p>
@@ -220,7 +225,7 @@ function stripTomlHeader(text: string, name: string): string {
 
       <template v-else>
         <!-- Add button -->
-        <div class="flex justify-end mb-4">
+        <div v-if="!props.embedded && !props.readonly" class="flex justify-end mb-4">
           <button class="btn btn-primary btn-sm" @click="store.addModalOpen = true">+ {{ t('mcp.add') }}</button>
         </div>
 
@@ -237,7 +242,7 @@ function stripTomlHeader(text: string, name: string): string {
           >
             <!-- Server Header -->
             <div class="ah-accordion__header group">
-              <button class="flex-1 flex items-center gap-2" @click="store.toggleServer(server.name)">
+              <button class="flex-1 flex items-center gap-2 text-left" @click="store.toggleServer(server.name)">
                 <span :class="['ah-accordion__arrow', store.expandedServer === server.name ? 'is-open' : '']">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
                 </span>
@@ -246,7 +251,7 @@ function stripTomlHeader(text: string, name: string): string {
                   <div class="ah-accordion__summary">{{ server.summary }}</div>
                 </div>
               </button>
-              <div class="ah-accordion__actions">
+              <div v-if="!props.readonly" class="ah-accordion__actions">
                 <button class="btn btn-ghost btn-sm" @click.stop="handleSyncClick(server.name)">{{ t('mcp.sync') }}</button>
                 <button
                   v-if="store.expandedServer === server.name && store.serverDetails[server.name]"
@@ -271,7 +276,11 @@ function stripTomlHeader(text: string, name: string): string {
                 <span class="text-xs" style="color: var(--ink-3)">
                   {{ store.serverDetails[server.name]?.format === 'toml' ? 'TOML' : 'JSON' }}
                 </span>
-                <button class="btn btn-ghost btn-sm" @click="handleEditClick(server.name)">{{ t('mcp.edit') }}</button>
+                <button
+                  v-if="!props.readonly"
+                  class="btn btn-ghost btn-sm"
+                  @click="handleEditClick(server.name)"
+                >{{ t('mcp.edit') }}</button>
               </div>
               <pre class="ah-config-view" style="margin: 0;">{{ displayConfig(server.name) }}</pre>
             </div>

@@ -92,3 +92,35 @@ pub fn builtin_platforms() -> Vec<PlatformDef> {
         },
     ]
 }
+
+/// Resolve the project-scoped skill directory for a built-in platform.
+///
+/// Agent Hub intentionally mirrors each platform's existing global layout
+/// under the selected workspace. Claude Code, for example, maps
+/// `~/.claude/skills` to `<workspace>/.claude/skills`.
+pub fn workspace_skill_dir(platform_id: &str, workspace: &std::path::Path) -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+    let def = builtin_platforms()
+        .into_iter()
+        .find(|platform| platform.id == platform_id)?;
+    let relative = def.skill_dir.strip_prefix(home).ok()?;
+    Some(workspace.join(relative))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_global_skill_layout_into_workspace() {
+        let root = PathBuf::from("/tmp/example-project");
+        assert_eq!(
+            workspace_skill_dir("claude-code", &root),
+            Some(root.join(".claude").join("skills"))
+        );
+        assert_eq!(
+            workspace_skill_dir("shared-pool", &root),
+            Some(root.join(".agents").join("skills"))
+        );
+    }
+}

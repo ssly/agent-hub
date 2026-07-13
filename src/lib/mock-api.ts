@@ -56,8 +56,20 @@ function makeSkillDetail(name: string) {
 }
 
 const MCP_PLATFORMS = [
-  { id: 'claude-code', display_name: 'Claude Code', server_count: 4 },
-  { id: 'cursor', display_name: 'Cursor', server_count: 2 },
+  { id: 'claude-code', display_name: 'Claude Code', server_count: 4, config_path: '~/.claude.json', format: 'json' },
+  { id: 'cursor', display_name: 'Cursor', server_count: 2, config_path: '~/.cursor/mcp.json', format: 'json' },
+]
+
+const CLAUDE_PLUGINS = [
+  { id: 'frontend-design@claude-plugins-official', name: 'frontend-design', marketplace: 'claude-plugins-official', version: '1.0.0', scope: 'user', enabled: true, manageable: true, description: 'Frontend design skill for UI/UX implementation', install_path: '~/.claude/plugins/cache/claude-plugins-official/frontend-design/1.0.0' },
+  { id: 'rust-analyzer-lsp@claude-plugins-official', name: 'rust-analyzer-lsp', marketplace: 'claude-plugins-official', version: '1.0.0', scope: 'user', enabled: true, manageable: true, description: 'Rust language server for code intelligence and analysis', install_path: '~/.claude/plugins/cache/claude-plugins-official/rust-analyzer-lsp/1.0.0' },
+  { id: 'codex@openai-codex', name: 'codex', marketplace: 'openai-codex', version: '1.0.2', scope: 'user', enabled: true, manageable: true, description: 'Use Codex from Claude Code to review code or delegate tasks.', install_path: '~/.claude/plugins/cache/openai-codex/codex/1.0.2' },
+  { id: 'claude-mem@thedotmack', name: 'claude-mem', marketplace: 'thedotmack', version: '13.8.0', scope: 'user', enabled: false, manageable: true, description: 'Memory compression system for Claude Code', install_path: '~/.claude/plugins/cache/thedotmack/claude-mem/13.8.0' },
+  { id: 'team-review@company', name: 'team-review', marketplace: 'company', version: '2.4.0', scope: 'managed', enabled: true, manageable: false, description: 'Organization-managed review policies and hooks', install_path: '' },
+]
+
+const PROJECT_CLAUDE_PLUGINS = [
+  { id: 'review-workflow@team-tools', name: 'review-workflow', marketplace: 'team-tools', version: '1.1.0', scope: 'project', enabled: true, manageable: false, description: 'Project-specific review commands and hooks', install_path: '/Users/demo/.claude/plugins/review-workflow' },
 ]
 
 function makeMcpServers(platformId: string) {
@@ -116,8 +128,11 @@ function delay(ms = 150): Promise<void> {
 
 // Skills / Platforms
 export async function listPlatforms() { await delay(); return PLATFORMS }
-export async function getPlatformSkills(platformId: string) { await delay(); return makeSkills(platformId) }
-export async function getSkillDetail(_platformId: string, skillName: string, _folder: string) {
+export async function getPlatformSkills(platformId: string, workspaceDir?: string) {
+  await delay()
+  return workspaceDir ? makeSkills(platformId).slice(0, 2) : makeSkills(platformId)
+}
+export async function getSkillDetail(_platformId: string, skillName: string, _folder: string, workspaceDir?: string) {
   await delay(200); return makeSkillDetail(skillName)
 }
 export async function openSkillFolder() { await delay(200) }
@@ -130,13 +145,13 @@ export async function refreshPlatforms() { await delay(); return PLATFORMS }
 export async function refreshPlatformSkills(platformId: string) { await delay(); return makeSkills(platformId) }
 export async function getLocale() { return localStorage.getItem('ah-locale') || 'zh-CN' }
 export async function setLocale(locale: string) { localStorage.setItem('ah-locale', locale) }
-export async function searchSkills(query: string) {
+export async function searchSkills(query: string, workspaceDir?: string) {
   await delay()
   return makeSkills('claude-code')
     .filter(s => s.name.includes(query) || (s.description || '').includes(query))
     .map(s => ({ skill_name: s.name, folder: s.folder, platform_id: 'claude-code', platform_name: 'Claude Code', description: s.description }))
 }
-export async function readSkillFile(_platformId: string, _skillName: string, _folder: string, filePath: string) {
+export async function readSkillFile(_platformId: string, _skillName: string, _folder: string, filePath: string, _workspaceDir?: string) {
   await delay()
   if (filePath.endsWith('.md')) {
     return `# ${_skillName}\n\nThis is a mock SKILL.md file.\n\n## Usage\n\nRun the skill with:\n\n\`\`\`bash\n/skill ${_skillName}\n\`\`\`\n\n## Configuration\n\nNo configuration required.\n`
@@ -149,9 +164,22 @@ export async function readSkillFile(_platformId: string, _skillName: string, _fo
 export async function deleteSkill() { await delay() }
 
 // MCP
-export async function listMcpPlatforms() { await delay(); return MCP_PLATFORMS }
-export async function getMcpServers(platformId: string) { await delay(); return makeMcpServers(platformId) }
-export async function getMcpServer(_platformId: string, name: string) {
+export async function listMcpPlatforms(workspaceDir?: string) {
+  await delay()
+  if (!workspaceDir) return MCP_PLATFORMS
+  return MCP_PLATFORMS.map(platform => ({
+    ...platform,
+    server_count: 1,
+    config_path: platform.id === 'claude-code'
+      ? `${workspaceDir}/.mcp.json`
+      : `${workspaceDir}/.cursor/mcp.json`,
+  }))
+}
+export async function getMcpServers(platformId: string, workspaceDir?: string) {
+  await delay()
+  return workspaceDir ? makeMcpServers(platformId).slice(0, 1) : makeMcpServers(platformId)
+}
+export async function getMcpServer(_platformId: string, name: string, _workspaceDir?: string) {
   await delay()
   const configs: Record<string, any> = {
     github: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'], env: { GITHUB_TOKEN: 'ghp_xxx' } },
@@ -168,6 +196,18 @@ export async function getMcpSyncTargets() { await delay(); return MCP_PLATFORMS.
 export async function previewMcpSync() { await delay(); return { changes: [] } }
 export async function previewMcpChange() { await delay(); return { server_name: 'mock', target_format: 'json', target_config_path: '/mock/config.json', has_conflict: false, diff_lines: [{ tag: 'added', content: '  "mock": { "command": "echo" }\n' }], added: 1, removed: 0 } }
 export async function syncMcpServer() { await delay(500) }
+
+// Claude Code native plugins
+export async function listClaudePlugins(workspaceDir?: string) {
+  await delay()
+  return (workspaceDir ? PROJECT_CLAUDE_PLUGINS : CLAUDE_PLUGINS).map(plugin => ({ ...plugin }))
+}
+export async function setClaudePluginEnabled(pluginId: string, scope: string, enabled: boolean) {
+  await delay(400)
+  const plugin = CLAUDE_PLUGINS.find(item => item.id === pluginId && item.scope === scope)
+  if (!plugin || !plugin.manageable) throw new Error('Plugin scope is read-only')
+  plugin.enabled = enabled
+}
 
 // Sessions
 export async function listSessionPlatforms() { await delay(); return SESSION_PLATFORMS }
@@ -188,6 +228,34 @@ export async function deleteSession() { await delay(200) }
 export async function deleteSessions(_platformId: string, sessionIds: string[]) {
   await delay(300)
   return { deleted: sessionIds.length, failed: [] }
+}
+export async function exportSessionsHtml(
+  platformId: string,
+  sessionIds: string[],
+  outputPath: string,
+  locale: string,
+) {
+  await delay(300)
+  const isZh = locale.toLowerCase().startsWith('zh')
+  const title = isZh ? '会话记录' : 'Session Transcript'
+  const sessions = sessionIds.map((id, index) => `
+    <section>
+      <h2>${isZh ? '示例会话' : 'Sample session'} ${index + 1}</h2>
+      <p><strong>${isZh ? '用户' : 'User'}：</strong>${id}</p>
+      <p><strong>Agent：</strong>${isZh ? '这是浏览器调试模式生成的导出预览。' : 'This export preview was generated in web debug mode.'}</p>
+    </section>`).join('')
+  const html = `<!doctype html><html lang="${isZh ? 'zh-CN' : 'en'}"><meta charset="utf-8"><title>${title}</title><style>body{max-width:900px;margin:40px auto;padding:0 20px;font:16px/1.7 system-ui;color:#1e2a32}section{margin:20px 0;padding:20px;border:1px solid #ddd;border-radius:14px;background:#fff}</style><body><h1>${title}</h1><p>${platformId}</p>${sessions}</body></html>`
+  if (typeof document !== 'undefined') {
+    const url = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = outputPath
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 0)
+  }
+  return { path: outputPath, session_count: sessionIds.length, message_count: sessionIds.length * 2 }
 }
 export async function searchSessionMessages(platformId: string, query: string) {
   await delay();

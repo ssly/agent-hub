@@ -4,7 +4,7 @@ mod registry;
 pub use discovery::{
     discover_platforms, ensure_all_skills_loaded, invalidate_platform_skills, load_platform_skills,
 };
-pub use registry::PlatformDef;
+pub use registry::{workspace_skill_dir, PlatformDef};
 
 use std::path::PathBuf;
 

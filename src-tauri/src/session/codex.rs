@@ -132,7 +132,10 @@ fn delete_codex_sessions_in_db(path: &Path, session_ids: &[String]) -> Result<us
         placeholders.join(", ")
     );
     let changed = conn
-        .execute(&sql, params_from_iter(session_ids.iter().map(|s| s.as_str())))
+        .execute(
+            &sql,
+            params_from_iter(session_ids.iter().map(|s| s.as_str())),
+        )
         .map_err(|err| err.to_string())?;
     Ok(changed)
 }

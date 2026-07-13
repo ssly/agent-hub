@@ -6,7 +6,7 @@
 
 **Unified management for local AI Agent platforms**
 
-Manage Skills, MCP Servers, session history, and account profiles across
+Manage plugins (Skills, MCP Servers, and Claude Code extensions), session history, and account profiles across
 Claude Code · Codex CLI · Cursor · Gemini · Kiro and more — in one desktop app.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -25,7 +25,8 @@ Claude Code · Codex CLI · Cursor · Gemini · Kiro and more — in one desktop
 If you work with multiple AI coding agents, you've probably felt the pain:
 
 - Skills written for Claude Code need to be manually copied to Cursor and Gemini
-- MCP Server configs are scattered across different files in different formats (JSON, TOML)
+- MCP Server configs are scattered across global and project files in different formats (JSON, TOML)
+- Claude Code plugins, Skills, and MCP Servers have to be managed in separate tools
 - No easy way to browse past conversations or switch between accounts
 
 Agent Hub solves this. One desktop app to manage them all.
@@ -34,7 +35,13 @@ Agent Hub solves this. One desktop app to manage them all.
 
 ## Features
 
-### 🧩 Skill Management
+### 🧩 Unified Plugin Workspace
+
+- **One workspace** — Manage Skills, MCP Servers, and Claude Code native plugins from the same Agent page
+- **Global or project scope** — Use each Agent's global user directory or select a project folder to inspect its local configuration
+- **Claude Code plugins** — Browse installed native plugins and enable or disable user-scoped plugins; project, local, and managed scopes remain visible as read-only
+
+#### Skill Management
 
 - **Auto-discovery** — Detects installed agent platforms and their skill directories
 - **Skill browser** — Metadata view (name, version, description), inline file preview
@@ -43,21 +50,23 @@ Agent Hub solves this. One desktop app to manage them all.
 - **Global search** — Search skill names and descriptions across all platforms
 - **Trash bin** — Deleted skills are kept for 7 days, restorable anytime
 
-### 🔌 MCP Server Management
+#### MCP Server Management
 
 - Supports **5 platforms** with JSON / TOML format auto-conversion
 - Accordion-style inline editing
 - Cross-platform sync — extracts universal fields (`command`, `args`, `env`), preserves platform-specific ones
 - Paste-import raw JSON / TOML config
+- Project-scoped MCP configs can be inspected alongside project Skills; project scope is read-only to avoid accidental repository changes
 
 ### 📜 Session Browser
 
 - Browse history from **Claude Code**, **Codex CLI**, and **Kiro**
 - Filter by project path, paginate through conversations
 - View full message history (user & assistant turns)
+- **Batch HTML export** — Export selected conversations as one searchable, self-contained HTML file that opens in any modern browser
 - **Resume sessions** in your terminal — macOS: Warp, iTerm, Ghostty, Terminal · Windows: Windows Terminal, PowerShell, CMD
 
-### 👤 Account Switcher
+### 👤 Accounts
 
 - Save and switch authentication profiles for **Claude Code** and **Codex CLI**
 - SHA-256 hash comparison auto-detects the active account
@@ -97,7 +106,7 @@ Download `.exe` from [Releases](https://github.com/ssly/agent-hub/releases) and 
 
 ## Supported Platforms
 
-### Skill Management
+### Plugin / Skill Management
 
 | Platform | Skill Directory |
 |----------|----------------|
@@ -120,6 +129,8 @@ Download `.exe` from [Releases](https://github.com/ssly/agent-hub/releases) and 
 | Gemini | `~/.gemini/settings.json` | JSON |
 | Kiro | `~/.kiro/settings/mcp.json` | JSON |
 | Codex CLI | `~/.codex/config.toml` | TOML |
+
+When a project folder is selected, Agent Hub maps each platform to its repository-local layout (for example, Claude Code uses `.claude/skills/` and `.mcp.json`). Project-scoped content is shown read-only.
 
 ---
 
@@ -151,6 +162,7 @@ skill_dir = "~/.my-agent/skills"
 ```bash
 npm install     # install frontend deps
 cargo tauri dev # launch dev mode with hot reload
+npm run dev:web # browser-only UI with mock data
 ```
 
 | What you change | What happens |

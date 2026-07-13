@@ -3,7 +3,7 @@ use std::{fs, ops::Range};
 use serde_json::Value;
 use similar::{ChangeTag, TextDiff};
 
-use super::registry::{find_mcp_platform, McpFormat};
+use super::registry::{find_mcp_platform, find_workspace_mcp_platform, McpFormat, McpPlatformDef};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct McpServer {
@@ -13,6 +13,18 @@ pub struct McpServer {
 
 pub fn read_mcp_servers(platform_id: &str) -> Result<Vec<McpServer>, String> {
     let def = find_mcp_platform(platform_id).ok_or("Platform not found")?;
+    read_mcp_servers_from_def(&def)
+}
+
+pub fn read_workspace_mcp_servers(
+    platform_id: &str,
+    workspace: &std::path::Path,
+) -> Result<Vec<McpServer>, String> {
+    let def = find_workspace_mcp_platform(platform_id, workspace).ok_or("Platform not found")?;
+    read_mcp_servers_from_def(&def)
+}
+
+fn read_mcp_servers_from_def(def: &McpPlatformDef) -> Result<Vec<McpServer>, String> {
     if !def.config_path.exists() {
         return Ok(Vec::new());
     }
@@ -29,6 +41,17 @@ pub fn read_mcp_server(platform_id: &str, name: &str) -> Result<McpServer, Strin
     servers
         .into_iter()
         .find(|s| s.name == name)
+        .ok_or_else(|| format!("Server '{}' not found", name))
+}
+
+pub fn read_workspace_mcp_server(
+    platform_id: &str,
+    workspace: &std::path::Path,
+    name: &str,
+) -> Result<McpServer, String> {
+    read_workspace_mcp_servers(platform_id, workspace)?
+        .into_iter()
+        .find(|server| server.name == name)
         .ok_or_else(|| format!("Server '{}' not found", name))
 }
 
@@ -282,9 +305,8 @@ pub fn preview_mcp_sync(
 
     // Build the effective sync payload: core fields merged into the existing
     // target entry (if any) so platform-specific fields are preserved in the preview.
-    let sync_config =
-        build_sync_config(&source_server.config, target_platform_id, server_name)?
-            .unwrap_or_else(|| extract_sync_core(&source_server.config));
+    let sync_config = build_sync_config(&source_server.config, target_platform_id, server_name)?
+        .unwrap_or_else(|| extract_sync_core(&source_server.config));
 
     let before_text = if target_def.config_path.exists() {
         fs::read_to_string(&target_def.config_path).unwrap_or_default()
@@ -296,18 +318,12 @@ pub fn preview_mcp_sync(
     };
 
     let after_text = match target_def.format {
-        McpFormat::Json => apply_json_server(
-            &before_text,
-            &target_def.mcp_key,
-            server_name,
-            &sync_config,
-        ),
-        McpFormat::Toml => apply_toml_server(
-            &before_text,
-            &target_def.mcp_key,
-            server_name,
-            &sync_config,
-        ),
+        McpFormat::Json => {
+            apply_json_server(&before_text, &target_def.mcp_key, server_name, &sync_config)
+        }
+        McpFormat::Toml => {
+            apply_toml_server(&before_text, &target_def.mcp_key, server_name, &sync_config)
+        }
     }?;
 
     let diff_lines = compute_text_diff(&before_text, &after_text);
@@ -412,10 +428,8 @@ pub(crate) fn remove_json_server(
         return Err("Not a JSON object".into());
     }
 
-    let mcp_field =
-        find_json_object_field(before, root_open, mcp_key)?.ok_or_else(|| {
-            format!("'{}' section not found, cannot delete '{}'", mcp_key, name)
-        })?;
+    let mcp_field = find_json_object_field(before, root_open, mcp_key)?
+        .ok_or_else(|| format!("'{}' section not found, cannot delete '{}'", mcp_key, name))?;
 
     let servers_open = skip_json_ws(before, mcp_field.value_start);
     if before.as_bytes().get(servers_open) != Some(&b'{') {
@@ -427,7 +441,13 @@ pub(crate) fn remove_json_server(
 
     let servers_close = find_matching_delim(before, servers_open, b'{', b'}')?;
 
-    let result = remove_json_member(before, server_field.key_start, server_field.value_end, servers_open, servers_close);
+    let result = remove_json_member(
+        before,
+        server_field.key_start,
+        server_field.value_end,
+        servers_open,
+        servers_close,
+    );
 
     // Validate the result is still well-formed JSON before returning.
     serde_json::from_str::<Value>(&result).map_err(|e| e.to_string())?;
@@ -993,6 +1013,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reads_workspace_mcp_config_without_falling_back_to_global() {
+        let workspace = tempfile::tempdir().unwrap();
+        fs::write(
+            workspace.path().join(".mcp.json"),
+            r#"{"mcpServers":{"project-only":{"command":"echo"}}}"#,
+        )
+        .unwrap();
+
+        let servers = read_workspace_mcp_servers("claude-code", workspace.path()).unwrap();
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].name, "project-only");
+    }
+
+    #[test]
     fn test_apply_json_targeted_edit_existing_server() {
         let before = r#"{
   "mcpServers": {
@@ -1446,7 +1480,10 @@ name = "keep"
         assert!(!obj.contains_key("env"), "empty env should be stripped");
         assert_eq!(core["command"], "npx");
         assert_eq!(core["args"][2], "--api-key");
-        assert_eq!(core["args"][3], "ctx7sk-abc", "api-key in args must be preserved");
+        assert_eq!(
+            core["args"][3], "ctx7sk-abc",
+            "api-key in args must be preserved"
+        );
     }
 
     #[test]
@@ -1494,7 +1531,10 @@ name = "keep"
             "type": "stdio"
         });
         let core = extract_sync_core(&config);
-        assert_eq!(core["env"]["API_KEY"], "secret123", "non-empty env must be preserved");
+        assert_eq!(
+            core["env"]["API_KEY"], "secret123",
+            "non-empty env must be preserved"
+        );
         assert!(!core.as_object().unwrap().contains_key("type"));
     }
 
@@ -1532,8 +1572,7 @@ NODE_PATH = \"/usr/bin/node\"
 [plugins.foo]
 enabled = true
 ";
-        let ranges =
-            find_toml_server_section_ranges(content, "mcp_servers", "node_repl");
+        let ranges = find_toml_server_section_ranges(content, "mcp_servers", "node_repl");
         // Should match both [mcp_servers.node_repl] and [mcp_servers.node_repl.env].
         assert_eq!(ranges.len(), 2, "expected 2 ranges (server + env subtable)");
 
@@ -1555,7 +1594,10 @@ enabled = true
         let after = after.trim_end().to_string() + "\n";
 
         // The unrelated [plugins.foo] section must survive.
-        assert!(after.contains("[plugins.foo]"), "plugins section must survive");
+        assert!(
+            after.contains("[plugins.foo]"),
+            "plugins section must survive"
+        );
         assert!(
             !after.contains("node_repl"),
             "all node_repl traces must be removed"
@@ -1582,7 +1624,11 @@ command = \"b\"
 ";
         // Deleting "node" should only touch [mcp_servers.node], leaving node_repl.
         let ranges = find_toml_server_section_ranges(content, "mcp_servers", "node");
-        assert_eq!(ranges.len(), 1, "only the exact-match section should be hit");
+        assert_eq!(
+            ranges.len(),
+            1,
+            "only the exact-match section should be hit"
+        );
         let mut after = String::new();
         let mut cursor = 0usize;
         for r in &ranges {
@@ -1716,7 +1762,10 @@ command = \"b\"
         // The targeted server is gone, the sibling survives.
         let parsed: Value = serde_json::from_str(&after).unwrap();
         assert!(
-            !parsed["mcpServers"].as_object().unwrap().contains_key("context7"),
+            !parsed["mcpServers"]
+                .as_object()
+                .unwrap()
+                .contains_key("context7"),
             "context7 must be removed"
         );
         assert_eq!(parsed["mcpServers"]["filesystem"]["command"], "node");
@@ -1733,7 +1782,10 @@ command = \"b\"
 }"#;
         let after = remove_json_server(before, "mcpServers", "alpha").unwrap();
         let parsed: Value = serde_json::from_str(&after).unwrap();
-        assert!(!parsed["mcpServers"].as_object().unwrap().contains_key("alpha"));
+        assert!(!parsed["mcpServers"]
+            .as_object()
+            .unwrap()
+            .contains_key("alpha"));
         assert_eq!(parsed["mcpServers"]["beta"]["command"], "b");
         // No leading comma left behind.
         assert!(
@@ -1754,7 +1806,10 @@ command = \"b\"
 }"#;
         let after = remove_json_server(before, "mcpServers", "beta").unwrap();
         let parsed: Value = serde_json::from_str(&after).unwrap();
-        assert!(!parsed["mcpServers"].as_object().unwrap().contains_key("beta"));
+        assert!(!parsed["mcpServers"]
+            .as_object()
+            .unwrap()
+            .contains_key("beta"));
         assert_eq!(parsed["mcpServers"]["alpha"]["command"], "a");
         // No trailing comma before the closing brace.
         assert!(
@@ -1839,7 +1894,10 @@ command = \"b\"
 }"#;
         let after = remove_json_server(before, "mcpServers", "context7").unwrap();
         let parsed: Value = serde_json::from_str(&after).unwrap();
-        assert!(parsed["mcpServers"].as_object().unwrap().contains_key("filesystem"));
+        assert!(parsed["mcpServers"]
+            .as_object()
+            .unwrap()
+            .contains_key("filesystem"));
         assert!(!after.contains("context7"));
         assert!(after.contains("\"filesystem\""));
         assert!(after.contains("\"server.js\""));
@@ -1924,10 +1982,7 @@ pub fn preview_import_mcp_server(
 }
 
 /// Preview the effect of deleting a server (before actually deleting).
-pub fn preview_delete_mcp_server(
-    platform_id: &str,
-    name: &str,
-) -> Result<McpSyncPreview, String> {
+pub fn preview_delete_mcp_server(platform_id: &str, name: &str) -> Result<McpSyncPreview, String> {
     let def = find_mcp_platform(platform_id).ok_or("Platform not found")?;
     if !def.config_path.exists() {
         return Err("Config file not found".into());
@@ -1945,8 +2000,8 @@ pub fn preview_delete_mcp_server(
             let ranges = find_toml_server_section_ranges(&before_text, &def.mcp_key, name);
             if ranges.is_empty() {
                 // Fallback: full re-serialization
-                let mut doc: toml::Value = toml::from_str(&before_text)
-                    .map_err(|e| format!("Invalid TOML: {}", e))?;
+                let mut doc: toml::Value =
+                    toml::from_str(&before_text).map_err(|e| format!("Invalid TOML: {}", e))?;
                 if let Some(servers) = doc
                     .as_table_mut()
                     .and_then(|t| t.get_mut(&def.mcp_key))

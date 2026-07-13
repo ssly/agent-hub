@@ -20,7 +20,12 @@ async function loadDetail() {
   if (!store.selectedPlatformId || !store.selectedSkillName) return
   loading.value = true
   try {
-    detail.value = await api.getSkillDetail(store.selectedPlatformId, store.selectedSkillName, store.selectedFolder)
+    detail.value = await api.getSkillDetail(
+      store.selectedPlatformId,
+      store.selectedSkillName,
+      store.selectedFolder,
+      store.workspaceDirectory,
+    )
     const defaultFile = detail.value.files.find((f: string) => /(^|\/)SKILL\.md$/i.test(f)) || detail.value.files[0] || null
     if (defaultFile) await loadFile(defaultFile)
   } catch (e) {
@@ -35,7 +40,13 @@ async function loadFile(path: string) {
   fileContent.value = ''
   if (!store.selectedPlatformId || !store.selectedSkillName) return
   try {
-    fileContent.value = await api.readSkillFile(store.selectedPlatformId, store.selectedSkillName, store.selectedFolder, path)
+    fileContent.value = await api.readSkillFile(
+      store.selectedPlatformId,
+      store.selectedSkillName,
+      store.selectedFolder,
+      path,
+      store.workspaceDirectory,
+    )
   } catch (e) {
     fileContent.value = `Error: ${e}`
   }
@@ -46,7 +57,12 @@ async function handleOpenFolder() {
   if (!store.selectedPlatformId || !store.selectedSkillName || openingFolder.value) return
   openingFolder.value = true
   try {
-    await api.openSkillFolder(store.selectedPlatformId, store.selectedSkillName, store.selectedFolder)
+    await api.openSkillFolder(
+      store.selectedPlatformId,
+      store.selectedSkillName,
+      store.selectedFolder,
+      store.workspaceDirectory,
+    )
   } catch (e: any) {
     showToast(t('skill.open_folder_failed'), 'error')
   } finally {
@@ -60,7 +76,7 @@ watch(() => [store.selectedSkillName, store.selectedFolder], loadDetail)
 
 <template>
   <div class="p-6 view-enter">
-    <div class="ah-view-content">
+    <div class="ah-view-content ah-skill-detail">
       <div v-if="loading" class="loading-pulse" style="color: var(--ink-3)">Loading...</div>
 
       <template v-else-if="detail">
@@ -117,26 +133,28 @@ watch(() => [store.selectedSkillName, store.selectedFolder], loadDetail)
         <!-- Files -->
         <section v-if="detail.files.length > 0">
           <h2 class="ah-section-title">{{ t('skill.files') }}</h2>
-          <div class="ah-files-list">
-            <div
-              v-for="file in detail.files"
-              :key="file"
-              :class="['ah-file', activeFile === file ? 'is-active' : '']"
-              @click="loadFile(file)"
-            >
-              <div class="ah-file__icon">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-              </div>
-              <span class="ah-file__name">{{ file }}</span>
-            </div>
-          </div>
+          <div class="ah-file-workspace">
+            <nav class="ah-files-list" :aria-label="t('skill.files')">
+              <button
+                v-for="file in detail.files"
+                :key="file"
+                :class="['ah-file', activeFile === file ? 'is-active' : '']"
+                :title="file"
+                @click="loadFile(file)"
+              >
+                <div class="ah-file__icon">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                </div>
+                <span class="ah-file__name">{{ file }}</span>
+              </button>
+            </nav>
 
-          <!-- File Viewer -->
-          <div v-if="activeFile">
-            <div class="ah-file-viewer__header">
-              <span class="ah-file-viewer__path">{{ activeFile }}</span>
+            <div v-if="activeFile" class="ah-file-content">
+              <div class="ah-file-viewer__header">
+                <span class="ah-file-viewer__path">{{ activeFile }}</span>
+              </div>
+              <pre class="ah-file-viewer">{{ fileContent }}</pre>
             </div>
-            <pre class="ah-file-viewer">{{ fileContent }}</pre>
           </div>
         </section>
       </template>

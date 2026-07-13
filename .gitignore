@@ -12,3 +12,4 @@ openspec
 
 # build output
 /dist
+.gstack/

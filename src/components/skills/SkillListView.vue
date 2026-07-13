@@ -7,6 +7,11 @@ import { formatBytes } from '@/lib/utils'
 import { useToast } from '@/composables/useToast'
 import { useHoverResetId } from '@/composables/useHoverReset'
 
+withDefaults(defineProps<{ embedded?: boolean; readonly?: boolean }>(), {
+  embedded: false,
+  readonly: false,
+})
+
 const { t } = useI18n()
 const appStore = useAppStore()
 const store = useSkillsStore()
@@ -58,6 +63,23 @@ function handleKebabDiff(skill: any) {
   handleDiffClick()
 }
 
+async function handleKebabSync(skill: any) {
+  store.selectSkill(skill.name, skill.folder || '')
+  activeKebabSkill.value = null
+  try {
+    await store.loadSyncTargets()
+    if (store.syncTargets.length === 0) {
+      showToast(t('error.no_target'), 'warning')
+      return
+    }
+    store.syncTargetPlatformId = store.syncTargets[0].id
+    store.syncOverwrite = false
+    store.syncPlatformModalOpen = true
+  } catch (e: any) {
+    showToast(String(e), 'error')
+  }
+}
+
 async function handleDiffClick() {
   try {
     await store.loadDiffCandidates()
@@ -105,7 +127,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="p-6 view-enter">
+  <div :class="[embedded ? 'ah-embedded-view' : 'p-6 view-enter']">
     <div class="ah-view-content">
       <!-- Empty state -->
       <div v-if="store.skills.length === 0" class="flex flex-col items-center justify-center py-20 text-center">
@@ -114,16 +136,16 @@ onUnmounted(() => {
 
       <template v-else>
         <!-- Page Header -->
-        <div class="ah-page-header">
+        <div v-if="!embedded" class="ah-page-header">
           <h1 class="ah-page-title">{{ store.selectedPlatform?.display_name }}</h1>
         </div>
 
         <!-- KPI Row -->
-        <div class="ah-kpi-row">
+        <div v-if="!embedded" class="ah-kpi-row">
           <article
             v-for="(kpi, i) in [
-              { label: t('ui.skills_tab'), value: totalSkills, unit: t('ui.skills_tab') },
-              { label: t('action.refresh'), value: enabledSkills, unit: t('ui.skills_tab') },
+              { label: t('plugin.skills'), value: totalSkills, unit: t('plugin.skills') },
+              { label: t('action.refresh'), value: enabledSkills, unit: t('plugin.skills') },
               { label: t('skill.size'), value: totalSize, unit: '' },
             ]"
             :key="i"
@@ -195,27 +217,30 @@ onUnmounted(() => {
 
                 <!-- Actions -->
                 <div class="ah-row__actions relative">
-                  <button class="ah-kebab" @click.stop="toggleKebab(skill)">
+                  <button v-if="!readonly" class="ah-kebab" @click.stop="toggleKebab(skill)">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="19" r="1" fill="currentColor"/></svg>
                   </button>
 
                   <!-- Kebab Dropdown Menu -->
                   <div
                     v-if="activeKebabSkill && activeKebabSkill.name === skill.name && activeKebabSkill.folder === (skill.folder || '')"
-                    class="absolute right-0 mt-8 bg-surface border rounded shadow-lg z-50 py-1 min-w-[120px] text-left"
-                    style="border-color: var(--border); box-shadow: var(--shadow-soft);"
+                    class="ah-kebab-menu ah-kebab-menu--inline"
                   >
                     <button
-                      class="w-full px-4 py-2 text-xs hover:bg-hover transition-colors cursor-pointer text-left"
-                      style="color: var(--ink)"
+                      class="ah-kebab-item"
+                      @click.stop="handleKebabSync(skill)"
+                    >
+                      {{ t('action.sync') }}
+                    </button>
+                    <button
+                      class="ah-kebab-item"
                       @click.stop="handleKebabDiff(skill)"
                     >
                       {{ t('action.diff') }}
                     </button>
                     <button
-                      class="w-full px-4 py-2 text-xs transition-colors cursor-pointer text-left font-medium"
-                      :class="confirmingDeleteSkill === `${skill.folder || ''}:${skill.name}` ? 'text-white' : 'text-danger hover:bg-danger-soft'"
-                      :style="confirmingDeleteSkill === `${skill.folder || ''}:${skill.name}` ? { background: 'var(--danger)' } : {}"
+                      class="ah-kebab-item font-medium"
+                      :class="confirmingDeleteSkill === `${skill.folder || ''}:${skill.name}` ? 'is-confirming' : 'danger'"
                       @click.stop="handleKebabDelete(skill)"
                       @mouseleave="resetConfirmDelete()"
                     >

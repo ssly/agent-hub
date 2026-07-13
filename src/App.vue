@@ -10,9 +10,8 @@ import { formatInt, formatSessionTime } from '@/lib/utils'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import AppToolbar from '@/components/layout/AppToolbar.vue'
 import AppToast from '@/components/layout/AppToast.vue'
-import SkillListView from '@/components/skills/SkillListView.vue'
 import SkillDetailView from '@/components/skills/SkillDetailView.vue'
-import McpListView from '@/components/mcp/McpListView.vue'
+import PluginView from '@/components/plugins/PluginView.vue'
 import SessionListView from '@/components/sessions/SessionListView.vue'
 import SwitchView from '@/components/switch/SwitchView.vue'
 import SearchResults from '@/components/search/SearchResults.vue'
@@ -319,15 +318,14 @@ onMounted(async () => {
     <main class="flex-1 flex flex-col overflow-hidden" style="background: var(--canvas)">
       <AppToolbar />
       <div class="flex-1 overflow-y-auto">
-        <template v-if="appStore.currentTab === 'skills'">
-          <SkillListView v-if="appStore.currentView === 'skills'" />
+        <template v-if="appStore.currentTab === 'plugins'">
+          <PluginView v-if="appStore.currentView === 'plugins'" />
           <SkillDetailView v-else-if="appStore.currentView === 'detail'" />
           <DiffView v-else-if="appStore.currentView === 'diff'" />
           <SearchResults v-else-if="appStore.currentView === 'search'" />
         </template>
-        <McpListView v-else-if="appStore.currentTab === 'mcp'" />
         <SessionListView v-else-if="appStore.currentTab === 'sessions'" />
-        <SwitchView v-else-if="appStore.currentTab === 'switch'" />
+        <SwitchView v-else-if="appStore.currentTab === 'accounts'" />
       </div>
     </main>
     <AppToast />

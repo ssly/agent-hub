@@ -42,7 +42,8 @@ pub fn delete_mcp_server(platform_id: &str, name: &str) -> Result<(), String> {
 
 pub fn import_mcp_server(platform_id: &str, name: &str, config_text: &str) -> Result<(), String> {
     let def = find_mcp_platform(platform_id).ok_or("Platform not found")?;
-    let config = parse_server_config_input_with_format(config_text, &def.mcp_key, name, def.format)?;
+    let config =
+        parse_server_config_input_with_format(config_text, &def.mcp_key, name, def.format)?;
     save_mcp_server(platform_id, name, config)
 }
 
@@ -136,7 +137,8 @@ fn delete_toml_server(def: &super::registry::McpPlatformDef, name: &str) -> Resu
     }
 
     // Fallback: full re-serialization
-    let mut doc: toml::Value = toml::from_str(&content).map_err(|e| format!("Invalid TOML: {}", e))?;
+    let mut doc: toml::Value =
+        toml::from_str(&content).map_err(|e| format!("Invalid TOML: {}", e))?;
     let table = doc
         .as_table_mut()
         .ok_or("Config file is not a TOML table")?;
