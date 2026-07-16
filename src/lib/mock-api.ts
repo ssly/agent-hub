@@ -350,6 +350,32 @@ export async function getCodexResetCredits() {
     ],
   }
 }
+export async function getCodexTrayUsage() {
+  await delay()
+  const now = Math.floor(Date.now() / 1000)
+  const expiries = [46, 118, 190, 262].map(hours => new Date(Date.now() + hours * 3600_000).toISOString())
+  return {
+    usage: {
+      plan_type: 'plus',
+      primary_window: { used_percent: 60, remaining_percent: 40, reset_after_seconds: 518832, reset_at: now + 518832, window_seconds: 604800 },
+      secondary_window: null,
+      reset_credits: { available_count: 4 },
+    },
+    reset_credits: {
+      available_count: 4,
+      next_expires_at: expiries[0],
+      credits: expiries.map(expiresAt => ({
+        status: 'available',
+        expires_at: expiresAt,
+        granted_at: null,
+        title: 'Full reset (Weekly + 5 hr)',
+      })),
+    },
+    last_query_at: now,
+    next_query_at: now + 600,
+    cached: false,
+  }
+}
 
 // App
 export async function getAppVersion() { return '0.9.3-dev' }

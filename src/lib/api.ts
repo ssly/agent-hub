@@ -188,14 +188,14 @@ export const clearActiveAuth = (agentType: string) => invoke<void>('clear_active
 export const deleteActiveAuth = (agentType: string) => invoke<void>('delete_active_auth', { agentType })
 
 // Codex usage windows for the currently active account.
-// Plus/Pro return a 5h primary window and a 7d secondary window; Free accounts
-// only expose a monthly primary window (secondary is null).
+// Window presence and ordering vary by account. Use window_seconds to label
+// each returned window as 5h, 7d, 30d, or another duration.
 export interface UsageWindow {
   used_percent: number
   remaining_percent: number
   reset_after_seconds: number
   reset_at: number
-  // Duration of the window in seconds (5h=18000, 7d=604800, monthly≈2592000).
+  // Duration of the window in seconds (5h=18000, 7d=604800, 30d=2592000).
   window_seconds: number
 }
 // "Rate-limit reset" credits — the one-click window reset button on the
@@ -228,6 +228,18 @@ export interface CodexResetCredits {
 }
 export const getCodexResetCredits = () =>
   invoke<CodexResetCredits>('get_codex_reset_credits')
+
+// Cached payload used by the system-tray quota view. The Rust backend owns the
+// 10-minute network cooldown so every window/tray entry point shares it.
+export interface CodexTraySnapshot {
+  usage: CodexUsage
+  reset_credits: CodexResetCredits | null
+  last_query_at: number
+  next_query_at: number
+  cached: boolean
+}
+export const getCodexTrayUsage = () =>
+  invoke<CodexTraySnapshot>('get_codex_tray_usage')
 
 // App
 export const getAppVersion = () => invoke<string>('get_app_version')

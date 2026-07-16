@@ -13,6 +13,7 @@ mod state;
 mod switch;
 mod sync;
 mod trash;
+mod tray;
 
 use state::AppState;
 
@@ -25,6 +26,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(std::sync::Mutex::new(AppState::new()))
         .manage(UpdateCancelFlag::new(false))
+        .manage(tray::CodexTrayState::default())
         .setup(|app| {
             #[cfg(desktop)]
             app.handle()
@@ -38,6 +40,9 @@ pub fn run() {
             // Monitor / completion hooks are currently disabled. Do not request
             // notification permission, start filesystem watchers, or spawn the
             // process polling thread while the feature is hidden.
+
+            #[cfg(desktop)]
+            tray::setup(app)?;
 
             Ok(())
         })
@@ -98,6 +103,7 @@ pub fn run() {
             switch::commands::delete_active_auth,
             switch::commands::get_codex_usage,
             switch::commands::get_codex_reset_credits,
+            tray::get_codex_tray_usage,
         ])
         .run(tauri::generate_context!())
         .expect("error while running agent-hub");

@@ -307,7 +307,7 @@
     "usage_retry": "Retry",
     "usage_refresh": "Refresh",
     "usage_refresh_toast": "Usage refreshed",
-    "usage_empty_hint": "Click \"Refresh\" to query usage manually (Plus/Pro show 5h + 7d; Free shows a monthly window). Entering the view does not auto-query.",
+    "usage_empty_hint": "Click \"Refresh\" to query usage manually. Only windows returned for the active account are shown. Entering the view does not auto-query.",
     "usage_last_query": "Last query: {time}",
     "usage_reset_now": "resets soon",
     "usage_reset_hm": "in {h}h {m}m",
@@ -326,6 +326,23 @@
     "usage_credit_no_expiry": "No expiry info",
     "usage_credit_default_title": "Reset credit",
     "usage_cooldown_toast": "Please wait a moment before querying again (1 min)"
+  },
+  "tray": {
+    "title": "Codex Usage",
+    "refresh": "Refresh",
+    "querying": "Querying…",
+    "retry": "Retry",
+    "used": "used",
+    "monthly": "Month",
+    "reset_credit": "Reset credit",
+    "reset_credit_item": "Credit {n}",
+    "no_reset_credit": "No reset credits available",
+    "expiry_dh": "Expires in {d}d {h}h",
+    "expiry_hm": "Expires in {h}h {m}m",
+    "expiry_unknown": "Expiry unavailable",
+    "last_query": "Last query: {time}",
+    "cooldown": "Query again in {n} min",
+    "failed": "Query failed"
   },
   "monitor": {
     "title": "Monitor",

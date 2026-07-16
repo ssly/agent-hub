@@ -13,7 +13,7 @@ export const useSwitchStore = defineStore('switch', () => {
   const switchConfirmId = ref<string | null>(null)
 
   // Codex usage windows for the currently active account.
-  // Plus/Pro: primary (5h) + secondary (7d). Free: primary (monthly) only.
+  // Window presence/order varies; views label each item from window_seconds.
   // Usage is NEVER auto-fetched — the user must click "Refresh" explicitly.
   // Within the cooldown window (1 min), a manual refresh short-circuits and
   // returns the cached payload instead of hitting the API again.

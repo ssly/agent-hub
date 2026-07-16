@@ -547,6 +547,12 @@ fn resolve_codex_auth() -> Result<CodexAuth, String> {
     })
 }
 
+/// Stable identity used to scope the tray cache to the currently active
+/// Codex account. Reading this never performs a network request.
+pub(crate) fn current_codex_account_id() -> Result<String, String> {
+    Ok(resolve_codex_auth()?.account_id)
+}
+
 /// Build a reqwest client + a configured GET request to a WHAM endpoint.
 /// Headers mimic the official Codex CLI so the request is indistinguishable
 /// from the client's own rate-limit fetches.
@@ -576,8 +582,8 @@ pub struct UsageWindow {
     pub reset_after_seconds: u64,
     pub reset_at: u64,
     /// Duration of the rate-limit window in seconds.
-    /// Plus/Pro: primary=18000 (5h), secondary=604800 (7d).
-    /// Free: primary≈2592000 (30d), no secondary window.
+    /// Common values are 18000 (5h), 604800 (7d), and 2592000 (30d).
+    /// Accounts may return any subset in either primary or secondary.
     /// Lets the front-end label the window dynamically instead of hard-coding 5h/7d.
     pub window_seconds: u64,
 }
@@ -637,8 +643,8 @@ pub async fn get_codex_usage() -> Result<CodexUsageResponse, String> {
         }
     };
 
-    // Windows are optional. Plus/Pro return both a 5h primary and a 7d secondary;
-    // Free accounts only expose a monthly primary window, so secondary is null.
+    // Windows are optional and their position is not a stable label. Determine
+    // 5h/7d/30d from each window's duration instead of primary/secondary.
     let primary = map_usage_window(rate.get("primary_window"));
     let secondary = map_usage_window(rate.get("secondary_window"));
 

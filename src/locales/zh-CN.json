@@ -307,7 +307,7 @@
     "usage_retry": "重试",
     "usage_refresh": "刷新",
     "usage_refresh_toast": "用量已刷新",
-    "usage_empty_hint": "点击「刷新」手动查询用量（Plus/Pro 显示 5 小时窗 + 7 天窗；Free 仅显示月度额度）。进入页面不会自动查询。",
+    "usage_empty_hint": "点击「刷新」手动查询用量；窗口按当前账号实际返回显示。进入页面不会自动查询。",
     "usage_last_query": "上次查询：{time}",
     "usage_reset_now": "即将重置",
     "usage_reset_hm": "{h} 小时 {m} 分钟后",
@@ -326,6 +326,23 @@
     "usage_credit_no_expiry": "无有效期信息",
     "usage_credit_default_title": "重置券",
     "usage_cooldown_toast": "1 分钟内无法多次查询，请稍后再试"
+  },
+  "tray": {
+    "title": "Codex 用量",
+    "refresh": "刷新",
+    "querying": "正在查询…",
+    "retry": "重试",
+    "used": "已用",
+    "monthly": "月",
+    "reset_credit": "重置卡",
+    "reset_credit_item": "第 {n} 张",
+    "no_reset_credit": "当前没有可用重置卡",
+    "expiry_dh": "{d} 天 {h} 小时后到期",
+    "expiry_hm": "{h} 小时 {m} 分钟后到期",
+    "expiry_unknown": "到期时间未知",
+    "last_query": "上次查询：{time}",
+    "cooldown": "{n} 分钟后可再次查询",
+    "failed": "查询失败"
   },
   "monitor": {
     "title": "监控",
