@@ -14,6 +14,7 @@ const { showToast } = useToast()
 const AGENT_DISPLAY_NAMES: Record<string, string> = {
   codex: 'Codex',
   'claude-code': 'Claude Code',
+  'grok-build': 'Grok Build',
 }
 const agentName = computed(
   () => AGENT_DISPLAY_NAMES[store.selectedAgent ?? ''] ?? store.selectedAgent ?? ''
@@ -21,6 +22,7 @@ const agentName = computed(
 
 // --- Codex usage panel ---
 const isCodex = computed(() => store.selectedAgent === 'codex')
+const isGrokBuild = computed(() => store.selectedAgent === 'grok-build')
 // Name of the currently active account (the one usage is actually queried for).
 const activeAccountName = computed(() => {
   const active = store.profiles.find((p) => p.is_active)
@@ -108,21 +110,25 @@ function windowLabel(seconds?: number): string {
   return t('switch.usage_primary_window')
 }
 
-// Build the list of windows that actually exist for this account.
-// Free accounts only have a primary (monthly) window; Plus/Pro also have a
-// secondary (7d) window. We drop nulls so the UI never renders an empty card.
+// Build the list of windows that actually exist for this account from the same
+// normalized payload as the tray. The named fields remain only as a fallback
+// for older payloads; 5h/7d/30d can all be shown when returned.
 interface UsageCard { key: string; label: string; w: import('@/lib/api').UsageWindow }
 const usageWindows = computed<UsageCard[]>(() => {
   const u = store.codexUsage
   if (!u) return []
-  const cards: UsageCard[] = []
-  if (u.primary_window) {
-    cards.push({ key: 'primary', label: windowLabel(u.primary_window.window_seconds), w: u.primary_window })
-  }
-  if (u.secondary_window) {
-    cards.push({ key: 'secondary', label: windowLabel(u.secondary_window.window_seconds), w: u.secondary_window })
-  }
-  return cards
+  const fallback = [u.primary_window, u.secondary_window]
+    .filter((window): window is import('@/lib/api').UsageWindow => Boolean(window?.window_seconds))
+  const windows = (u.usage_windows?.length ? u.usage_windows : fallback)
+    .filter(window => window.window_seconds > 0)
+    .sort((left, right) => left.window_seconds - right.window_seconds)
+    .filter((window, index, all) => index === 0 || window.window_seconds !== all[index - 1].window_seconds)
+
+  return windows.map(window => ({
+    key: String(window.window_seconds),
+    label: windowLabel(window.window_seconds),
+    w: window,
+  }))
 })
 
 // Human-readable plan name for the badge (e.g. "free" → "Free").
@@ -132,9 +138,27 @@ const planBadge = computed(() => {
   return t('switch.usage_plan_badge', { plan: display })
 })
 
-function fmtLastQuery(): string {
-  if (!store.codexUsageLastQuery) return ''
-  return new Date(store.codexUsageLastQuery).toLocaleString(locale.value === 'zh-CN' ? 'zh-CN' : 'en-US', {
+const grokAccountName = computed(
+  () => store.grokUsage?.account_name || t('switch.grok_default_account')
+)
+const grokPlanBadge = computed(() =>
+  t('switch.usage_plan_badge', { plan: store.grokUsage?.plan_type || 'Grok' })
+)
+const grokPeriodLabel = computed(() =>
+  store.grokUsage?.period_type === 'monthly'
+    ? t('switch.grok_monthly_window')
+    : t('switch.grok_weekly_window')
+)
+
+function fmtGrokValue(value: number): string {
+  return new Intl.NumberFormat(locale.value === 'zh-CN' ? 'zh-CN' : 'en-US', {
+    maximumFractionDigits: 2,
+  }).format(value)
+}
+
+function fmtQueryTime(value: number): string {
+  if (!value) return ''
+  return new Date(value).toLocaleString(locale.value === 'zh-CN' ? 'zh-CN' : 'en-US', {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -143,16 +167,24 @@ function fmtLastQuery(): string {
   })
 }
 
+function fmtLastQuery(): string {
+  return fmtQueryTime(store.codexUsageLastQuery)
+}
+
 async function handleRefreshUsage() {
   if (store.codexUsageLoading) return
-  // Cooldown gate: if a fresh payload exists, don't hit the API again —
-  // just tell the user to wait. No precise countdown shown.
-  if (store.codexUsage && store.codexUsageInCooldown()) {
-    showToast(t('switch.usage_cooldown_toast'), 'info')
-    return
-  }
-  await store.refreshCodexUsage(false)
+  await store.refreshCodexUsage()
   if (store.codexUsageError) {
+    showToast(t('switch.usage_failed'), 'error')
+  } else {
+    showToast(t('switch.usage_refresh_toast'), 'success')
+  }
+}
+
+async function handleRefreshGrokUsage() {
+  if (store.grokUsageLoading) return
+  await store.refreshGrokUsage()
+  if (store.grokUsageError) {
     showToast(t('switch.usage_failed'), 'error')
   } else {
     showToast(t('switch.usage_refresh_toast'), 'success')
@@ -201,9 +233,6 @@ function handleCardLeave(profile: any) {
 
 onMounted(() => {
   window.addEventListener('click', handleOutsideClick)
-  // Codex usage is intentionally NOT auto-fetched on mount. The user must
-  // click "Refresh" on the usage panel to trigger a query; cached results
-  // from a previous session are shown directly if present.
 })
 onUnmounted(() => window.removeEventListener('click', handleOutsideClick))
 
@@ -213,7 +242,7 @@ async function doSwitch(id: string) {
     await api.switchAuthProfile(store.selectedAgent, id)
     store.switchConfirmId = null
     showToast(t('switch.switched_toast', { agent: agentName.value }), 'success')
-    await store.loadProfiles()
+    await store.loadSelectedAgent()
   } catch (e: any) {
     showToast(String(e?.message || e), 'error')
   }
@@ -331,8 +360,102 @@ async function handleConfirmClear() {
 
       <template v-else>
         <div class="max-w-2xl mx-auto">
+          <!-- Grok Build deliberately exposes only the CLI's current account. -->
+          <div v-if="isGrokBuild" class="space-y-6">
+            <div class="ah-card switch-card--active switch-card--readonly">
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <div class="flex items-center gap-2 mb-1">
+                    <span class="text-sm font-medium truncate" style="color: var(--ink)">{{ grokAccountName }}</span>
+                    <span class="switch-active-badge">{{ t('switch.active_badge') }}</span>
+                  </div>
+                  <div class="text-xs" style="color: var(--ink-3)">{{ t('switch.grok_default_account_hint') }}</div>
+                </div>
+                <span class="text-xs px-2 py-1 rounded-full flex-shrink-0" style="background: var(--sunken); color: var(--ink-2)">
+                  {{ t('switch.grok_read_only') }}
+                </span>
+              </div>
+            </div>
+
+            <div class="ah-card" style="background: var(--surface); border-color: var(--border)">
+              <div class="flex items-center justify-between mb-3">
+                <span class="text-base font-semibold flex items-center gap-2" style="color: var(--ink)">
+                  <Gauge :size="18" :style="{ color: 'var(--accent)' }" />
+                  {{ t('switch.grok_usage_title', { name: grokAccountName }) }}
+                </span>
+                <button
+                  class="btn btn-secondary btn-sm flex items-center gap-1"
+                  :disabled="store.grokUsageLoading"
+                  @click="handleRefreshGrokUsage"
+                >
+                  <RefreshCw :size="14" :class="{ 'animate-spin': store.grokUsageLoading }" />
+                  {{ t('switch.usage_refresh') }}
+                </button>
+              </div>
+
+              <div v-if="store.grokUsageLoading" class="text-sm py-4" style="color: var(--ink-3)">
+                {{ t('switch.grok_usage_loading') }}
+              </div>
+
+              <div v-else-if="store.grokUsageError" class="text-sm py-2 flex items-center justify-between gap-3" style="color: var(--danger)">
+                <span>{{ t('switch.usage_failed') }}: {{ store.grokUsageError }}</span>
+                <button class="btn btn-danger btn-sm" @click="handleRefreshGrokUsage">{{ t('switch.usage_retry') }}</button>
+              </div>
+
+              <div v-else-if="store.grokUsage" class="space-y-3 text-sm">
+                <div class="text-xs flex items-center gap-2 flex-wrap" style="color: var(--ink-3)">
+                  <span class="inline-flex items-center px-2 py-0.5 rounded-full" style="background: var(--sunken); color: var(--ink-2)">{{ grokPlanBadge }}</span>
+                  <span
+                    class="inline-flex items-center px-2 py-0.5 rounded-full"
+                    :style="store.grokUsage.source === 'live'
+                      ? { background: 'var(--accent-soft)', color: 'var(--accent)' }
+                      : { background: 'var(--sunken)', color: 'var(--ink-3)' }"
+                  >
+                    {{ store.grokUsage.source === 'live' ? t('switch.grok_live_data') : t('switch.grok_cached_data') }}
+                  </span>
+                </div>
+
+                <div
+                  v-if="store.grokUsage.stale"
+                  class="p-3 rounded-lg text-xs"
+                  style="background: color-mix(in srgb, var(--danger) 10%, transparent); color: var(--danger)"
+                >
+                  {{ t('switch.grok_stale_warning') }}
+                </div>
+
+                <div class="p-3 rounded-lg" style="background: var(--sunken)">
+                  <div class="flex justify-between items-center">
+                    <span class="font-medium" style="color: var(--ink)">{{ grokPeriodLabel }}</span>
+                    <span class="font-semibold" style="color: var(--accent)">
+                      {{ t('switch.usage_remaining', { n: store.grokUsage.usage_window.remaining_percent }) }}
+                    </span>
+                  </div>
+                  <div class="text-xs mt-1" style="color: var(--ink-3)">
+                    <template v-if="store.grokUsage.used_value != null && store.grokUsage.limit_value != null">
+                      {{ t('switch.grok_used_limit_reset', {
+                        used: fmtGrokValue(store.grokUsage.used_value),
+                        limit: fmtGrokValue(store.grokUsage.limit_value),
+                        reset: fmtReset(store.grokUsage.usage_window.reset_after_seconds, store.grokUsage.usage_window.reset_at),
+                      }) }}
+                    </template>
+                    <template v-else>
+                      {{ t('switch.usage_used_reset', {
+                        used: store.grokUsage.usage_window.used_percent,
+                        reset: fmtReset(store.grokUsage.usage_window.reset_after_seconds, store.grokUsage.usage_window.reset_at),
+                      }) }}
+                    </template>
+                  </div>
+                </div>
+
+                <div class="text-xs pt-2 border-t" style="color: var(--ink-4); border-color: var(--hairline)">
+                  {{ t('switch.usage_last_query', { time: fmtQueryTime(store.grokUsageLastQuery) }) }}
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- Toolbar -->
-          <div class="flex gap-2 mb-4 flex-wrap items-center">
+          <div v-if="!isGrokBuild" class="flex gap-2 mb-4 flex-wrap items-center">
             <button class="btn btn-primary" @click="handleSaveCurrent">{{ t('switch.save_current') }}</button>
             <button class="btn btn-secondary" @click="store.addFormOpen = !store.addFormOpen">{{ t('switch.add_account') }}</button>
             <button
@@ -381,11 +504,11 @@ async function handleConfirmClear() {
           </div>
 
           <!-- Profiles -->
-          <div v-if="store.profiles.length === 0" class="text-center py-12 text-sm" style="color: var(--ink-4)">
+          <div v-if="!isGrokBuild && store.profiles.length === 0" class="text-center py-12 text-sm" style="color: var(--ink-4)">
             {{ t('switch.empty') }}
           </div>
 
-          <div class="space-y-2">
+          <div v-if="!isGrokBuild" class="space-y-2">
             <div
               v-for="(profile, idx) in store.profiles"
               :key="profile.id"
@@ -466,7 +589,7 @@ async function handleConfirmClear() {
               <button class="btn btn-secondary btn-sm" @click="handleRefreshUsage">{{ t('switch.usage_retry') }}</button>
             </div>
 
-            <!-- Data: render whatever windows the API returned (1 for Free, 2 for Plus/Pro) -->
+            <!-- Data: render every quota window returned by the shared snapshot -->
             <div v-else class="space-y-3 text-sm">
               <div class="text-xs" style="color: var(--ink-3)">
                 <span class="inline-flex items-center px-2 py-0.5 rounded-full" style="background: var(--sunken); color: var(--ink-2)">{{ planBadge }}</span>
@@ -652,7 +775,9 @@ async function handleConfirmClear() {
 <style scoped>
 .switch-card {
   cursor: pointer;
-  position: relative;
+}
+.switch-card--readonly {
+  cursor: default;
 }
 .switch-card:hover {
   border-color: var(--border);
@@ -662,17 +787,6 @@ async function handleConfirmClear() {
   background: var(--accent-soft);
   border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent-mid) inset;
-  padding-left: 18px;
-}
-.switch-card--active::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 8px;
-  bottom: 8px;
-  width: 4px;
-  background: var(--accent);
-  border-radius: 0 2px 2px 0;
 }
 .switch-active-badge {
   background: var(--accent);

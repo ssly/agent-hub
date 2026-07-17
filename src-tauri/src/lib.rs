@@ -26,7 +26,6 @@ pub fn run() {
     tauri::Builder::default()
         .manage(std::sync::Mutex::new(AppState::new()))
         .manage(UpdateCancelFlag::new(false))
-        .manage(tray::CodexTrayState::default())
         .setup(|app| {
             #[cfg(desktop)]
             app.handle()
@@ -103,7 +102,10 @@ pub fn run() {
             switch::commands::delete_active_auth,
             switch::commands::get_codex_usage,
             switch::commands::get_codex_reset_credits,
+            switch::commands::get_grok_usage,
+            switch::commands::get_usage_provider_availability,
             tray::get_codex_tray_usage,
+            tray::resize_usage_tray,
         ])
         .run(tauri::generate_context!())
         .expect("error while running agent-hub");

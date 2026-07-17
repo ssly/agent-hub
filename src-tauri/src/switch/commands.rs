@@ -547,12 +547,6 @@ fn resolve_codex_auth() -> Result<CodexAuth, String> {
     })
 }
 
-/// Stable identity used to scope the tray cache to the currently active
-/// Codex account. Reading this never performs a network request.
-pub(crate) fn current_codex_account_id() -> Result<String, String> {
-    Ok(resolve_codex_auth()?.account_id)
-}
-
 /// Build a reqwest client + a configured GET request to a WHAM endpoint.
 /// Headers mimic the official Codex CLI so the request is indistinguishable
 /// from the client's own rate-limit fetches.
@@ -599,6 +593,10 @@ pub struct ResetCredits {
 #[derive(serde::Serialize, Debug, Clone)]
 pub struct CodexUsageResponse {
     pub plan_type: String,
+    /// Every usable quota window returned by the API, sorted shortest first.
+    /// Keep the named fields below for the existing Accounts view while tray
+    /// consumers can render 5h/7d/30d without assuming there are only two.
+    pub usage_windows: Vec<UsageWindow>,
     pub primary_window: Option<UsageWindow>,
     pub secondary_window: Option<UsageWindow>,
     pub reset_credits: Option<ResetCredits>,
@@ -636,6 +634,7 @@ pub async fn get_codex_usage() -> Result<CodexUsageResponse, String> {
         None => {
             return Ok(CodexUsageResponse {
                 plan_type: plan,
+                usage_windows: Vec::new(),
                 primary_window: None,
                 secondary_window: None,
                 reset_credits,
@@ -647,9 +646,11 @@ pub async fn get_codex_usage() -> Result<CodexUsageResponse, String> {
     // 5h/7d/30d from each window's duration instead of primary/secondary.
     let primary = map_usage_window(rate.get("primary_window"));
     let secondary = map_usage_window(rate.get("secondary_window"));
+    let usage_windows = collect_usage_windows(rate);
 
     Ok(CodexUsageResponse {
         plan_type: plan,
+        usage_windows,
         primary_window: primary,
         secondary_window: secondary,
         reset_credits,
@@ -789,6 +790,350 @@ fn map_usage_window(node: Option<&serde_json::Value>) -> Option<UsageWindow> {
     })
 }
 
+/// Collect every window-shaped object below `rate_limit`. Current payloads use
+/// `primary_window` and `secondary_window`; walking the object also preserves a
+/// future `monthly_window`/array instead of silently dropping the third row.
+fn collect_usage_windows(rate: &serde_json::Value) -> Vec<UsageWindow> {
+    fn visit(node: &serde_json::Value, windows: &mut Vec<UsageWindow>) {
+        if let Some(window) =
+            map_usage_window(Some(node)).filter(|window| window.window_seconds > 0)
+        {
+            windows.push(window);
+            return;
+        }
+
+        match node {
+            serde_json::Value::Object(object) => {
+                object.values().for_each(|value| visit(value, windows));
+            }
+            serde_json::Value::Array(array) => {
+                array.iter().for_each(|value| visit(value, windows));
+            }
+            _ => {}
+        }
+    }
+
+    let mut windows = Vec::new();
+    visit(rate, &mut windows);
+    windows.sort_by_key(|window| window.window_seconds);
+    windows.dedup_by_key(|window| window.window_seconds);
+    windows
+}
+
+// --- Grok Build quota via the Grok CLI billing endpoint ---------------------
+
+const GROK_BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing";
+
+#[derive(serde::Serialize, Debug, Clone)]
+pub struct GrokUsageResponse {
+    /// Display label derived from the current Grok CLI login when available.
+    pub account_name: Option<String>,
+    pub plan_type: String,
+    /// `monthly` for current Grok Build plans, `weekly` for older SuperGrok payloads.
+    pub period_type: String,
+    pub usage_window: UsageWindow,
+    /// Raw credit values when the billing endpoint provides them.
+    pub limit_value: Option<f64>,
+    pub used_value: Option<f64>,
+    pub prepaid_balance: Option<f64>,
+    pub on_demand_cap: Option<f64>,
+    pub on_demand_used: Option<f64>,
+    pub on_demand_enabled: Option<bool>,
+    /// `live` comes from /v1/billing; `cache` comes from Grok's own structured log.
+    pub source: String,
+    pub fetched_at: u64,
+    /// Cached data is stale when its billing period has already ended.
+    pub stale: bool,
+}
+
+struct GrokAuth {
+    bearer: String,
+    account_name: Option<String>,
+}
+
+fn grok_home_dir() -> Result<PathBuf, String> {
+    match std::env::var("GROK_HOME") {
+        Ok(dir) => Ok(PathBuf::from(dir)),
+        Err(_) => dirs::home_dir()
+            .map(|home| home.join(".grok"))
+            .ok_or_else(|| "无法确定用户主目录".to_string()),
+    }
+}
+
+/// Grok stores one or more login records below top-level keys in auth.json.
+/// We only read the first record with a non-empty session key; Agent Hub never
+/// refreshes, rewrites, or switches these credentials.
+fn resolve_grok_auth(grok_home: &std::path::Path) -> Result<GrokAuth, String> {
+    let auth_path = grok_home.join("auth.json");
+    if !auth_path.exists() {
+        return Err(
+            "未找到 Grok Build 认证文件（~/.grok/auth.json）。请先在 Grok CLI 中登录。".to_string(),
+        );
+    }
+
+    let content = std::fs::read_to_string(&auth_path)
+        .map_err(|e| format!("读取 Grok auth.json 失败: {e}"))?;
+    let raw: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| format!("解析 Grok auth.json 失败: {e}"))?;
+
+    let direct = raw
+        .get("key")
+        .and_then(|key| key.as_str())
+        .filter(|key| !key.trim().is_empty())
+        .map(|key| (None, &raw, key));
+    let nested = raw.as_object().and_then(|object| {
+        object.iter().find_map(|(label, value)| {
+            value
+                .get("key")
+                .and_then(|key| key.as_str())
+                .filter(|key| !key.trim().is_empty())
+                .map(|key| (Some(label.as_str()), value, key))
+        })
+    });
+    let (record_label, record, bearer) = direct
+        .or(nested)
+        .ok_or_else(|| "Grok auth.json 中没有可用的登录凭据".to_string())?;
+
+    let account_name = ["email", "user_email", "name"]
+        .iter()
+        .find_map(|field| record.get(field).and_then(|value| value.as_str()))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            record_label
+                .filter(|label| label.contains('@'))
+                .map(str::to_string)
+        });
+
+    Ok(GrokAuth {
+        bearer: bearer.to_string(),
+        account_name,
+    })
+}
+
+#[derive(serde::Serialize, Debug, Clone)]
+pub struct UsageProviderAvailability {
+    pub codex: bool,
+    pub grok_build: bool,
+}
+
+/// Report which quota providers have usable local credentials without making
+/// a network request. The tray uses this to select the Accounts view's current
+/// provider and to fall back only when that provider is genuinely signed out.
+#[tauri::command]
+pub fn get_usage_provider_availability() -> UsageProviderAvailability {
+    let codex = resolve_codex_auth().is_ok();
+    let grok_build = grok_home_dir()
+        .and_then(|home| resolve_grok_auth(&home))
+        .is_ok();
+
+    UsageProviderAvailability { codex, grok_build }
+}
+
+fn json_number(node: Option<&serde_json::Value>) -> Option<f64> {
+    let node = node?;
+    if let Some(value) = node.as_f64() {
+        return Some(value);
+    }
+    if let Some(value) = node.as_str().and_then(|value| value.parse::<f64>().ok()) {
+        return Some(value);
+    }
+    node.get("val").and_then(|value| {
+        value
+            .as_f64()
+            .or_else(|| value.as_str().and_then(|text| text.parse::<f64>().ok()))
+    })
+}
+
+fn json_timestamp(node: Option<&serde_json::Value>) -> Option<u64> {
+    let node = node?;
+    node.as_u64().or_else(|| {
+        node.as_str().and_then(|value| {
+            chrono::DateTime::parse_from_rfc3339(value)
+                .ok()
+                .and_then(|date| u64::try_from(date.timestamp()).ok())
+        })
+    })
+}
+
+fn map_grok_usage(
+    raw: &serde_json::Value,
+    account_name: Option<String>,
+    source: &str,
+    fetched_at: u64,
+) -> Result<GrokUsageResponse, String> {
+    // Live responses expose the config directly. Structured logs wrap it in
+    // ctx.config, and some CLI builds use a top-level config wrapper.
+    let payload = raw
+        .get("config")
+        .or_else(|| raw.get("ctx").and_then(|ctx| ctx.get("config")))
+        .unwrap_or(raw);
+    let period = payload
+        .get("currentPeriod")
+        .or_else(|| payload.get("current_period"));
+    let period_start = json_timestamp(
+        period.and_then(|value| value.get("start").or_else(|| value.get("startsAt"))),
+    )
+    .or_else(|| json_timestamp(payload.get("billingPeriodStart")));
+    let period_end =
+        json_timestamp(period.and_then(|value| value.get("end").or_else(|| value.get("endsAt"))))
+            .or_else(|| json_timestamp(payload.get("billingPeriodEnd")));
+    let reset_at = period_end.ok_or_else(|| "Grok billing 响应缺少额度重置时间".to_string())?;
+    let now = u64::try_from(Utc::now().timestamp()).unwrap_or(0);
+    let window_seconds = match (period_start, period_end) {
+        (Some(start), Some(end)) => end.saturating_sub(start),
+        _ => 0,
+    };
+    let limit_value = json_number(
+        payload
+            .get("monthlyLimit")
+            .or_else(|| payload.get("monthly_limit")),
+    );
+    let used_value = json_number(payload.get("used"));
+    let legacy_used_percent = json_number(
+        payload
+            .get("creditUsagePercent")
+            .or_else(|| payload.get("credit_usage_percent")),
+    );
+    let used_percent = legacy_used_percent.or_else(|| match (used_value, limit_value) {
+        (Some(used), Some(limit)) if limit > 0.0 => Some((used / limit) * 100.0),
+        _ => None,
+    });
+    let used = used_percent
+        .ok_or_else(|| "Grok billing 响应缺少可识别的额度数据".to_string())?
+        .round()
+        .clamp(0.0, 100.0) as u8;
+
+    let period_type = period
+        .and_then(|value| value.get("type"))
+        .and_then(|value| value.as_str())
+        .map(|value| {
+            if value.to_ascii_uppercase().contains("WEEK") {
+                "weekly"
+            } else {
+                "monthly"
+            }
+        })
+        .unwrap_or_else(|| {
+            if limit_value.is_some() {
+                "monthly"
+            } else {
+                "weekly"
+            }
+        })
+        .to_string();
+
+    let plan_type = raw
+        .get("subscriptionTier")
+        .or_else(|| raw.get("subscription_tier"))
+        .or_else(|| raw.get("ctx").and_then(|ctx| ctx.get("subscriptionTier")))
+        .or_else(|| payload.get("subscriptionTier"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("Grok")
+        .to_string();
+
+    Ok(GrokUsageResponse {
+        account_name,
+        plan_type,
+        period_type,
+        usage_window: UsageWindow {
+            used_percent: used,
+            remaining_percent: 100u8.saturating_sub(used),
+            reset_after_seconds: reset_at.saturating_sub(now),
+            reset_at,
+            window_seconds,
+        },
+        limit_value,
+        used_value,
+        prepaid_balance: json_number(payload.get("prepaidBalance")),
+        on_demand_cap: json_number(payload.get("onDemandCap")),
+        on_demand_used: json_number(payload.get("onDemandUsed")),
+        on_demand_enabled: raw
+            .get("onDemandEnabled")
+            .or_else(|| raw.get("ctx").and_then(|ctx| ctx.get("onDemandEnabled")))
+            .and_then(|value| value.as_bool()),
+        source: source.to_string(),
+        fetched_at,
+        stale: source == "cache" && reset_at <= now,
+    })
+}
+
+fn read_cached_grok_usage(
+    grok_home: &std::path::Path,
+    account_name: Option<String>,
+) -> Result<GrokUsageResponse, String> {
+    let log_path = grok_home.join("logs/unified.jsonl");
+    let content =
+        std::fs::read_to_string(&log_path).map_err(|e| format!("读取 Grok 用量缓存失败: {e}"))?;
+
+    for line in content.lines().rev() {
+        let Ok(raw) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if raw.get("msg").and_then(|value| value.as_str())
+            != Some("billing: fetched credits config")
+        {
+            continue;
+        }
+        let fetched_at =
+            json_timestamp(raw.get("ts").or_else(|| raw.get("timestamp"))).unwrap_or_default();
+        if let Ok(usage) = map_grok_usage(&raw, account_name.clone(), "cache", fetched_at) {
+            return Ok(usage);
+        }
+    }
+
+    Err("Grok 日志中没有可用的额度缓存".to_string())
+}
+
+#[tauri::command]
+pub async fn get_grok_usage() -> Result<GrokUsageResponse, String> {
+    let grok_home = grok_home_dir()?;
+    let auth = resolve_grok_auth(&grok_home);
+    let account_name = auth
+        .as_ref()
+        .ok()
+        .and_then(|value| value.account_name.clone());
+
+    let live_result = match auth {
+        Ok(auth) => {
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(15))
+                .build()
+                .map_err(|e| e.to_string())?;
+            match client
+                .get(GROK_BILLING_URL)
+                .header("Authorization", format!("Bearer {}", auth.bearer))
+                .header("Accept", "application/json")
+                .header("User-Agent", "Grok CLI")
+                .send()
+                .await
+            {
+                Ok(response) if response.status().is_success() => {
+                    match response.json::<serde_json::Value>().await {
+                        Ok(raw) => map_grok_usage(
+                            &raw,
+                            auth.account_name,
+                            "live",
+                            u64::try_from(Utc::now().timestamp()).unwrap_or(0),
+                        ),
+                        Err(error) => Err(format!("解析 Grok 用量响应失败: {error}")),
+                    }
+                }
+                Ok(response) => Err(format!("Grok 用量接口返回错误: HTTP {}", response.status())),
+                Err(error) => Err(format!("请求 Grok 用量接口失败: {error}")),
+            }
+        }
+        Err(error) => Err(error),
+    };
+
+    match live_result {
+        Ok(usage) => Ok(usage),
+        Err(live_error) => read_cached_grok_usage(&grok_home, account_name)
+            .map_err(|cache_error| format!("{live_error}；{cache_error}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -814,6 +1159,86 @@ mod tests {
         assert!(decode_jwt_payload("not-a-jwt").is_none());
         assert!(decode_jwt_payload("only.onepart").is_none());
         assert!(decode_jwt_payload("").is_none());
+    }
+
+    #[test]
+    fn collect_usage_windows_keeps_5h_7d_and_30d_when_present() {
+        let window = |used_percent: u64, seconds: u64| {
+            serde_json::json!({
+                "used_percent": used_percent,
+                "reset_after_seconds": seconds / 2,
+                "reset_at": 123,
+                "limit_window_seconds": seconds
+            })
+        };
+        let rate = serde_json::json!({
+            "primary_window": window(39, 18_000),
+            "secondary_window": window(61, 604_800),
+            "additional_windows": [window(12, 2_592_000)],
+            "ignored": { "used_percent": 99 }
+        });
+
+        let windows = collect_usage_windows(&rate);
+        assert_eq!(windows.len(), 3);
+        assert_eq!(
+            windows
+                .iter()
+                .map(|window| window.window_seconds)
+                .collect::<Vec<_>>(),
+            vec![18_000, 604_800, 2_592_000]
+        );
+    }
+
+    #[test]
+    fn map_grok_usage_reads_weekly_billing_payload() {
+        let raw = serde_json::json!({
+            "creditUsagePercent": 12.4,
+            "currentPeriod": {
+                "type": "USAGE_PERIOD_TYPE_WEEKLY",
+                "start": "2099-07-10T00:00:00Z",
+                "end": "2099-07-17T00:00:00Z"
+            },
+            "prepaidBalance": { "val": 3.5 },
+            "onDemandCap": { "val": "20" },
+            "onDemandUsed": { "val": 2 },
+            "subscriptionTier": "SuperGrok"
+        });
+
+        let usage = map_grok_usage(&raw, Some("user@example.com".to_string()), "live", 1)
+            .expect("maps Grok billing response");
+        assert_eq!(usage.plan_type, "SuperGrok");
+        assert_eq!(usage.period_type, "weekly");
+        assert_eq!(usage.usage_window.used_percent, 12);
+        assert_eq!(usage.usage_window.remaining_percent, 88);
+        assert_eq!(usage.usage_window.window_seconds, 604_800);
+        assert_eq!(usage.prepaid_balance, Some(3.5));
+        assert_eq!(usage.on_demand_cap, Some(20.0));
+        assert!(!usage.stale);
+    }
+
+    #[test]
+    fn map_grok_usage_reads_current_monthly_billing_payload() {
+        let raw = serde_json::json!({
+            "config": {
+                "monthlyLimit": { "val": 15000 },
+                "used": { "val": 728 },
+                "onDemandCap": { "val": 0 },
+                "billingPeriodStart": "2099-07-01T00:00:00+00:00",
+                "billingPeriodEnd": "2099-08-01T00:00:00+00:00"
+            }
+        });
+
+        let usage = map_grok_usage(&raw, None, "live", 1)
+            .expect("maps current Grok monthly billing response");
+        assert_eq!(usage.plan_type, "Grok");
+        assert_eq!(usage.period_type, "monthly");
+        assert_eq!(usage.limit_value, Some(15_000.0));
+        assert_eq!(usage.used_value, Some(728.0));
+        assert_eq!(usage.usage_window.used_percent, 5);
+        assert_eq!(usage.usage_window.remaining_percent, 95);
+        assert_eq!(usage.usage_window.window_seconds, 2_678_400);
+        assert_eq!(usage.source, "live");
+        assert!(!usage.stale);
     }
 
     const CODEX_AUTH: &str = r#"{

@@ -51,7 +51,7 @@ const tabs = [
   { id: 'accounts' as const, labelKey: 'ui.accounts_tab' },
 ]
 
-function handleTabClick(tabId: typeof tabs[number]['id']) {
+async function handleTabClick(tabId: typeof tabs[number]['id']) {
   appStore.switchTab(tabId)
   if (tabId === 'sessions') {
     sessionsStore.isLoading = true
@@ -63,12 +63,11 @@ function handleTabClick(tabId: typeof tabs[number]['id']) {
     })
   } else if (tabId === 'accounts') {
     if (!switchStore.selectedAgent) {
-      switchStore.selectAgent(localStorage.getItem('ah-switch-agent') || 'codex')
+      await switchStore.selectAgent(localStorage.getItem('ah-switch-agent') || 'codex')
     } else {
-      // Always refresh on tab entry. selectedAgent is persisted in localStorage, so without
-      // this the list would rely on stale store.profiles and could render empty (e.g. after
-      // an earlier load failure or a startup race). Mirrors how the sessions tab always refreshes.
-      switchStore.loadProfiles()
+      // Entering Accounts reloads profiles and, for Codex, performs a fresh
+      // quota query through the same snapshot command as the tray popup.
+      await switchStore.loadSelectedAgent()
     }
   }
 }
@@ -81,7 +80,7 @@ async function handleRefresh() {
     await Promise.all([sessionsStore.refreshPlatforms(true), sessionsStore.refreshTerminals()])
     sessionsStore.isLoading = false
   } else if (appStore.currentTab === 'accounts') {
-    if (switchStore.selectedAgent) await switchStore.loadProfiles()
+    if (switchStore.selectedAgent) await switchStore.loadSelectedAgent()
   }
 }
 
@@ -90,6 +89,7 @@ function getSidebarItems() {
   if (appStore.currentTab === 'accounts') return [
     { id: 'codex', display_name: 'Codex' },
     { id: 'claude-code', display_name: 'Claude Code' },
+    { id: 'grok-build', display_name: 'Grok Build' },
   ]
   return pluginsStore.platforms
 }
@@ -100,9 +100,9 @@ function getSelectedId() {
   return pluginsStore.selectedPlatformId
 }
 
-function handleItemClick(id: string) {
+async function handleItemClick(id: string) {
   if (appStore.currentTab === 'sessions') sessionsStore.selectPlatform(id)
-  else if (appStore.currentTab === 'accounts') switchStore.selectAgent(id)
+  else if (appStore.currentTab === 'accounts') await switchStore.selectAgent(id)
   else {
     pluginsStore.selectPlatform(id)
     appStore.setView('plugins')

@@ -68,7 +68,7 @@ export const useAppStore = defineStore('app', () => {
     // Restore the content of the last-opened tab (plugins are already refreshed above).
     if (currentTab.value === 'accounts') {
       const switchStore = useSwitchStore()
-      if (switchStore.selectedAgent) await switchStore.loadProfiles()
+      if (switchStore.selectedAgent) await switchStore.loadSelectedAgent()
     } else if (currentTab.value === 'sessions') {
       const sessionsStore = useSessionsStore()
       sessionsStore.isLoading = true

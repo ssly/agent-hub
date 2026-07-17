@@ -205,6 +205,9 @@ export interface ResetCredits {
 }
 export interface CodexUsage {
   plan_type: string
+  // All returned quota windows, sorted by duration. New tray UI uses this so
+  // 5h/7d/30d can coexist without being capped at primary + secondary.
+  usage_windows: UsageWindow[]
   primary_window: UsageWindow | null
   secondary_window: UsageWindow | null
   reset_credits: ResetCredits | null
@@ -229,17 +232,43 @@ export interface CodexResetCredits {
 export const getCodexResetCredits = () =>
   invoke<CodexResetCredits>('get_codex_reset_credits')
 
-// Cached payload used by the system-tray quota view. The Rust backend owns the
-// 10-minute network cooldown so every window/tray entry point shares it.
+// Shared Codex quota snapshot used by both the Accounts view and tray popup.
+// Every call performs a fresh usage query; reset-credit failure is non-fatal.
 export interface CodexTraySnapshot {
   usage: CodexUsage
   reset_credits: CodexResetCredits | null
   last_query_at: number
-  next_query_at: number
-  cached: boolean
 }
 export const getCodexTrayUsage = () =>
   invoke<CodexTraySnapshot>('get_codex_tray_usage')
+export const resizeUsageTray = (height: number) =>
+  invoke<void>('resize_usage_tray', { height })
+
+// Grok Build uses only the CLI's current/default account. Agent Hub does not
+// manage or switch Grok credentials; this endpoint is read-only.
+export interface GrokUsage {
+  account_name: string | null
+  plan_type: string
+  period_type: 'monthly' | 'weekly'
+  usage_window: UsageWindow
+  limit_value: number | null
+  used_value: number | null
+  prepaid_balance: number | null
+  on_demand_cap: number | null
+  on_demand_used: number | null
+  on_demand_enabled: boolean | null
+  source: 'live' | 'cache'
+  fetched_at: number
+  stale: boolean
+}
+export const getGrokUsage = () => invoke<GrokUsage>('get_grok_usage')
+
+export interface UsageProviderAvailability {
+  codex: boolean
+  grok_build: boolean
+}
+export const getUsageProviderAvailability = () =>
+  invoke<UsageProviderAvailability>('get_usage_provider_availability')
 
 // App
 export const getAppVersion = () => invoke<string>('get_app_version')

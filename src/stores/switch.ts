@@ -1,9 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import * as api from '@/lib/api'
-import type { CodexUsage, CodexResetCredits } from '@/lib/api'
-
-const QUOTA_COOLDOWN_MS = 60 * 1000 // 1 min — prevent rapid re-query on click spam
+import type { CodexUsage, CodexResetCredits, GrokUsage } from '@/lib/api'
 
 export const useSwitchStore = defineStore('switch', () => {
   const selectedAgent = ref<string | null>(localStorage.getItem('ah-switch-agent'))
@@ -14,17 +12,22 @@ export const useSwitchStore = defineStore('switch', () => {
 
   // Codex usage windows for the currently active account.
   // Window presence/order varies; views label each item from window_seconds.
-  // Usage is NEVER auto-fetched — the user must click "Refresh" explicitly.
-  // Within the cooldown window (1 min), a manual refresh short-circuits and
-  // returns the cached payload instead of hitting the API again.
+  // The Accounts view and tray popup both consume the same snapshot command.
   const codexUsage = ref<CodexUsage | null>(null)
   const codexUsageLoading = ref(false)
   const codexUsageError = ref<string | null>(null)
   const codexUsageLastQuery = ref<number>(0)
 
-  // Codex rate-limit reset credits + their validity period. Fetched alongside
-  // usage on a manual refresh; failure here must NOT blank out the usage data.
+  // Codex rate-limit reset credits + their validity period. Fetched in the
+  // same snapshot as usage; failure here must NOT blank out the usage data.
   const codexResetCredits = ref<CodexResetCredits | null>(null)
+
+  // Grok Build is deliberately read-only: one current CLI account and its
+  // billing snapshot, with no profile pool or credential mutations.
+  const grokUsage = ref<GrokUsage | null>(null)
+  const grokUsageLoading = ref(false)
+  const grokUsageError = ref<string | null>(null)
+  const grokUsageLastQuery = ref<number>(0)
 
   // Edit modal state
   const editModalOpen = ref(false)
@@ -53,51 +56,52 @@ export const useSwitchStore = defineStore('switch', () => {
     editSaving.value = false
     deleteArmed.value = false
     clearActiveModalOpen.value = false
-    await loadProfiles()
-    // Codex usage is intentionally NOT auto-fetched here. The user must
-    // click "Refresh" on the usage panel to trigger a query.
+    await loadSelectedAgent()
   }
 
-  // Whether the cached usage is still within the cooldown window.
-  function codexUsageInCooldown(): boolean {
-    if (!codexUsageLastQuery.value) return false
-    return Date.now() - codexUsageLastQuery.value < QUOTA_COOLDOWN_MS
-  }
-
-  // Manually refresh Codex usage. Behavior:
-  //   - Never auto-triggered; the component calls this on button click.
-  //   - If a fresh payload exists within the cooldown window (1 min), we skip
-  //     the API call and just reuse the cached value (component shows a toast).
-  //   - `force` bypasses the cooldown.
-  // Fetches usage + reset-credits in parallel. Reset-credits failure is
-  // non-fatal (we keep usage data and just null out the credits).
-  async function refreshCodexUsage(force = false) {
+  // Every invocation performs a fresh query. This is used when entering Codex,
+  // after switching accounts, and when the user presses Refresh.
+  async function refreshCodexUsage() {
     if (selectedAgent.value !== 'codex' || codexUsageLoading.value) return
-    if (!force && codexUsage.value && codexUsageInCooldown()) return
     codexUsageLoading.value = true
     codexUsageError.value = null
     try {
-      const [usageRes, creditsRes] = await Promise.allSettled([
-        api.getCodexUsage(),
-        api.getCodexResetCredits(),
-      ])
-      if (usageRes.status === 'fulfilled') {
-        codexUsage.value = usageRes.value
-        codexUsageLastQuery.value = Date.now()
-      } else {
-        // Usage is the primary payload — if it fails, surface the error.
-        codexUsageError.value = String((usageRes.reason as any)?.message || usageRes.reason)
-        codexUsage.value = null
-      }
-      codexResetCredits.value =
-        creditsRes.status === 'fulfilled' ? creditsRes.value : null
+      const snapshot = await api.getCodexTrayUsage()
+      codexUsage.value = snapshot.usage
+      codexResetCredits.value = snapshot.reset_credits
+      codexUsageLastQuery.value = snapshot.last_query_at * 1000
+    } catch (reason: any) {
+      codexUsageError.value = String(reason?.message || reason)
+      codexUsage.value = null
+      codexResetCredits.value = null
     } finally {
       codexUsageLoading.value = false
     }
   }
 
+  async function refreshGrokUsage() {
+    if (selectedAgent.value !== 'grok-build' || grokUsageLoading.value) return
+    grokUsageLoading.value = true
+    grokUsageError.value = null
+    try {
+      grokUsage.value = await api.getGrokUsage()
+      grokUsageLastQuery.value = (grokUsage.value.fetched_at || Math.floor(Date.now() / 1000)) * 1000
+    } catch (reason: any) {
+      grokUsageError.value = String(reason?.message || reason)
+      grokUsage.value = null
+      grokUsageLastQuery.value = 0
+    } finally {
+      grokUsageLoading.value = false
+    }
+  }
+
   async function loadProfiles() {
     if (!selectedAgent.value) return
+    if (selectedAgent.value === 'grok-build') {
+      profiles.value = []
+      currentKey.value = null
+      return
+    }
     try {
       const resp = await api.listSwitchProfiles(selectedAgent.value)
       profiles.value = resp.profiles || []
@@ -106,6 +110,14 @@ export const useSwitchStore = defineStore('switch', () => {
       profiles.value = []
       currentKey.value = null
     }
+  }
+
+  // Entering the selected account section always reloads profile state. Codex
+  // additionally performs a fresh quota query with no time-based cooldown.
+  async function loadSelectedAgent() {
+    await loadProfiles()
+    if (selectedAgent.value === 'codex') await refreshCodexUsage()
+    if (selectedAgent.value === 'grok-build') await refreshGrokUsage()
   }
 
   async function openEditModal(profile: any) {
@@ -149,6 +161,11 @@ export const useSwitchStore = defineStore('switch', () => {
     try {
       await api.deleteActiveAuth(selectedAgent.value)
       await loadProfiles()
+      if (selectedAgent.value === 'codex') {
+        codexUsage.value = null
+        codexResetCredits.value = null
+        codexUsageLastQuery.value = 0
+      }
       clearActiveModalOpen.value = false
       return null
     } catch (e: any) {
@@ -177,8 +194,9 @@ export const useSwitchStore = defineStore('switch', () => {
     editModalOpen, editingProfileId, editNote, editContent, editContentLoading, editSaving, deleteArmed,
     clearActiveModalOpen, clearActiveLoading,
     codexUsage, codexUsageLoading, codexUsageError, codexUsageLastQuery, codexResetCredits,
-    selectAgent, loadProfiles, openEditModal, closeEditModal, resetState,
-    codexUsageInCooldown, refreshCodexUsage,
+    grokUsage, grokUsageLoading, grokUsageError, grokUsageLastQuery,
+    selectAgent, loadProfiles, loadSelectedAgent, openEditModal, closeEditModal, resetState,
+    refreshCodexUsage, refreshGrokUsage,
     openClearActiveModal, closeClearActiveModal, deleteActiveAuth,
   }
 })

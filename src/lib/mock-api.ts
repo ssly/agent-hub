@@ -318,6 +318,9 @@ export async function getCodexUsage() {
   // Simulate a Free plan: only a monthly primary window, no 5h/7d secondary.
   return {
     plan_type: 'free',
+    usage_windows: [
+      { used_percent: 5, remaining_percent: 95, reset_after_seconds: 2505600, reset_at: 1782799999, window_seconds: 2592000 },
+    ],
     primary_window: { used_percent: 5, remaining_percent: 95, reset_after_seconds: 2505600, reset_at: 1782799999, window_seconds: 2592000 },
     secondary_window: null,
     reset_credits: { available_count: 1 },
@@ -357,8 +360,13 @@ export async function getCodexTrayUsage() {
   return {
     usage: {
       plan_type: 'plus',
-      primary_window: { used_percent: 60, remaining_percent: 40, reset_after_seconds: 518832, reset_at: now + 518832, window_seconds: 604800 },
-      secondary_window: null,
+      usage_windows: [
+        { used_percent: 39, remaining_percent: 61, reset_after_seconds: 7740, reset_at: now + 7740, window_seconds: 18000 },
+        { used_percent: 61, remaining_percent: 39, reset_after_seconds: 291600, reset_at: now + 291600, window_seconds: 604800 },
+        { used_percent: 12, remaining_percent: 88, reset_after_seconds: 1209600, reset_at: now + 1209600, window_seconds: 2592000 },
+      ],
+      primary_window: { used_percent: 39, remaining_percent: 61, reset_after_seconds: 7740, reset_at: now + 7740, window_seconds: 18000 },
+      secondary_window: { used_percent: 61, remaining_percent: 39, reset_after_seconds: 291600, reset_at: now + 291600, window_seconds: 604800 },
       reset_credits: { available_count: 4 },
     },
     reset_credits: {
@@ -372,10 +380,37 @@ export async function getCodexTrayUsage() {
       })),
     },
     last_query_at: now,
-    next_query_at: now + 600,
-    cached: false,
   }
 }
+export async function getGrokUsage() {
+  await delay()
+  const now = Math.floor(Date.now() / 1000)
+  return {
+    account_name: 'default@grok.build',
+    plan_type: 'SuperGrok',
+    period_type: 'monthly',
+    usage_window: {
+      used_percent: 5,
+      remaining_percent: 95,
+      reset_after_seconds: 345600,
+      reset_at: now + 345600,
+      window_seconds: 2678400,
+    },
+    limit_value: 15000,
+    used_value: 728,
+    prepaid_balance: 0,
+    on_demand_cap: 0,
+    on_demand_used: 0,
+    on_demand_enabled: false,
+    source: 'live',
+    fetched_at: now,
+    stale: false,
+  }
+}
+export async function getUsageProviderAvailability() {
+  return { codex: true, grok_build: true }
+}
+export async function resizeUsageTray() {}
 
 // App
 export async function getAppVersion() { return '0.9.3-dev' }
