@@ -683,7 +683,7 @@ async function handleConfirmClear() {
       @close="closeEditModal"
     >
       <!-- body -->
-      <div class="space-y-4">
+      <div class="flex flex-col gap-4">
         <div class="flex flex-col gap-1.5">
           <label class="text-xs font-semibold" style="color: var(--ink-2)">{{ t('switch.note_label') }}</label>
           <input
@@ -698,13 +698,13 @@ async function handleConfirmClear() {
           <textarea
             v-if="!store.editContentLoading"
             v-model="store.editContent"
-            class="ah-config-editor"
-            style="min-height: 200px"
+            v-auto-resize
+            class="ah-config-editor ah-config-editor--auto"
           />
           <div
             v-else
             class="ah-config-editor flex items-center justify-center text-xs"
-            style="min-height: 200px; color: var(--ink-3)"
+            style="color: var(--ink-3)"
           >
             {{ t('switch.content_loading') }}
           </div>

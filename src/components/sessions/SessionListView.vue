@@ -398,10 +398,7 @@ function clearSessionSearch() {
               <span>{{ t('session.started_at', { time: formatSessionTime(store.activeSession.started_at, locale) }) }}</span>
             </div>
 
-            <div
-              class="rounded-lg border p-4 space-y-4 max-h-[50vh] overflow-y-auto"
-              style="background: var(--sunken); border-color: var(--border)"
-            >
+            <div class="ah-msg-list">
               <div v-if="store.messagesLoading" class="loading-pulse text-center py-8" style="color: var(--ink-3)">
                 {{ t('session.loading_messages') }}
               </div>
@@ -412,27 +409,19 @@ function clearSessionSearch() {
                 <div
                   v-for="(msg, idx) in store.messages"
                   :key="idx"
-                  class="flex w-full"
-                  :class="msg.role === 'user' ? 'justify-end' : 'justify-start'"
+                  class="ah-msg"
+                  :class="msg.role === 'user' ? 'ah-msg--user' : 'ah-msg--assistant'"
                 >
-                  <div
-                    class="rounded-lg border p-3 flex flex-col gap-1 max-w-[85%] relative group transition-all"
-                    :style="msg.role === 'user' 
-                      ? { background: 'var(--accent-soft)', borderColor: 'var(--accent-mid)', borderRadius: '12px 12px 0px 12px' } 
-                      : { background: 'var(--surface)', borderColor: 'var(--hairline)', borderRadius: '12px 12px 12px 0px' }"
-                  >
-                    <div class="flex items-center justify-between gap-6 mb-1">
-                      <span
-                        class="text-[10px] font-semibold tracking-wider uppercase"
-                        :style="{ color: msg.role === 'user' ? 'var(--accent)' : 'var(--success)' }"
-                      >
+                  <div class="ah-msg__bubble">
+                    <div class="ah-msg__meta">
+                      <span class="ah-msg__role">
                         {{ msg.role === 'user' ? t('session.role_user') : t('session.role_assistant') }}
                       </span>
-                      <span class="text-[9px]" style="color: var(--ink-4)">
+                      <span class="ah-msg__time">
                         {{ msg.timestamp ? formatSessionTime(msg.timestamp, locale) : '' }}
                       </span>
                     </div>
-                    <pre class="text-sm font-sans whitespace-pre-wrap break-words m-0 leading-relaxed" style="color: var(--ink)">{{ msg.content || '' }}</pre>
+                    <pre class="ah-msg__content">{{ msg.content || '' }}</pre>
                   </div>
                 </div>
               </template>

@@ -28,6 +28,46 @@ const editText = ref('')
 // so cancelling the preview re-opens the edit modal.
 const previewFromEdit = ref(false)
 
+// Detail modal: clicking a server row opens its config in a modal
+// (same interaction pattern as the Accounts tab).
+const detailModalOpen = ref(false)
+const detailServerName = ref('')
+
+async function openServerDetail(name: string) {
+  detailServerName.value = name
+  detailModalOpen.value = true
+  if (!store.serverDetails[name] && store.selectedPlatformId) {
+    try {
+      const detail = await api.getMcpServer(store.selectedPlatformId, name, store.workspaceDirectory)
+      store.serverDetails[name] = { config_text: detail.config_text, format: detail.format }
+    } catch (e: any) {
+      showToast(String(e?.message || e), 'error')
+    }
+  }
+}
+
+function closeServerDetail() {
+  detailModalOpen.value = false
+}
+
+function handleDetailEdit() {
+  const name = detailServerName.value
+  closeServerDetail()
+  handleEditClick(name)
+}
+
+function handleDetailSync() {
+  const name = detailServerName.value
+  closeServerDetail()
+  handleSyncClick(name)
+}
+
+function handleDetailDelete() {
+  const name = detailServerName.value
+  closeServerDetail()
+  handleDeleteClick(name)
+}
+
 // Detect selected platform format
 const selectedFormat = computed(() => {
   const p = store.platforms.find(p => p.id === store.selectedPlatformId)
@@ -233,59 +273,58 @@ function stripTomlHeader(text: string, name: string): string {
           <p style="color: var(--ink-3)">{{ t('mcp.no_servers') }}</p>
         </div>
 
-        <!-- Server List -->
+        <!-- Server List: click a row to open its config in a modal -->
         <div class="space-y-1">
           <div
             v-for="server in store.servers"
             :key="server.name"
-            :class="['ah-accordion', store.expandedServer === server.name ? 'is-expanded' : '']"
+            class="ah-server-row"
+            @click="openServerDetail(server.name)"
           >
-            <!-- Server Header -->
-            <div class="ah-accordion__header group">
-              <button class="flex-1 flex items-center gap-2 text-left" @click="store.toggleServer(server.name)">
-                <span :class="['ah-accordion__arrow', store.expandedServer === server.name ? 'is-open' : '']">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
-                </span>
-                <div class="flex-1 min-w-0">
-                  <div class="ah-accordion__name">{{ server.name }}</div>
-                  <div class="ah-accordion__summary">{{ server.summary }}</div>
-                </div>
-              </button>
-              <div v-if="!props.readonly" class="ah-accordion__actions">
-                <button class="btn btn-ghost btn-sm" @click.stop="handleSyncClick(server.name)">{{ t('mcp.sync') }}</button>
-                <button
-                  v-if="store.expandedServer === server.name && store.serverDetails[server.name]"
-                  class="btn btn-ghost btn-sm"
-                  @click.stop="handleEditClick(server.name)"
-                >
-                  {{ t('mcp.edit') }}
-                </button>
-                <button
-                  class="btn btn-ghost btn-sm"
-                  style="color: var(--ink-4)"
-                  @click.stop="handleDeleteClick(server.name)"
-                >
-                  {{ t('mcp.delete') }}
-                </button>
-              </div>
+            <div class="flex-1 min-w-0">
+              <div class="ah-server-row__name">{{ server.name }}</div>
+              <div class="ah-server-row__summary">{{ server.summary }}</div>
             </div>
-
-            <!-- Expanded Content (read-only) -->
-            <div v-if="store.expandedServer === server.name && store.serverDetails[server.name]" class="ah-accordion__content">
-              <div class="flex items-center justify-between mt-2 mb-2">
-                <span class="text-xs" style="color: var(--ink-3)">
-                  {{ store.serverDetails[server.name]?.format === 'toml' ? 'TOML' : 'JSON' }}
-                </span>
-                <button
-                  v-if="!props.readonly"
-                  class="btn btn-ghost btn-sm"
-                  @click="handleEditClick(server.name)"
-                >{{ t('mcp.edit') }}</button>
-              </div>
-              <pre class="ah-config-view" style="margin: 0;">{{ displayConfig(server.name) }}</pre>
-            </div>
+            <span class="ah-server-row__chevron">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+            </span>
           </div>
         </div>
+
+        <!-- Server Detail Modal -->
+        <AppModal
+          :show="detailModalOpen"
+          :title="detailServerName"
+          width-class="w-[44rem]"
+          @close="closeServerDetail"
+        >
+          <div v-if="!store.serverDetails[detailServerName]" class="loading-pulse flex items-center justify-center py-12" style="color: var(--ink-3)">
+            {{ t('switch.content_loading') }}
+          </div>
+          <div v-else class="ah-config-view-wrap ah-config-view-wrap--fill">
+            <span class="ah-config-view__badge">
+              {{ store.serverDetails[detailServerName]?.format === 'toml' ? 'TOML' : 'JSON' }}
+            </span>
+            <pre class="ah-config-view">{{ displayConfig(detailServerName) }}</pre>
+          </div>
+          <template #footer>
+            <div class="flex items-center gap-2 w-full">
+              <template v-if="!props.readonly">
+                <button class="btn btn-secondary" @click="handleDetailSync">{{ t('mcp.sync') }}</button>
+                <button class="btn btn-danger" @click="handleDetailDelete">{{ t('mcp.delete') }}</button>
+              </template>
+              <div class="flex-1" />
+              <button class="btn btn-secondary" @click="closeServerDetail">{{ t('action.close') }}</button>
+              <button
+                v-if="!props.readonly && store.serverDetails[detailServerName]"
+                class="btn btn-primary"
+                @click="handleDetailEdit"
+              >
+                {{ t('mcp.edit') }}
+              </button>
+            </div>
+          </template>
+        </AppModal>
 
         <!-- Add Server Modal -->
         <AppModal
@@ -294,7 +333,7 @@ function stripTomlHeader(text: string, name: string): string {
           @close="store.addModalOpen = false"
           width-class="w-[36rem]"
         >
-          <div class="space-y-4">
+          <div class="flex flex-col gap-4">
             <div class="flex flex-col gap-1.5">
               <label class="text-xs font-semibold" style="color: var(--ink-2)">{{ t('mcp.server_name') }}</label>
               <input
@@ -313,7 +352,8 @@ function stripTomlHeader(text: string, name: string): string {
               </label>
               <textarea
                 v-model="newServerConfig"
-                class="ah-config-editor"
+                v-auto-resize
+                class="ah-config-editor ah-config-editor--auto"
                 :placeholder="selectedFormat === 'toml' ? 'command = &quot;npx&quot;' : '{}'"
               />
             </div>
@@ -367,8 +407,8 @@ function stripTomlHeader(text: string, name: string): string {
             </label>
             <textarea
               v-model="editText"
-              class="ah-config-editor"
-              style="min-height: 320px;"
+              v-auto-resize
+              class="ah-config-editor ah-config-editor--auto"
             />
           </div>
           <template #footer>

@@ -434,7 +434,9 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-:global(html), :global(body), :global(#app) {
+:global(html[data-view="codex-usage"]),
+:global(html[data-view="codex-usage"] body),
+:global(html[data-view="codex-usage"] #app) {
   width: 100%;
   height: 100%;
   margin: 0;

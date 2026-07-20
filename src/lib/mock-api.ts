@@ -223,7 +223,16 @@ export async function listSessionTerminals() {
   ]
 }
 export async function resumeSession() { await delay(300); return 'claude --resume session-0' }
-export async function getSessionMessages() { await delay(); return [] }
+export async function getSessionMessages() {
+  await delay();
+  const now = Date.now();
+  return [
+    { role: 'user', content: '帮我把这个 Vue 3 组件重构成组合式函数,逻辑复用性太差了。', timestamp: now - 3600 * 1000 },
+    { role: 'assistant', content: '好的,我先看一下现有组件的结构。\n\n建议拆成三个 composable:\n1. useFetchData — 负责数据加载与缓存\n2. usePagination — 分页状态\n3. useSelection — 多选逻辑\n\n这样每个函数职责单一,测试也方便。', timestamp: now - 3540 * 1000 },
+    { role: 'user', content: 'useFetchData 里要不要加 AbortController?页面切换时旧请求还在跑。', timestamp: now - 3400 * 1000 },
+    { role: 'assistant', content: '要加。在 composable 内部维护一个 controller,onScopeDispose 时 abort,新请求进来前先取消上一个:\n\nlet ctrl: AbortController | null = null\nasync function load() {\n  ctrl?.abort()\n  ctrl = new AbortController()\n  const res = await fetch(url, { signal: ctrl.signal })\n}', timestamp: now - 3300 * 1000 },
+  ]
+}
 export async function deleteSession() { await delay(200) }
 export async function deleteSessions(_platformId: string, sessionIds: string[]) {
   await delay(300)

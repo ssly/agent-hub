@@ -139,7 +139,7 @@ function handleSessionSearch(e: Event) {
     <!-- Header -->
     <div class="ah-sidebar__header">
       <span v-show="!appStore.sidebarCollapsed" class="ah-sidebar__brand">
-        {{ t('ui.title') }}<span class="ah-seal">枢</span>
+        {{ t('ui.title') }}
       </span>
       <div class="flex gap-1 items-center">
         <button v-show="!appStore.sidebarCollapsed" class="ah-sidebar__header-btn" @click="appStore.switchLocale()">
