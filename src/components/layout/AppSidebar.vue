@@ -139,24 +139,17 @@ function handleSessionSearch(e: Event) {
     <!-- Header -->
     <div class="ah-sidebar__header">
       <span v-show="!appStore.sidebarCollapsed" class="ah-sidebar__brand">
-        {{ t('ui.title') }}<span class="ah-sidebar__brand-dot"> ·</span>
+        {{ t('ui.title') }}<span class="ah-seal">枢</span>
       </span>
       <div class="flex gap-1 items-center">
         <button v-show="!appStore.sidebarCollapsed" class="ah-sidebar__header-btn" @click="appStore.switchLocale()">
-          {{ appStore.locale === 'en' ? 'EN' : '中文' }}
+          {{ appStore.locale === 'en' ? 'EN' : '中' }}
         </button>
         <button v-show="!appStore.sidebarCollapsed" class="ah-sidebar__header-btn" @click="appStore.toggleTheme()">
           {{ appStore.isNightTheme() ? '☀' : '☾' }}
         </button>
         <button v-show="!appStore.sidebarCollapsed" class="ah-sidebar__header-btn" @click="handleRefresh">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-        </button>
-        <button
-          class="ah-sidebar__header-btn"
-          :style="appStore.sidebarCollapsed ? { transform: 'rotate(180deg)' } : {}"
-          @click="appStore.toggleSidebar()"
-        >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
       </div>
     </div>
@@ -276,7 +269,7 @@ function handleSessionSearch(e: Event) {
         </span>
         <span
           v-else
-          :style="appStore.availableUpdate ? { color: '#f59e0b' } : { color: 'var(--ink-4)' }"
+          :style="appStore.availableUpdate ? { color: 'var(--warning)' } : { color: 'var(--ink-4)' }"
           style="font-size: 11px"
         >
           v{{ appStore.appVersion }}

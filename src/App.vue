@@ -315,7 +315,7 @@ onMounted(async () => {
 <template>
   <div class="flex h-full">
     <AppSidebar />
-    <main class="flex-1 flex flex-col overflow-hidden" style="background: var(--canvas)">
+    <main class="flex-1 flex flex-col overflow-hidden">
       <AppToolbar />
       <div class="flex-1 overflow-y-auto">
         <template v-if="appStore.currentTab === 'plugins'">
@@ -786,7 +786,7 @@ onMounted(async () => {
    webview has no native confirm() dialog, so we can't rely on window.confirm. */
 .trash-confirm-btn--armed {
   background: var(--danger);
-  color: #fff;
+  color: var(--on-accent);
   border-color: var(--danger);
   white-space: nowrap;
 }

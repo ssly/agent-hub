@@ -10,7 +10,9 @@
 html, body, #app { height: 100%; margin: 0; }
 
 body {
-  background: var(--canvas);
+  background-color: var(--canvas);
+  background-image: var(--paper-grain), var(--canvas-wash);
+  background-attachment: fixed;
   color: var(--ink);
   font-family: var(--font-sans);
   font-size: 14px;

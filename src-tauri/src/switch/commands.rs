@@ -40,6 +40,13 @@ fn now_iso() -> String {
     Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
+fn extract_claude_auth_token(val: &serde_json::Value) -> Option<String> {
+    val.get("env")
+        .and_then(|env| env.get("ANTHROPIC_AUTH_TOKEN"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
 fn extract_key(agent_type: &str, content: &str) -> Option<String> {
     let val: serde_json::Value = serde_json::from_str(content).ok()?;
     match agent_type {
@@ -47,11 +54,7 @@ fn extract_key(agent_type: &str, content: &str) -> Option<String> {
             .get("access_token")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
-        "claude-code" => val
-            .get("env")
-            .and_then(|env| env.get("ANTHROPIC_API_KEY"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
+        "claude-code" => extract_claude_auth_token(&val),
         _ => None,
     }
 }
@@ -92,8 +95,8 @@ fn decode_jwt_payload(token: &str) -> Option<serde_json::Value> {
 ///
 /// - codex → the ChatGPT `account_id` (tokens.account_id / account_id),
 ///   which is invariant across token refreshes.
-/// - claude-code → the `ANTHROPIC_API_KEY` itself, which is a long-lived key
-///   that only changes when the user actually switches accounts.
+/// - claude-code → the `ANTHROPIC_AUTH_TOKEN` itself; two Claude configs are
+///   considered the same account exactly when this token matches.
 fn extract_account_identity(agent_type: &str, content: &str) -> Option<String> {
     let val: serde_json::Value = serde_json::from_str(content).ok()?;
     match agent_type {
@@ -103,11 +106,7 @@ fn extract_account_identity(agent_type: &str, content: &str) -> Option<String> {
             .or_else(|| val.get("account_id"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
-        "claude-code" => val
-            .get("env")
-            .and_then(|env| env.get("ANTHROPIC_API_KEY"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
+        "claude-code" => extract_claude_auth_token(&val),
         _ => None,
     }
 }
@@ -270,6 +269,18 @@ pub fn list_switch_profiles(agent_type: String) -> Result<ListSwitchResponse, St
         .collect();
 
     profiles.sort_by(|a, b| b.saved_at.cmp(&a.saved_at));
+
+    // Claude Code: the current account always leads the list. When a saved
+    // profile has the same ANTHROPIC_AUTH_TOKEN it is already marked active;
+    // otherwise the auto-save above just inserted it. Either way it renders
+    // as the first card so the top of the page reflects the live account.
+    if agent_type == "claude-code" {
+        if let Some(pos) = profiles.iter().position(|p| p.is_active) {
+            let active = profiles.remove(pos);
+            profiles.insert(0, active);
+        }
+    }
+
     Ok(ListSwitchResponse {
         profiles,
         current_key,
@@ -1285,15 +1296,26 @@ mod tests {
     }
 
     #[test]
-    fn claude_identity_is_the_api_key() {
-        let content = r#"{"env":{"ANTHROPIC_API_KEY":"sk-ant-xyz123"}}"#;
+    fn claude_identity_is_the_auth_token() {
+        let content = r#"{"env":{"ANTHROPIC_AUTH_TOKEN":"sk-ant-xyz123"}}"#;
         let id = extract_account_identity("claude-code", content);
         assert_eq!(id.as_deref(), Some("sk-ant-xyz123"));
+        assert_eq!(
+            extract_key("claude-code", content).as_deref(),
+            Some("sk-ant-xyz123")
+        );
+    }
+
+    #[test]
+    fn claude_identity_ignores_api_key_only_configs() {
+        let content = r#"{"env":{"ANTHROPIC_API_KEY":"sk-ant-xyz123"}}"#;
+        assert!(extract_account_identity("claude-code", content).is_none());
+        assert!(extract_key("claude-code", content).is_none());
     }
 
     #[test]
     fn claude_name_is_never_derived() {
-        let content = r#"{"env":{"ANTHROPIC_API_KEY":"sk-ant-xyz123"}}"#;
+        let content = r#"{"env":{"ANTHROPIC_AUTH_TOKEN":"sk-ant-xyz123"}}"#;
         assert!(extract_account_name("claude-code", content).is_none());
     }
 

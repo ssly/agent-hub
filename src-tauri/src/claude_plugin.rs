@@ -6,6 +6,14 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+// Suppress the transient console window when the GUI invokes Claude Code in
+// the background to list, enable, or disable plugins.
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ClaudePluginView {
     pub id: String,
@@ -179,11 +187,23 @@ fn claude_executable_candidates() -> Vec<PathBuf> {
     candidates
 }
 
+#[cfg(target_os = "windows")]
+fn background_command(executable: &Path) -> Command {
+    let mut command = Command::new(executable);
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
+}
+
+#[cfg(not(target_os = "windows"))]
+fn background_command(executable: &Path) -> Command {
+    Command::new(executable)
+}
+
 fn run_claude(args: &[&str], workspace: Option<&Path>) -> Result<Output, String> {
     let mut attempted = Vec::new();
     for executable in claude_executable_candidates() {
         attempted.push(executable.display().to_string());
-        let mut command = Command::new(&executable);
+        let mut command = background_command(&executable);
         command.args(args);
         if let Some(directory) = workspace {
             command.current_dir(directory);
@@ -360,5 +380,28 @@ mod tests {
         let error =
             set_claude_plugin_enabled_impl("reviewer@company", "project", true).unwrap_err();
         assert!(error.contains("仅支持切换用户范围"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn background_commands_do_not_allocate_a_console_window() {
+        let script = r#"
+            Add-Type -Name ConsoleWindow -Namespace AgentHub -MemberDefinition '
+                [System.Runtime.InteropServices.DllImport("Kernel32.dll")]
+                public static extern System.IntPtr GetConsoleWindow();
+            '
+            [AgentHub.ConsoleWindow]::GetConsoleWindow().ToInt64()
+        "#;
+        let output = background_command(Path::new("powershell.exe"))
+            .args(["-NoProfile", "-NonInteractive", "-Command", script])
+            .output()
+            .expect("PowerShell should be available on supported Windows versions");
+
+        assert!(
+            output.status.success(),
+            "console probe failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "0");
     }
 }

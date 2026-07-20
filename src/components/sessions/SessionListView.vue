@@ -130,7 +130,7 @@ function highlightText(text: string, query: string) {
   if (!query) return escapedText
   const escapedQuery = escapeHtml(query).replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')
   const regex = new RegExp(`(${escapedQuery})`, 'gi')
-  return escapedText.replace(regex, '<mark class="bg-[#C9A961]/25 text-[var(--ink)] rounded px-0.5 font-medium">$1</mark>')
+  return escapedText.replace(regex, '<mark class="ah-mark">$1</mark>')
 }
 
 function clearSessionSearch() {
@@ -459,24 +459,6 @@ function clearSessionSearch() {
 </template>
 
 <style scoped>
-.session-card {
-  position: relative;
-  overflow: hidden;
-}
-.session-card::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 12px;
-  bottom: 12px;
-  width: 3px;
-  border-radius: 0 2px 2px 0;
-  background: transparent;
-  transition: background var(--dur-fast) var(--ease-soft);
-}
-.session-card:hover::before {
-  background: var(--accent);
-}
 .session-card__head {
   display: flex;
   align-items: baseline;
@@ -517,7 +499,7 @@ function clearSessionSearch() {
 .session-card__delete.is-confirming {
   width: auto;
   padding: 0 10px;
-  color: #fff;
+  color: var(--on-accent);
   background: var(--danger);
   border-color: var(--danger);
 }
@@ -537,9 +519,6 @@ function clearSessionSearch() {
 .session-card--selected {
   background: var(--accent-soft);
   border-color: var(--accent-mid);
-}
-.session-card--selected::before {
-  background: var(--accent);
 }
 .session-card__check {
   display: inline-flex;

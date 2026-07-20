@@ -715,7 +715,7 @@ async function handleConfirmClear() {
         <div class="flex items-center gap-2 w-full">
           <button
             :class="store.deleteArmed ? 'btn btn-sm' : 'btn btn-danger btn-sm'"
-            :style="store.deleteArmed ? { background: 'var(--danger)', color: '#fff', borderColor: 'var(--danger)' } : {}"
+            :style="store.deleteArmed ? { background: 'var(--danger)', color: 'var(--on-accent)', borderColor: 'var(--danger)' } : {}"
             @click.stop="store.deleteArmed ? confirmDelete() : armDelete()"
             @mouseleave="store.deleteArmed = false"
           >
@@ -790,7 +790,7 @@ async function handleConfirmClear() {
 }
 .switch-active-badge {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   font-weight: 600;
   padding: 2px 8px;
   border-radius: 999px;

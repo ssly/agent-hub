@@ -34,6 +34,10 @@ jobs:
         with:
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
+      - name: Test Windows background process behavior
+        if: matrix.platform == 'windows-latest'
+        run: cargo test --manifest-path src-tauri/Cargo.toml claude_plugin::tests
+
       - uses: tauri-apps/tauri-action@v0
         id: tauri
         env:

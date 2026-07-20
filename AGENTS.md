@@ -4,7 +4,7 @@ Agent Hub 的项目上下文文档，供 AI Agent 和开发者快速了解项目
 
 ## 项目概述
 
-Agent Hub 是一个基于 Tauri 2.x 的桌面应用，用于统一管理本地多个 AI Agent 平台的插件（Skill、MCP Server、Claude Code 原生插件）、会话和账号。当前版本 **0.17.0**。
+Agent Hub 是一个基于 Tauri 2.x 的桌面应用，用于统一管理本地多个 AI Agent 平台的插件（Skill、MCP Server、Claude Code 原生插件）、会话和账号。当前版本 **0.18.1**。
 
 ## 架构
 
@@ -131,7 +131,7 @@ Skill 是包含 `SKILL.md` 的目录，SKILL.md 使用 YAML frontmatter（`name`
 
 ### 账号切换
 
-Profile 存储在 `~/.agent-hub/switch/<agent-type>/<uuid>/`，通过 SHA-256 哈希比对检测当前活跃账号。切换时原子替换（tmp + rename）。Switch 视图还提供 Codex 用量查询（`get_codex_usage` 命令，调用 ChatGPT 内部 usage 接口返回 5h/7d 窗口配额）。
+Profile 存储在 `~/.agent-hub/switch/<agent-type>/<uuid>/`，按平台稳定身份检测当前活跃账号（Codex 用 `account_id`，Claude Code 用 `env.ANTHROPIC_AUTH_TOKEN`）。切换时原子替换（tmp + rename）。Switch 视图还提供 Codex 用量查询（`get_codex_usage` 命令，调用 ChatGPT 内部 usage 接口返回 5h/7d 窗口配额）。
 
 ## 测试
 

@@ -414,9 +414,9 @@ function stripTomlHeader(text: string, name: string): string {
 
             <!-- Diff lines -->
             <pre class="ah-config-editor" style="max-height: 360px; overflow-y: auto; font-size: 12px; line-height: 1.6;"><template v-for="(line, idx) in store.previewData.diff_lines" :key="idx"><span :style="{
-                color: line.tag === 'added' ? 'var(--success, #22c55e)' : line.tag === 'removed' ? 'var(--danger)' : 'var(--ink-3)',
+                color: line.tag === 'added' ? 'var(--success)' : line.tag === 'removed' ? 'var(--danger)' : 'var(--ink-3)',
                 display: 'block',
-                background: line.tag === 'added' ? 'color-mix(in srgb, var(--success, #22c55e) 8%, transparent)' : line.tag === 'removed' ? 'color-mix(in srgb, var(--danger) 8%, transparent)' : 'transparent',
+                background: line.tag === 'added' ? 'color-mix(in srgb, var(--success) 8%, transparent)' : line.tag === 'removed' ? 'color-mix(in srgb, var(--danger) 8%, transparent)' : 'transparent',
               }">{{ line.tag === 'added' ? '+ ' : line.tag === 'removed' ? '- ' : '  ' }}{{ line.content }}</span></template></pre>
           </template>
 

@@ -218,7 +218,6 @@ const showSkillsSection = computed(() => pluginsStore.isGlobalScope || skillCoun
   overflow-wrap: anywhere;
   line-height: 1.45;
 }
-:deep(.ah-embedded-view .ah-accordion__summary),
 :deep(.ah-embedded-view .ah-config-view) {
   max-width: 100%;
   overflow-wrap: anywhere;
