@@ -341,8 +341,6 @@
     "title": "用量查询",
     "provider": "用量平台",
     "login_required": "你没有登录 Codex、Grok Build 等账号，请先登录后再次查询。",
-    "refresh": "刷新",
-    "querying": "正在查询…",
     "query_wait": "正在查询，请稍候…",
     "retry": "重试",
     "used": "已用",
@@ -355,6 +353,8 @@
     "expiry_hm": "{h} 小时 {m} 分钟后到期",
     "expiry_unknown": "到期时间未知",
     "expiry_at": "{date} 到期",
+    "valid_until": "有效期",
+    "remaining": "剩余",
     "no_usage": "当前账号没有返回用量窗口",
     "last_query": "上次查询：{time}",
     "failed": "查询失败"

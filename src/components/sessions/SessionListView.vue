@@ -232,79 +232,83 @@ function clearSessionSearch() {
 
         <!-- Standard session list view -->
         <template v-else>
-          <!-- Filter bar -->
-          <div class="ah-filter-bar flex items-center justify-between gap-3 flex-wrap">
-            <div class="text-xs whitespace-nowrap" style="color: var(--ink-3)">
-              {{ t('session.loaded_summary', { loaded: formatInt(store.sessions.length), total: formatInt(store.sessionTotal) }) }}
-            </div>
-            <div class="flex items-center gap-4 flex-wrap">
-              <div class="flex items-center gap-2">
-                <span class="text-xs whitespace-nowrap" style="color: var(--ink-3)">{{ t('session.path_filter_label') }}</span>
-                <div class="w-52">
-                  <AppSelect
-                    :model-value="store.selectedPathFilter"
-                    :options="pathSelectOptions"
-                    @update:model-value="store.changePathFilter($event)"
-                  />
-                </div>
-              </div>
-              <div class="flex items-center gap-2">
-                <span class="text-xs whitespace-nowrap" style="color: var(--ink-3)">{{ t('session.resume_terminal') }}</span>
-                <div class="w-44">
-                  <AppSelect
-                    :model-value="store.selectedTerminal"
-                    :options="terminalSelectOptions"
-                    @update:model-value="store.selectedTerminal = $event"
-                  />
-                </div>
-              </div>
-              <button
-                class="btn btn-sm"
-                :class="store.selectionMode ? 'btn-primary' : 'btn-secondary'"
-                @click="store.selectionMode ? store.exitSelection() : store.enterSelection()"
-              >
-                {{ store.selectionMode ? t('session.batch_cancel') : t('session.batch_select') }}
-              </button>
-            </div>
-          </div>
-
-          <!-- Batch selection toolbar -->
-          <div v-if="store.selectionMode" class="ah-batch-bar flex items-center justify-between gap-3 flex-wrap">
-            <div class="flex items-center gap-3">
-              <span class="text-xs font-medium" style="color: var(--ink-2)">
-                {{ t('session.batch_select_none') && store.selectedCount === 0
-                  ? t('session.batch_select_none')
-                  : `${store.selectedCount} / ${store.sessions.length}` }}
+          <!-- Toolbar: filter controls in normal mode, morphs into batch
+               actions in selection mode (single contextual bar, no stacked strips) -->
+          <div
+            class="ah-filter-bar flex items-center justify-between gap-3 flex-wrap"
+            :class="{ 'ah-filter-bar--selecting': store.selectionMode }"
+          >
+            <template v-if="!store.selectionMode">
+              <span class="ah-filter-bar__stats">
+                {{ t('session.loaded_summary', { loaded: formatInt(store.sessions.length), total: formatInt(store.sessionTotal) }) }}
               </span>
-              <button class="btn btn-secondary btn-sm" @click="store.selectAllLoaded()">{{ t('session.batch_select_all') }}</button>
-              <button class="btn btn-secondary btn-sm" :disabled="store.selectedCount === 0" @click="store.clearSelection()">{{ t('session.batch_clear_selection') }}</button>
-            </div>
-            <div class="flex items-center gap-2">
-              <button
-                class="btn btn-primary btn-sm"
-                :disabled="store.isBulkExporting || store.isBulkDeleting || store.selectedCount === 0"
-                @click="handleBulkExport"
-              >
-                {{ store.isBulkExporting
-                  ? t('session.batch_exporting')
-                  : t('session.batch_export_n', { n: store.selectedCount }) }}
-              </button>
-              <button
-                class="btn btn-sm"
-                :class="confirmBatch ? 'session-card__delete is-confirming' : 'btn-danger'"
-                :style="confirmBatch ? { width: 'auto' } : null"
-                :disabled="store.isBulkDeleting || store.isBulkExporting || store.selectedCount === 0"
-                :title="confirmBatch ? t('session.batch_delete_confirm', { n: store.selectedCount }) : ''"
-                @click="handleBulkDelete"
-                @mouseleave="resetBatch()"
-              >
-                {{ store.isBulkDeleting
-                  ? t('session.deleting')
-                  : confirmBatch
-                    ? t('session.confirm_delete')
-                    : t('session.batch_delete_n', { n: store.selectedCount }) }}
-              </button>
-            </div>
+              <div class="flex items-center gap-3 flex-wrap">
+                <div class="flex items-center gap-1.5">
+                  <span class="ah-filter-bar__label">{{ t('session.path_filter_label') }}</span>
+                  <div class="w-48">
+                    <AppSelect
+                      :model-value="store.selectedPathFilter"
+                      :options="pathSelectOptions"
+                      @update:model-value="store.changePathFilter($event)"
+                    />
+                  </div>
+                </div>
+                <div class="flex items-center gap-1.5">
+                  <span class="ah-filter-bar__label">{{ t('session.resume_terminal') }}</span>
+                  <div class="w-40">
+                    <AppSelect
+                      :model-value="store.selectedTerminal"
+                      :options="terminalSelectOptions"
+                      @update:model-value="store.selectedTerminal = $event"
+                    />
+                  </div>
+                </div>
+                <button class="btn btn-secondary btn-sm" @click="store.enterSelection()">
+                  {{ t('session.batch_select') }}
+                </button>
+              </div>
+            </template>
+            <template v-else>
+              <div class="flex items-center gap-1">
+                <span class="ah-filter-bar__count">
+                  {{ store.selectedCount === 0
+                    ? t('session.batch_select_none')
+                    : `${store.selectedCount} / ${store.sessions.length}` }}
+                </span>
+                <button class="btn btn-ghost btn-sm" @click="store.selectAllLoaded()">{{ t('session.batch_select_all') }}</button>
+                <button class="btn btn-ghost btn-sm" :disabled="store.selectedCount === 0" @click="store.clearSelection()">{{ t('session.batch_clear_selection') }}</button>
+              </div>
+              <div class="flex items-center gap-2">
+                <button
+                  class="btn btn-primary btn-sm"
+                  :disabled="store.isBulkExporting || store.isBulkDeleting || store.selectedCount === 0"
+                  @click="handleBulkExport"
+                >
+                  {{ store.isBulkExporting
+                    ? t('session.batch_exporting')
+                    : t('session.batch_export_n', { n: store.selectedCount }) }}
+                </button>
+                <button
+                  class="btn btn-sm"
+                  :class="confirmBatch ? 'session-card__delete is-confirming' : 'btn-danger'"
+                  :style="confirmBatch ? { width: 'auto' } : null"
+                  :disabled="store.isBulkDeleting || store.isBulkExporting || store.selectedCount === 0"
+                  :title="confirmBatch ? t('session.batch_delete_confirm', { n: store.selectedCount }) : ''"
+                  @click="handleBulkDelete"
+                  @mouseleave="resetBatch()"
+                >
+                  {{ store.isBulkDeleting
+                    ? t('session.deleting')
+                    : confirmBatch
+                      ? t('session.confirm_delete')
+                      : t('session.batch_delete_n', { n: store.selectedCount }) }}
+                </button>
+                <span class="ah-filter-bar__divider" />
+                <button class="btn btn-secondary btn-sm" @click="store.exitSelection()">
+                  {{ t('session.batch_cancel') }}
+                </button>
+              </div>
+            </template>
           </div>
 
           <!-- Session Cards -->
@@ -317,19 +321,26 @@ function clearSessionSearch() {
               v-for="session in store.sessions"
               :key="session.id"
               class="ah-session-card session-card"
-              :class="{ 'session-card--selected': store.selectionMode && store.selectedIds.has(session.id) }"
+              :class="{
+                'session-card--selecting': store.selectionMode,
+                'session-card--selected': store.selectionMode && store.selectedIds.has(session.id),
+              }"
+              @click="store.selectionMode && store.toggleSelected(session.id)"
             >
+              <!-- Selected marker: accent triangle ribbon in the top-left corner -->
+              <div
+                v-if="store.selectionMode && store.selectedIds.has(session.id)"
+                class="session-card__corner"
+              >
+                <svg
+                  width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                  stroke-width="4" stroke-linecap="round" stroke-linejoin="round"
+                >
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              </div>
               <div class="session-card__head">
-                <div class="flex items-center gap-2 min-w-0">
-                  <label v-if="store.selectionMode" class="session-card__check" @click.stop>
-                    <input
-                      type="checkbox"
-                      :checked="store.selectedIds.has(session.id)"
-                      @change="store.toggleSelected(session.id)"
-                    />
-                  </label>
-                  <h3 class="ah-session-card__title truncate">{{ session.title || t('session.untitled') }}</h3>
-                </div>
+                <h3 class="ah-session-card__title truncate">{{ session.title || t('session.untitled') }}</h3>
                 <span class="text-xs whitespace-nowrap" style="color: var(--ink-3)">
                   {{ formatSessionTime(session.updated_at, locale) }}
                 </span>
@@ -492,33 +503,35 @@ function clearSessionSearch() {
   background: var(--danger);
   border-color: var(--danger);
 }
-/* Batch selection toolbar — mirrors the filter bar spacing. */
-.ah-batch-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding: 8px 12px;
-  margin-bottom: 8px;
-  border-radius: var(--radius);
-  background: var(--accent-soft);
-  border: 1px solid var(--accent-mid);
+/* Selection mode: the whole card is the toggle, so it gets pointer cursor and
+   relative+hidden to host the corner ribbon without leaking past the radius. */
+.session-card--selecting {
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+  user-select: none;
 }
 .session-card--selected {
   background: var(--accent-soft);
   border-color: var(--accent-mid);
 }
-.session-card__check {
-  display: inline-flex;
-  align-items: center;
-  flex-shrink: 0;
-  cursor: pointer;
+/* Top-left accent triangle marking a selected card, with a small check glyph.
+   Drawn with clip-path on a real box (not border triangles) so the glyph's
+   containing block is the corner square itself. */
+.session-card__corner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 26px;
+  height: 26px;
+  background: var(--accent);
+  clip-path: polygon(0 0, 100% 0, 0 100%);
+  pointer-events: none;
 }
-.session-card__check input {
-  width: 15px;
-  height: 15px;
-  cursor: pointer;
-  accent-color: var(--accent);
+.session-card__corner svg {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  color: var(--on-accent);
 }
 </style>

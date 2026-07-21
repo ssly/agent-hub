@@ -12,7 +12,7 @@ use crate::switch::commands::{
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 const TRAY_ID: &str = "codex-usage-tray";
 const TRAY_WINDOW_WIDTH: f64 = 400.0;
-const TRAY_LOADING_HEIGHT: f64 = 168.0;
+const TRAY_LOADING_HEIGHT: f64 = 120.0;
 const TRAY_MAX_HEIGHT: f64 = 620.0;
 
 #[derive(Clone, Serialize)]
@@ -105,10 +105,10 @@ fn setup_desktop(app: &mut App) -> tauri::Result<()> {
         }
     });
 
-    let icon = app
-        .default_window_icon()
-        .cloned()
-        .ok_or_else(|| tauri::Error::AssetNotFound("default window icon".into()))?;
+    // Tray icon: monochrome cutout logo (transparent gaps), embedded as raw
+    // RGBA to avoid the image-png feature. Rendered as a macOS template so the
+    // silhouette adapts to light/dark menu bars.
+    let icon = tauri::image::Image::new(include_bytes!("../icons/tray-icon.rgba"), 128, 128);
 
     let mut tray_builder = TrayIconBuilder::with_id(TRAY_ID).icon(icon);
     #[cfg(target_os = "macos")]

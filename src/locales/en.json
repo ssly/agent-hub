@@ -341,8 +341,6 @@
     "title": "Usage Query",
     "provider": "Usage provider",
     "login_required": "You are not signed in to Codex or Grok Build. Sign in, then query again.",
-    "refresh": "Refresh",
-    "querying": "Querying…",
     "query_wait": "Querying, please wait…",
     "retry": "Retry",
     "used": "used",
@@ -355,6 +353,8 @@
     "expiry_hm": "Expires in {h}h {m}m",
     "expiry_unknown": "Expiry unavailable",
     "expiry_at": "Expires {date}",
+    "valid_until": "Valid until",
+    "remaining": "left",
     "no_usage": "No usage windows returned for this account",
     "last_query": "Last query: {time}",
     "failed": "Query failed"

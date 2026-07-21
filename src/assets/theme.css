@@ -771,8 +771,38 @@
   border-radius: var(--radius-md);
   padding: 10px 14px;
   margin-bottom: 14px;
+  transition: background var(--dur-base) var(--ease-soft), border-color var(--dur-base) var(--ease-soft);
 }
 .ah-filter-bar .text-xs { white-space: nowrap; flex-shrink: 0; }
+/* Selection mode: the same bar becomes the batch-action toolbar */
+.ah-filter-bar--selecting {
+  background: var(--accent-soft);
+  border-color: var(--accent-mid);
+}
+.ah-filter-bar__stats {
+  font-size: 12px;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+.ah-filter-bar__label {
+  font-size: 11px;
+  color: var(--ink-4);
+  white-space: nowrap;
+}
+.ah-filter-bar__count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+  padding: 0 6px 0 2px;
+}
+.ah-filter-bar__divider {
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+  margin: 0 2px;
+  flex-shrink: 0;
+}
 .ah-select {
   background: var(--sunken);
   border: 1px solid var(--border);

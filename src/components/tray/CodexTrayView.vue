@@ -129,28 +129,33 @@ const grokPeriodLabel = computed(() =>
 )
 
 function clampHeight(height: number) {
-  return Math.min(620, Math.max(168, height))
+  return Math.min(620, Math.max(120, height))
 }
 
 function contentHeight() {
-  if (loginUnavailable.value) return 254
-  if (error.value) return 356
+  if (loginUnavailable.value) return 210
+  if (error.value) return 300
 
+  // Constants mirror the tray stylesheet: base chrome = panel padding 24 +
+  // header 32 + provider switch 40 + footer 24 = 120. Quota = wrap padding 22
+  // + ring (100 single / 88 multi) + gap 6 + label 14. Credit rows = chips of
+  // 28px + 8px gaps + 10px section padding, 3 chips per row.
   if (selectedProvider.value === 'codex') {
-    if (!snapshot.value) return 270
-    const windowCount = usageWindows.value.length
+    if (!snapshot.value) return 240
     const creditCount = resetCards.value.length
-    const quotaHeight = windowCount > 0
-      ? 33 + windowCount * 38 + Math.max(0, windowCount - 1) * 16
-      : 180
-    const creditHeight = snapshot.value ? (creditCount > 0 ? creditCount * 49 : 60) : 0
-    // Base chrome 128px + 48px provider switch.
-    return clampHeight(176 + quotaHeight + creditHeight)
+    const quotaHeight = usageWindows.value.length > 0
+      ? (usageWindows.value.length === 1 ? 142 : 130)
+      : 70
+    const creditRows = Math.ceil(creditCount / 3)
+    const creditHeight = snapshot.value
+      ? (creditCount > 0 ? 10 + creditRows * 28 + (creditRows - 1) * 8 : 44)
+      : 0
+    return clampHeight(120 + quotaHeight + creditHeight)
   }
 
-  if (!grokUsage.value) return 270
-  // Base chrome 128px + provider switch 48px + metadata 44px + quota 71px.
-  return clampHeight(291 + (grokUsage.value.stale ? 44 : 0))
+  if (!grokUsage.value) return 240
+  // Base chrome 120 + metadata 44 + quota ring 142.
+  return clampHeight(306 + (grokUsage.value.stale ? 40 : 0))
 }
 
 async function applyContentHeight() {
@@ -180,9 +185,16 @@ function safePercent(window: UsageWindow) {
   return Math.min(100, Math.max(0, window.used_percent ?? 0))
 }
 
-function progressWidth(window: UsageWindow) {
-  const percent = safePercent(window)
-  return percent === 0 ? '0%' : `max(${percent}%, 46px)`
+function remainingPercent(window: UsageWindow) {
+  const remaining = window.remaining_percent ?? (100 - safePercent(window))
+  return Math.min(100, Math.max(0, Math.round(remaining)))
+}
+
+// SVG progress-ring geometry (viewBox 0 0 120 120).
+const RING_R = 52
+const RING_C = 2 * Math.PI * RING_R
+function ringDash(percent: number) {
+  return `${((RING_C * percent) / 100).toFixed(1)} ${RING_C.toFixed(1)}`
 }
 
 function formatDate(value: number | string, withSeconds = false) {
@@ -198,9 +210,23 @@ function formatDate(value: number | string, withSeconds = false) {
   }).format(date)
 }
 
-function formatExpiry(value?: string | null) {
-  if (!value) return t('tray.expiry_unknown')
-  return t('tray.expiry_at', { date: formatDate(value, true) })
+// Reset-credit chips show the expiry split into two lines: date on top, exact
+// time underneath ("有效期 2026/08/01" / "03:14:48").
+function splitExpiry(value?: string | null) {
+  if (!value) return { date: t('tray.expiry_unknown'), time: '' }
+  const date = new Date(value)
+  const datePart = new Intl.DateTimeFormat(locale.value, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date)
+  const timePart = new Intl.DateTimeFormat(locale.value, {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(date)
+  return { date: datePart, time: timePart }
 }
 
 async function refresh(compact = false, syncWithAccounts = false) {
@@ -208,7 +234,7 @@ async function refresh(compact = false, syncWithAccounts = false) {
   let provider = selectedProvider.value
   if (compact) {
     compactLoading.value = true
-    try { await resizeUsageTray(168) } catch {}
+    try { await resizeUsageTray(120) } catch {}
   }
   loading.value = true
   loginUnavailable.value = false
@@ -284,23 +310,18 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="tray-shell">
-    <section class="tray-panel">
+    <section class="tray-panel" :class="{ 'tray-panel--loading': initialLoading }">
       <header class="tray-header">
         <div class="tray-title">
-          <span class="tray-logo" aria-hidden="true">
+          <span v-if="!initialLoading" class="tray-logo" aria-hidden="true">
             <svg viewBox="0 0 24 24"><path d="M4 15a8 8 0 1 1 16 0"/><path d="m12 15 4-5"/><circle cx="12" cy="15" r="1"/></svg>
           </span>
           <h1>{{ t('tray.title') }}</h1>
         </div>
-        <button v-if="!initialLoading" class="refresh-button" :disabled="loading" @click="refresh()">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.9-4M4 4v5h5"/><path d="M4 13a8 8 0 0 0 14.9 4M20 20v-5h-5"/></svg>
-          {{ loading ? t('tray.querying') : t('tray.refresh') }}
-        </button>
       </header>
 
       <div v-if="initialLoading" class="initial-loading" role="status">
         <span class="loading-spinner" aria-hidden="true" />
-        <span>{{ t('tray.query_wait') }}</span>
       </div>
 
       <template v-else>
@@ -336,18 +357,24 @@ onBeforeUnmount(() => {
 
         <template v-else-if="selectedProvider === 'codex'">
           <div class="quota-wrap" :class="{ 'is-loading': loading }">
-            <div v-if="usageWindows.length" class="quota-list">
-              <div v-for="item in usageWindows" :key="item.key" class="quota-row" :class="`quota-row--${item.tone}`">
-                <div class="quota-label">
-                  <span class="quota-dot" aria-hidden="true" />
-                  <span>{{ item.label }} {{ t('tray.limit') }}</span>
-                </div>
-                <div class="quota-track">
-                  <div class="quota-fill" :style="{ width: progressWidth(item.window) }">
-                    <span v-if="safePercent(item.window)">{{ safePercent(item.window) }}%</span>
+            <div v-if="usageWindows.length" class="ring-list" :class="{ 'ring-list--single': usageWindows.length === 1 }">
+              <div v-for="item in usageWindows" :key="item.key" class="ring-item" :class="`ring-item--${item.tone}`">
+                <div class="ring-graph">
+                  <svg viewBox="0 0 120 120" aria-hidden="true">
+                    <circle class="ring-track" cx="60" cy="60" :r="RING_R" />
+                    <circle
+                      class="ring-fill"
+                      cx="60" cy="60" :r="RING_R"
+                      :stroke-dasharray="ringDash(remainingPercent(item.window))"
+                      transform="rotate(-90 60 60)"
+                    />
+                  </svg>
+                  <div class="ring-value">
+                    <strong>{{ remainingPercent(item.window) }}%</strong>
+                    <span>{{ t('tray.remaining') }}</span>
                   </div>
-                  <span v-if="!safePercent(item.window)" class="quota-zero">0%</span>
                 </div>
+                <span class="ring-label">{{ item.label }} {{ t('tray.limit') }}</span>
               </div>
             </div>
             <div v-else-if="error" class="quota-message">
@@ -365,13 +392,16 @@ onBeforeUnmount(() => {
           </div>
 
           <div v-if="snapshot && !error" class="credit-section">
-            <div v-if="resetCards.length" class="credit-list">
-              <div v-for="(card, index) in resetCards" :key="`${card.expires_at ?? 'unknown'}-${index}`" class="credit-row">
-                <span class="credit-label">
-                  <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5l3.2 2"/></svg>
-                  {{ t('tray.reset_credit') }}
+            <div v-if="resetCards.length" class="credit-chips">
+              <div v-for="(card, index) in resetCards" :key="`${card.expires_at ?? 'unknown'}-${index}`" class="credit-chip">
+                <span class="credit-chip__date">
+                  {{ splitExpiry(card.expires_at).time
+                    ? `${t('tray.valid_until')} ${splitExpiry(card.expires_at).date}`
+                    : splitExpiry(card.expires_at).date }}
                 </span>
-                <span class="credit-expiry">{{ formatExpiry(card.expires_at) }}</span>
+                <span v-if="splitExpiry(card.expires_at).time" class="credit-chip__time">
+                  {{ splitExpiry(card.expires_at).time }}
+                </span>
               </div>
             </div>
             <p v-else class="credit-empty">{{ t('tray.no_reset_credit') }}</p>
@@ -396,18 +426,24 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="quota-wrap quota-wrap--grok" :class="{ 'is-loading': loading }">
-            <div v-if="grokUsage" class="quota-list">
-              <div class="quota-row quota-row--secondary">
-                <div class="quota-label">
-                  <span class="quota-dot" aria-hidden="true" />
-                  <span>{{ grokPeriodLabel }}</span>
-                </div>
-                <div class="quota-track">
-                  <div class="quota-fill" :style="{ width: progressWidth(grokUsage.usage_window) }">
-                    <span v-if="safePercent(grokUsage.usage_window)">{{ safePercent(grokUsage.usage_window) }}%</span>
+            <div v-if="grokUsage" class="ring-list ring-list--single">
+              <div class="ring-item ring-item--secondary">
+                <div class="ring-graph">
+                  <svg viewBox="0 0 120 120" aria-hidden="true">
+                    <circle class="ring-track" cx="60" cy="60" :r="RING_R" />
+                    <circle
+                      class="ring-fill"
+                      cx="60" cy="60" :r="RING_R"
+                      :stroke-dasharray="ringDash(remainingPercent(grokUsage.usage_window))"
+                      transform="rotate(-90 60 60)"
+                    />
+                  </svg>
+                  <div class="ring-value">
+                    <strong>{{ remainingPercent(grokUsage.usage_window) }}%</strong>
+                    <span>{{ t('tray.remaining') }}</span>
                   </div>
-                  <span v-if="!safePercent(grokUsage.usage_window)" class="quota-zero">0%</span>
                 </div>
+                <span class="ring-label">{{ grokPeriodLabel }}</span>
               </div>
             </div>
             <div v-else-if="error" class="quota-message">
@@ -497,49 +533,40 @@ onBeforeUnmount(() => {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  padding: 20px 22px 14px;
+  padding: 14px 16px 10px;
   overflow: hidden;
   border-radius: 25px;
   background: var(--tray-panel-bg);
   box-shadow: var(--tray-panel-shadow);
 }
 
-.tray-header, .tray-title, .refresh-button, .quota-row, .quota-label, .credit-row, .credit-label, .tray-footer {
+.tray-header, .tray-title, .tray-footer {
   display: flex;
   align-items: center;
 }
 
-.tray-header { width: 100%; min-width: 0; flex: 0 0 auto; justify-content: space-between; min-height: 46px; }
-.tray-title { min-width: 0; gap: 13px; }
-.tray-title h1 { margin: 0; font-size: 24px; line-height: 1; letter-spacing: -.035em; }
+.tray-header { width: 100%; min-width: 0; flex: 0 0 auto; min-height: 32px; }
+.tray-title { min-width: 0; gap: 9px; }
+.tray-title h1 { margin: 0; font-size: 17px; line-height: 1; letter-spacing: -.02em; }
+
+/* Compact loading state: small centered title + spinner, nothing else. */
+.tray-panel--loading { padding-top: 18px; }
+.tray-panel--loading .tray-header { min-height: 0; justify-content: center; }
+.tray-panel--loading .tray-title h1 {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--tray-ink-2);
+}
 .tray-logo { display: grid; place-items: center; color: var(--tray-on-accent); }
 .tray-logo {
-  width: 44px;
-  height: 44px;
-  border-radius: 13px;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
   background: linear-gradient(145deg, var(--tray-accent), var(--tray-accent-strong));
-  box-shadow: 0 9px 20px var(--tray-accent-mid);
+  box-shadow: 0 5px 12px var(--tray-accent-mid);
 }
-.tray-logo svg { width: 28px; height: 28px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
-
-.refresh-button {
-  flex: 0 0 auto;
-  min-height: 42px;
-  gap: 7px;
-  border: 1px solid var(--tray-border);
-  border-radius: 13px;
-  padding: 8px 13px;
-  color: var(--tray-ink-2);
-  background: var(--tray-btn-bg);
-  font: inherit;
-  cursor: pointer;
-  transition: background-color .16s ease, border-color .16s ease, transform .16s ease;
-}
-.refresh-button:hover:not(:disabled) { border-color: var(--tray-ink-4); background: var(--tray-btn-bg-hover); }
-.refresh-button:active:not(:disabled) { transform: translateY(1px); }
-.refresh-button:focus-visible { outline: 2px solid var(--tray-accent-mid); outline-offset: 2px; }
-.refresh-button:disabled { opacity: .58; cursor: default; }
-.refresh-button svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.tray-logo svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
 
 .initial-loading {
   flex: 1 1 auto;
@@ -547,9 +574,6 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  color: var(--tray-ink-3);
-  font-size: 14px;
 }
 .loading-spinner {
   width: 18px;
@@ -562,12 +586,12 @@ onBeforeUnmount(() => {
 @keyframes tray-spin { to { transform: rotate(360deg); } }
 
 .provider-switch {
-  flex: 0 0 34px;
-  height: 34px;
+  flex: 0 0 30px;
+  height: 30px;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 3px;
-  margin-top: 14px;
+  margin-top: 10px;
   padding: 3px;
   border-radius: 999px;
   background: var(--tray-inset);
@@ -671,70 +695,60 @@ onBeforeUnmount(() => {
 
 .quota-wrap {
   flex: 0 0 auto;
-  padding: 18px 0 14px;
+  padding: 12px 0 10px;
   border-bottom: 1px solid var(--tray-hairline);
   transition: opacity .18s ease;
 }
 .quota-wrap.is-loading { opacity: .72; }
-.quota-list { display: flex; flex-direction: column; gap: 16px; }
-.quota-row { min-width: 0; min-height: 38px; gap: 14px; }
-.quota-label {
-  flex: 0 0 92px;
-  gap: 10px;
+
+/* Remaining-quota rings. Tone colors come from currentColor on .ring-item. */
+.ring-list { display: flex; justify-content: center; gap: 24px; }
+.ring-item { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.ring-graph { position: relative; width: 88px; height: 88px; }
+.ring-list--single .ring-graph { width: 100px; height: 100px; }
+.ring-graph svg { display: block; width: 100%; height: 100%; }
+.ring-track { fill: none; stroke: var(--tray-inset); stroke-width: 10; }
+.ring-fill {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 10;
+  stroke-linecap: round;
+  transition: stroke-dasharray .5s cubic-bezier(.2, .8, .2, 1);
+}
+.ring-item--primary { color: var(--tray-accent); }
+.ring-item--secondary { color: var(--tray-success); }
+.ring-item--monthly { color: var(--tray-highlight); }
+.ring-value {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+}
+.ring-value strong {
   color: var(--tray-ink);
-  font-size: 15px;
-  font-weight: 650;
+  font-size: 16px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.ring-list--single .ring-value strong { font-size: 19px; }
+.ring-value span { color: var(--tray-ink-3); font-size: 10px; }
+.ring-label {
+  color: var(--tray-ink-2);
+  font-size: 11px;
+  font-weight: 600;
   text-transform: uppercase;
   white-space: nowrap;
 }
-.quota-dot { flex: 0 0 auto; width: 12px; height: 12px; border-radius: 50%; background: currentColor; }
-.quota-track {
-  position: relative;
-  flex: 1 1 auto;
-  min-width: 0;
-  height: 32px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: var(--tray-inset);
-}
-.quota-fill {
-  height: 100%;
-  max-width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  border-radius: inherit;
-  transition: width .42s cubic-bezier(.2, .8, .2, 1);
-}
-.quota-fill span {
-  padding: 0 11px;
-  color: var(--tray-on-accent);
-  font-size: 16px;
-  font-weight: 650;
-  font-variant-numeric: tabular-nums;
-}
-.quota-zero {
-  position: absolute;
-  top: 50%;
-  left: 12px;
-  transform: translateY(-50%);
-  color: var(--tray-ink-3);
-  font-size: 14px;
-  font-variant-numeric: tabular-nums;
-}
-.quota-row--primary .quota-dot { background: var(--tray-accent); }
-.quota-row--primary .quota-fill { background: linear-gradient(90deg, var(--tray-accent), var(--tray-accent-strong)); }
-.quota-row--secondary .quota-dot { background: var(--tray-success); }
-.quota-row--secondary .quota-fill { background: var(--tray-success); }
-.quota-row--monthly .quota-dot { background: var(--tray-highlight); }
-.quota-row--monthly .quota-fill { background: var(--tray-highlight); }
 
 .quota-message {
   display: flex;
   flex-direction: column;
   justify-content: center;
   align-items: flex-start;
-  min-height: 147px;
+  min-height: 110px;
   gap: 6px;
   color: var(--tray-ink-3);
 }
@@ -742,37 +756,53 @@ onBeforeUnmount(() => {
 .quota-message span { max-height: 42px; overflow: hidden; font-size: 12px; }
 .quota-message button { min-height: 34px; padding: 0; border: 0; color: var(--tray-accent); background: none; cursor: pointer; }
 .quota-message--loading { align-items: center; font-size: 13px; }
-.quota-message--compact { min-height: 61px; }
+.quota-message--compact { min-height: 48px; }
 
-.credit-section { flex: 1 1 auto; min-height: 0; overflow: hidden; }
-.credit-list { height: 100%; overflow-y: auto; scrollbar-width: none; }
-.credit-list::-webkit-scrollbar { display: none; }
-.credit-row {
-  min-width: 0;
-  justify-content: space-between;
-  min-height: 49px;
-  gap: 14px;
-  border-bottom: 1px solid var(--tray-hairline);
+.credit-section { flex: 1 1 auto; min-height: 0; padding-top: 10px; }
+.credit-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.credit-chip {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 5px 12px;
+  border: 1px solid var(--tray-hairline);
+  border-radius: 9px;
+  background: var(--tray-inset);
 }
-.credit-label { flex: 0 0 auto; gap: 10px; color: var(--tray-ink); font-size: 14px; white-space: nowrap; }
-.credit-label svg { width: 21px; height: 21px; fill: none; stroke: var(--tray-ink-3); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.credit-expiry {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--tray-ink-2);
-  font-size: 12px;
+/* Full expiry date floats above the chip on hover; the chip itself stays a
+   compact one-line HH:mm:ss tag and never reflows. */
+.credit-chip__date {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 3px 8px;
+  border-radius: 6px;
+  color: var(--tray-on-accent);
+  background: var(--tray-ink);
+  font-size: 10px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .15s ease;
+}
+.credit-chip:hover .credit-chip__date { opacity: 1; }
+.credit-chip__time {
+  color: var(--tray-ink);
+  font-size: 13px;
+  font-weight: 650;
   font-variant-numeric: tabular-nums;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
-.credit-empty { margin: 0; padding: 22px 0; color: var(--tray-ink-3); font-size: 13px; }
+.credit-empty { margin: 0; padding: 14px 0; color: var(--tray-ink-3); font-size: 12px; }
 
 .tray-footer {
   flex: 0 0 auto;
-  min-height: 32px;
-  padding-top: 9px;
+  min-height: 24px;
+  padding-top: 6px;
   color: var(--tray-ink-3);
-  font-size: 12px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
