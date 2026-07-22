@@ -166,6 +166,15 @@ export const configureHooks = (agentType: string) => invoke<void>('configure_hoo
 export const removeHooks = (agentType: string) => invoke<void>('remove_hooks', { agentType })
 export const getHooksStatus = () => invoke<Record<string, boolean>>('get_hooks_status')
 
+// Codex session monitor
+export const getCodexSessionMonitorSnapshot = () =>
+  invoke<any>('get_codex_session_monitor_snapshot')
+export const getCodexHookStatus = () => invoke<any>('get_codex_hook_status')
+export const previewCodexHookChange = (action: 'install' | 'uninstall') =>
+  invoke<any>('preview_codex_hook_change', { action })
+export const applyCodexHookChange = (action: 'install' | 'uninstall', expectedBeforeHash: string) =>
+  invoke<any>('apply_codex_hook_change', { action, expectedBeforeHash })
+
 // Switch
 export const listSwitchProfiles = (agentType: string) => invoke<any>('list_switch_profiles', { agentType })
 export const saveCurrentAuthProfile = (agentType: string, note: string) =>
@@ -263,9 +272,25 @@ export interface GrokUsage {
 }
 export const getGrokUsage = () => invoke<GrokUsage>('get_grok_usage')
 
+// Kimi Code uses only the CLI's current OAuth login. We read credentials from
+// the OS keychain (preferred) or ~/.kimi/credentials/kimi-code.json, and never
+// switch accounts from Agent Hub.
+export interface KimiUsage {
+  account_name: string | null
+  plan_type: string
+  // Rolling windows (typically 5h primary + weekly). Sorted by duration.
+  usage_windows: UsageWindow[]
+  limit_value: number | null
+  used_value: number | null
+  source: 'live'
+  fetched_at: number
+}
+export const getKimiUsage = () => invoke<KimiUsage>('get_kimi_usage')
+
 export interface UsageProviderAvailability {
   codex: boolean
   grok_build: boolean
+  kimi_code: boolean
 }
 export const getUsageProviderAvailability = () =>
   invoke<UsageProviderAvailability>('get_usage_provider_availability')

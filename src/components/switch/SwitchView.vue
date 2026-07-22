@@ -15,6 +15,7 @@ const AGENT_DISPLAY_NAMES: Record<string, string> = {
   codex: 'Codex',
   'claude-code': 'Claude Code',
   'grok-build': 'Grok Build',
+  'kimi-code': 'Kimi Code',
 }
 const agentName = computed(
   () => AGENT_DISPLAY_NAMES[store.selectedAgent ?? ''] ?? store.selectedAgent ?? ''
@@ -23,6 +24,7 @@ const agentName = computed(
 // --- Codex usage panel ---
 const isCodex = computed(() => store.selectedAgent === 'codex')
 const isGrokBuild = computed(() => store.selectedAgent === 'grok-build')
+const isKimiCode = computed(() => store.selectedAgent === 'kimi-code')
 // Name of the currently active account (the one usage is actually queried for).
 const activeAccountName = computed(() => {
   const active = store.profiles.find((p) => p.is_active)
@@ -156,6 +158,33 @@ function fmtGrokValue(value: number): string {
   }).format(value)
 }
 
+// --- Kimi Code usage panel (multi-window: 5h primary + weekly) ---
+const kimiAccountName = computed(
+  () => store.kimiUsage?.account_name || t('switch.kimi_default_account')
+)
+const kimiPlanBadge = computed(() =>
+  t('switch.usage_plan_badge', { plan: store.kimiUsage?.plan_type || 'Kimi Code' })
+)
+// Kimi returns the same window shape as Codex; reuse windowLabel for the titles.
+const kimiUsageWindows = computed<UsageCard[]>(() => {
+  const u = store.kimiUsage
+  if (!u) return []
+  return (u.usage_windows ?? [])
+    .filter(window => window.window_seconds > 0)
+    .sort((left, right) => left.window_seconds - right.window_seconds)
+    .map(window => ({
+      key: String(window.window_seconds),
+      label: windowLabel(window.window_seconds),
+      w: window,
+    }))
+})
+
+function fmtKimiValue(value: number): string {
+  return new Intl.NumberFormat(locale.value === 'zh-CN' ? 'zh-CN' : 'en-US', {
+    maximumFractionDigits: 2,
+  }).format(value)
+}
+
 function fmtQueryTime(value: number): string {
   if (!value) return ''
   return new Date(value).toLocaleString(locale.value === 'zh-CN' ? 'zh-CN' : 'en-US', {
@@ -185,6 +214,16 @@ async function handleRefreshGrokUsage() {
   if (store.grokUsageLoading) return
   await store.refreshGrokUsage()
   if (store.grokUsageError) {
+    showToast(t('switch.usage_failed'), 'error')
+  } else {
+    showToast(t('switch.usage_refresh_toast'), 'success')
+  }
+}
+
+async function handleRefreshKimiUsage() {
+  if (store.kimiUsageLoading) return
+  await store.refreshKimiUsage()
+  if (store.kimiUsageError) {
     showToast(t('switch.usage_failed'), 'error')
   } else {
     showToast(t('switch.usage_refresh_toast'), 'success')
@@ -454,8 +493,88 @@ async function handleConfirmClear() {
             </div>
           </div>
 
+          <!-- Kimi Code mirrors the read-only model of Grok Build, but exposes
+               the multi-window layout (5h primary + weekly) like Codex. -->
+          <div v-if="isKimiCode" class="space-y-6">
+            <div class="ah-card switch-card--active switch-card--readonly">
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <div class="flex items-center gap-2 mb-1">
+                    <span class="text-sm font-medium truncate" style="color: var(--ink)">{{ kimiAccountName }}</span>
+                    <span class="switch-active-badge">{{ t('switch.active_badge') }}</span>
+                  </div>
+                  <div class="text-xs" style="color: var(--ink-3)">{{ t('switch.kimi_default_account_hint') }}</div>
+                </div>
+                <span class="text-xs px-2 py-1 rounded-full flex-shrink-0" style="background: var(--sunken); color: var(--ink-2)">
+                  {{ t('switch.kimi_read_only') }}
+                </span>
+              </div>
+            </div>
+
+            <div class="ah-card" style="background: var(--surface); border-color: var(--border)">
+              <div class="flex items-center justify-between mb-3">
+                <span class="text-base font-semibold flex items-center gap-2" style="color: var(--ink)">
+                  <Gauge :size="18" :style="{ color: 'var(--accent)' }" />
+                  {{ t('switch.kimi_usage_title', { name: kimiAccountName }) }}
+                </span>
+                <button
+                  class="btn btn-secondary btn-sm flex items-center gap-1"
+                  :disabled="store.kimiUsageLoading"
+                  @click="handleRefreshKimiUsage"
+                >
+                  <RefreshCw :size="14" :class="{ 'animate-spin': store.kimiUsageLoading }" />
+                  {{ t('switch.usage_refresh') }}
+                </button>
+              </div>
+
+              <div v-if="store.kimiUsageLoading" class="text-sm py-4" style="color: var(--ink-3)">
+                {{ t('switch.kimi_usage_loading') }}
+              </div>
+
+              <div v-else-if="store.kimiUsageError" class="text-sm py-2 flex items-center justify-between gap-3" style="color: var(--danger)">
+                <span>{{ t('switch.usage_failed') }}: {{ store.kimiUsageError }}</span>
+                <button class="btn btn-danger btn-sm" @click="handleRefreshKimiUsage">{{ t('switch.usage_retry') }}</button>
+              </div>
+
+              <div v-else-if="store.kimiUsage" class="space-y-3 text-sm">
+                <div class="text-xs" style="color: var(--ink-3)">
+                  <span class="inline-flex items-center px-2 py-0.5 rounded-full" style="background: var(--sunken); color: var(--ink-2)">{{ kimiPlanBadge }}</span>
+                </div>
+                <div
+                  v-for="win in kimiUsageWindows"
+                  :key="win.key"
+                  class="p-3 rounded-lg"
+                  style="background: var(--sunken)"
+                >
+                  <div class="flex justify-between items-center">
+                    <span class="font-medium" style="color: var(--ink)">{{ win.label }}</span>
+                    <span class="font-semibold" style="color: var(--accent)">{{ t('switch.usage_remaining', { n: win.w.remaining_percent }) }}</span>
+                  </div>
+                  <div class="text-xs mt-1" style="color: var(--ink-3)">
+                    <template v-if="win.w.window_seconds >= 604800 && store.kimiUsage.limit_value != null">
+                      {{ t('switch.kimi_used_limit_reset', {
+                        used: fmtKimiValue(store.kimiUsage.used_value ?? 0),
+                        limit: fmtKimiValue(store.kimiUsage.limit_value ?? 0),
+                        reset: fmtReset(win.w.reset_after_seconds, win.w.reset_at),
+                      }) }}
+                    </template>
+                    <template v-else>
+                      {{ t('switch.usage_used_reset', {
+                        used: win.w.used_percent,
+                        reset: fmtReset(win.w.reset_after_seconds, win.w.reset_at),
+                      }) }}
+                    </template>
+                  </div>
+                </div>
+                <div class="text-xs pt-2 border-t" style="color: var(--ink-4); border-color: var(--hairline)">
+                  {{ t('switch.usage_last_query', { time: fmtQueryTime(store.kimiUsageLastQuery) }) }}
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- Toolbar -->
-          <div v-if="!isGrokBuild" class="flex gap-2 mb-4 flex-wrap items-center">
+          <div v-if="!isGrokBuild && !isKimiCode" class="flex gap-2 mb-4 flex-wrap items-center">
             <button class="btn btn-primary" @click="handleSaveCurrent">{{ t('switch.save_current') }}</button>
             <button class="btn btn-secondary" @click="store.addFormOpen = !store.addFormOpen">{{ t('switch.add_account') }}</button>
             <button
@@ -504,11 +623,11 @@ async function handleConfirmClear() {
           </div>
 
           <!-- Profiles -->
-          <div v-if="!isGrokBuild && store.profiles.length === 0" class="text-center py-12 text-sm" style="color: var(--ink-4)">
+          <div v-if="!isGrokBuild && !isKimiCode && store.profiles.length === 0" class="text-center py-12 text-sm" style="color: var(--ink-4)">
             {{ t('switch.empty') }}
           </div>
 
-          <div v-if="!isGrokBuild" class="space-y-2">
+          <div v-if="!isGrokBuild && !isKimiCode" class="space-y-2">
             <div
               v-for="(profile, idx) in store.profiles"
               :key="profile.id"

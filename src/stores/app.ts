@@ -5,12 +5,12 @@ import { usePluginsStore } from './plugins'
 import { useSwitchStore } from './switch'
 import { useSessionsStore } from './sessions'
 
-export type TabId = 'plugins' | 'sessions' | 'accounts'
+export type TabId = 'plugins' | 'sessions' | 'monitor' | 'accounts'
 export type ViewId = 'plugins' | 'detail' | 'diff' | 'search'
 export type UpdateStatus = 'idle' | 'checking' | 'available' | 'uptodate' | 'installing' | 'error'
 export type UpdateDownloadSource = 'direct' | 'mirror'
 
-const VALID_TABS: TabId[] = ['plugins', 'sessions', 'accounts']
+const VALID_TABS: TabId[] = ['plugins', 'sessions', 'monitor', 'accounts']
 
 export const useAppStore = defineStore('app', () => {
   const storedTab = localStorage.getItem('ah-tab')

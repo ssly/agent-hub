@@ -8,6 +8,7 @@ mod mcp;
 mod monitor;
 mod platform;
 mod session;
+mod session_monitor;
 mod skill;
 mod state;
 mod switch;
@@ -16,10 +17,15 @@ mod trash;
 mod tray;
 
 use state::AppState;
+use tauri::Manager;
 
 /// Atomic flag used to signal the resumable updater to abort the current
 /// download. Set by `cancel_update_download`, checked in the download loop.
 pub type UpdateCancelFlag = std::sync::atomic::AtomicBool;
+
+pub fn try_handle_codex_hook_event() -> bool {
+    session_monitor::try_capture_codex_hook_event()
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -36,12 +42,22 @@ pub fn run() {
             app.handle().plugin(tauri_plugin_shell::init())?;
             #[cfg(desktop)]
             app.handle().plugin(tauri_plugin_dialog::init())?;
-            // Monitor / completion hooks are currently disabled. Do not request
-            // notification permission, start filesystem watchers, or spawn the
-            // process polling thread while the feature is hidden.
+            // Only watch Agent Hub's own small event inbox. This does not scan
+            // Codex session directories or poll processes.
+            app.manage(std::sync::Arc::new(
+                session_monitor::CodexSessionMonitorService::new(app.handle().clone()),
+            ));
 
             #[cfg(desktop)]
             tray::setup(app)?;
+
+            // macOS uses the overlay title bar (see tauri.conf.json), so the
+            // traffic lights stay native. Windows has no equivalent, so drop
+            // the native frame and let the toolbar render its own controls.
+            #[cfg(target_os = "windows")]
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_decorations(false);
+            }
 
             Ok(())
         })
@@ -88,6 +104,10 @@ pub fn run() {
             commands::delete_session,
             commands::delete_sessions,
             commands::export_sessions_html,
+            commands::get_codex_session_monitor_snapshot,
+            commands::get_codex_hook_status,
+            commands::preview_codex_hook_change,
+            commands::apply_codex_hook_change,
             claude_plugin::list_claude_plugins,
             claude_plugin::set_claude_plugin_enabled,
             switch::commands::list_switch_profiles,
@@ -103,6 +123,7 @@ pub fn run() {
             switch::commands::get_codex_usage,
             switch::commands::get_codex_reset_credits,
             switch::commands::get_grok_usage,
+            switch::commands::get_kimi_usage,
             switch::commands::get_usage_provider_availability,
             tray::get_codex_tray_usage,
             tray::resize_usage_tray,

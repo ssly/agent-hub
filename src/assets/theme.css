@@ -835,25 +835,39 @@
 .ah-sidebar--collapsed { width: 3.5rem; min-width: 3.5rem; }
 
 .ah-sidebar__header {
-  padding: 14px 16px;
+  padding: 12px 12px 12px 14px;
   border-bottom: 1px solid var(--hairline);
   display: flex; align-items: center; justify-content: space-between;
+  gap: 6px;
 }
+/* macOS overlay title bar: keep the brand clear of the traffic lights. */
+[data-platform="macos"] .ah-sidebar__header { padding-left: 84px; }
+[data-platform="macos"] .ah-sidebar--collapsed .ah-sidebar__header { padding-left: 12px; }
 .ah-sidebar__brand {
   font-family: var(--font-serif);
-  font-size: 14px;
+  font-size: 13.5px;
+  line-height: 20px;
   font-weight: 600;
   color: var(--ink);
+  white-space: nowrap;
 }
 
 .ah-sidebar__header-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 20px;
+  min-width: 20px;
   color: var(--ink-3);
-  padding: 3px 6px;
+  padding: 0 3px;
   border-radius: var(--radius-xs);
+  font-size: 11.5px;
+  line-height: 1;
   cursor: pointer;
   border: none; background: transparent;
   transition: color var(--dur-fast) var(--ease-soft), background var(--dur-fast) var(--ease-soft);
 }
+.ah-sidebar__header-btn svg { display: block; }
 .ah-sidebar__header-btn:hover { color: var(--ink); background: var(--hover); }
 
 /* Tab Bar */

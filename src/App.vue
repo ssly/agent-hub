@@ -13,6 +13,7 @@ import AppToast from '@/components/layout/AppToast.vue'
 import SkillDetailView from '@/components/skills/SkillDetailView.vue'
 import PluginView from '@/components/plugins/PluginView.vue'
 import SessionListView from '@/components/sessions/SessionListView.vue'
+import SessionMonitorView from '@/components/monitor/SessionMonitorView.vue'
 import SwitchView from '@/components/switch/SwitchView.vue'
 import SearchResults from '@/components/search/SearchResults.vue'
 import DiffView from '@/components/diff/DiffView.vue'
@@ -325,6 +326,7 @@ onMounted(async () => {
           <SearchResults v-else-if="appStore.currentView === 'search'" />
         </template>
         <SessionListView v-else-if="appStore.currentTab === 'sessions'" />
+        <SessionMonitorView v-else-if="appStore.currentTab === 'monitor'" />
         <SwitchView v-else-if="appStore.currentTab === 'accounts'" />
       </div>
     </main>

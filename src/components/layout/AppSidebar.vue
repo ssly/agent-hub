@@ -6,6 +6,7 @@ import { useAppStore } from '@/stores/app'
 import { useSkillsStore } from '@/stores/skills'
 import { usePluginsStore } from '@/stores/plugins'
 import { useSessionsStore } from '@/stores/sessions'
+import { useSessionMonitorStore } from '@/stores/session-monitor'
 import { useSwitchStore } from '@/stores/switch'
 import { useToast } from '@/composables/useToast'
 import { pickPluginDirectory } from '@/lib/api'
@@ -15,6 +16,7 @@ const appStore = useAppStore()
 const skillsStore = useSkillsStore()
 const pluginsStore = usePluginsStore()
 const sessionsStore = useSessionsStore()
+const sessionMonitorStore = useSessionMonitorStore()
 const switchStore = useSwitchStore()
 const { showToast } = useToast()
 const isPickingDirectory = ref(false)
@@ -48,6 +50,7 @@ async function handleUseGlobalDirectory() {
 const tabs = [
   { id: 'plugins' as const, labelKey: 'ui.plugins_tab' },
   { id: 'sessions' as const, labelKey: 'ui.sessions_tab' },
+  { id: 'monitor' as const, labelKey: 'ui.monitor_tab' },
   { id: 'accounts' as const, labelKey: 'ui.accounts_tab' },
 ]
 
@@ -81,27 +84,33 @@ async function handleRefresh() {
     sessionsStore.isLoading = false
   } else if (appStore.currentTab === 'accounts') {
     if (switchStore.selectedAgent) await switchStore.loadSelectedAgent()
+  } else if (appStore.currentTab === 'monitor') {
+    await sessionMonitorStore.refresh()
   }
 }
 
 function getSidebarItems() {
   if (appStore.currentTab === 'sessions') return sessionsStore.platforms
+  if (appStore.currentTab === 'monitor') return [{ id: 'codex', display_name: 'Codex' }]
   if (appStore.currentTab === 'accounts') return [
     { id: 'codex', display_name: 'Codex' },
     { id: 'claude-code', display_name: 'Claude Code' },
     { id: 'grok-build', display_name: 'Grok Build' },
+    { id: 'kimi-code', display_name: 'Kimi Code' },
   ]
   return pluginsStore.platforms
 }
 
 function getSelectedId() {
   if (appStore.currentTab === 'sessions') return sessionsStore.selectedPlatformId
+  if (appStore.currentTab === 'monitor') return 'codex'
   if (appStore.currentTab === 'accounts') return switchStore.selectedAgent
   return pluginsStore.selectedPlatformId
 }
 
 async function handleItemClick(id: string) {
   if (appStore.currentTab === 'sessions') sessionsStore.selectPlatform(id)
+  else if (appStore.currentTab === 'monitor') return
   else if (appStore.currentTab === 'accounts') await switchStore.selectAgent(id)
   else {
     pluginsStore.selectPlatform(id)
@@ -136,12 +145,12 @@ function handleSessionSearch(e: Event) {
 
 <template>
   <aside :class="['ah-sidebar', appStore.sidebarCollapsed ? 'ah-sidebar--collapsed' : 'ah-sidebar--expanded']">
-    <!-- Header -->
-    <div class="ah-sidebar__header">
+    <!-- Header (window drag region) -->
+    <div class="ah-sidebar__header" data-tauri-drag-region="deep">
       <span v-show="!appStore.sidebarCollapsed" class="ah-sidebar__brand">
         {{ t('ui.title') }}
       </span>
-      <div class="flex gap-1 items-center">
+      <div class="flex items-center gap-0.5 shrink-0">
         <button v-show="!appStore.sidebarCollapsed" class="ah-sidebar__header-btn" @click="appStore.switchLocale()">
           {{ appStore.locale === 'en' ? 'EN' : '中' }}
         </button>
@@ -149,7 +158,7 @@ function handleSessionSearch(e: Event) {
           {{ appStore.isNightTheme() ? '☀' : '☾' }}
         </button>
         <button v-show="!appStore.sidebarCollapsed" class="ah-sidebar__header-btn" @click="handleRefresh">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
         </button>
       </div>
     </div>
@@ -157,7 +166,7 @@ function handleSessionSearch(e: Event) {
     <!-- Content (hidden when collapsed) -->
     <template v-if="!appStore.sidebarCollapsed">
       <!-- Tab Bar -->
-      <div class="ah-tab-bar">
+      <div class="ah-tab-bar ah-tab-bar--dense">
         <button
           v-for="tab in tabs"
           :key="tab.id"
@@ -281,6 +290,12 @@ function handleSessionSearch(e: Event) {
 </template>
 
 <style scoped>
+.ah-tab-bar--dense .ah-tab {
+  padding-right: 4px;
+  padding-left: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+}
 .ah-scope-picker {
   padding: 10px;
   border-bottom: 1px solid var(--hairline);

@@ -2,21 +2,23 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useI18n } from 'vue-i18n'
-import { getCodexTrayUsage, getGrokUsage, getUsageProviderAvailability, resizeUsageTray } from '@/lib/api'
+import { getCodexTrayUsage, getGrokUsage, getKimiUsage, getUsageProviderAvailability, resizeUsageTray } from '@/lib/api'
 import type {
   CodexTraySnapshot,
   GrokUsage,
+  KimiUsage,
   ResetCreditEntry,
   UsageProviderAvailability,
   UsageWindow,
 } from '@/lib/api'
 
 const { t, locale } = useI18n()
-type UsageProvider = 'codex' | 'grok-build'
+type UsageProvider = 'codex' | 'grok-build' | 'kimi-code'
 const selectedProvider = ref<UsageProvider>(preferredProviderFromAccounts())
 const availability = ref<UsageProviderAvailability | null>(null)
 const snapshot = ref<CodexTraySnapshot | null>(null)
 const grokUsage = ref<GrokUsage | null>(null)
+const kimiUsage = ref<KimiUsage | null>(null)
 // The real tray window starts hidden and compact. Defaulting to loading avoids
 // a flash of the empty-state layout before the first tray-click event arrives.
 const loading = ref(import.meta.env.MODE !== 'web')
@@ -24,12 +26,14 @@ const compactLoading = ref(import.meta.env.MODE !== 'web')
 const providerErrors = ref<Record<UsageProvider, string | null>>({
   codex: null,
   'grok-build': null,
+  'kimi-code': null,
 })
 const error = computed(() => providerErrors.value[selectedProvider.value])
 const loginUnavailable = ref(false)
 const queriedProviders = ref<Record<UsageProvider, boolean>>({
   codex: false,
   'grok-build': false,
+  'kimi-code': false,
 })
 const unlisteners: UnlistenFn[] = []
 const initialLoading = computed(() => compactLoading.value)
@@ -45,20 +49,31 @@ interface TrayUsageWindow {
 }
 
 function preferredProviderFromAccounts(): UsageProvider {
-  return localStorage.getItem('ah-switch-agent') === 'grok-build' ? 'grok-build' : 'codex'
+  const stored = localStorage.getItem('ah-switch-agent')
+  if (stored === 'grok-build') return 'grok-build'
+  if (stored === 'kimi-code') return 'kimi-code'
+  return 'codex'
 }
 
 function providerAvailable(provider: UsageProvider, status: UsageProviderAvailability) {
-  return provider === 'codex' ? status.codex : status.grok_build
+  if (provider === 'codex') return status.codex
+  if (provider === 'grok-build') return status.grok_build
+  return status.kimi_code
 }
+
+// Fallback order mirrors the provider-switch tab order so a preferred provider
+// that is signed out falls back to the next available one deterministically.
+const PROVIDER_ORDER: UsageProvider[] = ['codex', 'grok-build', 'kimi-code']
 
 function availableProvider(
   preferred: UsageProvider,
   status: UsageProviderAvailability,
 ): UsageProvider | null {
   if (providerAvailable(preferred, status)) return preferred
-  const fallback: UsageProvider = preferred === 'codex' ? 'grok-build' : 'codex'
-  return providerAvailable(fallback, status) ? fallback : null
+  for (const candidate of PROVIDER_ORDER) {
+    if (candidate !== preferred && providerAvailable(candidate, status)) return candidate
+  }
+  return null
 }
 
 function windowLabel(seconds: number) {
@@ -82,6 +97,22 @@ const usageWindows = computed<TrayUsageWindow[]>(() => {
     snapshot.value?.usage.secondary_window,
   ].filter((window): window is UsageWindow => Boolean(window?.window_seconds))
   const windows = (returned.length ? returned : fallback)
+    .filter(window => window.window_seconds > 0)
+    .sort((left, right) => left.window_seconds - right.window_seconds)
+    .filter((window, index, all) => index === 0 || window.window_seconds !== all[index - 1].window_seconds)
+
+  return windows.map(window => ({
+    key: String(window.window_seconds),
+    label: windowLabel(window.window_seconds),
+    tone: windowTone(window.window_seconds),
+    window,
+  }))
+})
+
+// Kimi exposes the same multi-window shape as Codex (5h primary + weekly), so
+// we reuse the same windowing logic, just sourced from kimiUsage.
+const kimiWindows = computed<TrayUsageWindow[]>(() => {
+  const windows = (kimiUsage.value?.usage_windows ?? [])
     .filter(window => window.window_seconds > 0)
     .sort((left, right) => left.window_seconds - right.window_seconds)
     .filter((window, index, all) => index === 0 || window.window_seconds !== all[index - 1].window_seconds)
@@ -128,6 +159,13 @@ const grokPeriodLabel = computed(() =>
     : t('switch.grok_weekly_window')
 )
 
+const kimiAccountName = computed(() =>
+  kimiUsage.value?.account_name || t('switch.kimi_default_account')
+)
+const kimiPlanBadge = computed(() =>
+  t('switch.usage_plan_badge', { plan: kimiUsage.value?.plan_type || 'Kimi Code' })
+)
+
 function clampHeight(height: number) {
   return Math.min(620, Math.max(120, height))
 }
@@ -153,6 +191,15 @@ function contentHeight() {
     return clampHeight(120 + quotaHeight + creditHeight)
   }
 
+  if (selectedProvider.value === 'kimi-code') {
+    // Same multi-window ring layout as Codex, minus the credit section.
+    if (!kimiUsage.value) return 240
+    const quotaHeight = kimiWindows.value.length > 0
+      ? (kimiWindows.value.length === 1 ? 142 : 130)
+      : 70
+    return clampHeight(120 + quotaHeight)
+  }
+
   if (!grokUsage.value) return 240
   // Base chrome 120 + metadata 44 + quota ring 142.
   return clampHeight(306 + (grokUsage.value.stale ? 40 : 0))
@@ -174,7 +221,7 @@ async function applyContentHeight() {
 // timing. This covers cached tab switches as well as the moment fresh data
 // replaces the compact loading view.
 watch(
-  [selectedProvider, snapshot, grokUsage, error, loginUnavailable, compactLoading],
+  [selectedProvider, snapshot, grokUsage, kimiUsage, error, loginUnavailable, compactLoading],
   () => {
     if (!compactLoading.value) void applyContentHeight()
   },
@@ -250,6 +297,7 @@ async function refresh(compact = false, syncWithAccounts = false) {
     if (!available) {
       snapshot.value = null
       grokUsage.value = null
+      kimiUsage.value = null
       loginUnavailable.value = true
       return
     }
@@ -263,6 +311,11 @@ async function refresh(compact = false, syncWithAccounts = false) {
       const result = await getCodexTrayUsage()
       if (sequence !== refreshSequence) return
       snapshot.value = result
+    } else if (provider === 'kimi-code') {
+      kimiUsage.value = null
+      const result = await getKimiUsage()
+      if (sequence !== refreshSequence) return
+      kimiUsage.value = result
     } else {
       grokUsage.value = null
       const result = await getGrokUsage()
@@ -325,7 +378,7 @@ onBeforeUnmount(() => {
       </div>
 
       <template v-else>
-        <div class="provider-switch" role="tablist" :aria-label="t('tray.provider')">
+        <div class="provider-switch provider-switch--triple" role="tablist" :aria-label="t('tray.provider')">
           <button
             class="provider-option"
             :class="{ 'is-active': selectedProvider === 'codex' }"
@@ -345,6 +398,16 @@ onBeforeUnmount(() => {
             @click="selectProvider('grok-build')"
           >
             Grok Build
+          </button>
+          <button
+            class="provider-option"
+            :class="{ 'is-active': selectedProvider === 'kimi-code' }"
+            role="tab"
+            :aria-selected="selectedProvider === 'kimi-code'"
+            :disabled="loading || availability?.kimi_code === false"
+            @click="selectProvider('kimi-code')"
+          >
+            Kimi Code
           </button>
         </div>
 
@@ -412,7 +475,54 @@ onBeforeUnmount(() => {
           </footer>
         </template>
 
-        <template v-else>
+        <template v-else-if="selectedProvider === 'kimi-code'">
+          <div v-if="kimiUsage" class="grok-meta">
+            <span class="meta-pill meta-pill--account">{{ kimiAccountName }}</span>
+            <span class="meta-pill">{{ kimiPlanBadge }}</span>
+            <span class="meta-pill meta-pill--live">{{ t('switch.grok_live_data') }}</span>
+          </div>
+
+          <div class="quota-wrap" :class="{ 'is-loading': loading }">
+            <div v-if="kimiWindows.length" class="ring-list" :class="{ 'ring-list--single': kimiWindows.length === 1 }">
+              <div v-for="item in kimiWindows" :key="item.key" class="ring-item" :class="`ring-item--${item.tone}`">
+                <div class="ring-graph">
+                  <svg viewBox="0 0 120 120" aria-hidden="true">
+                    <circle class="ring-track" cx="60" cy="60" :r="RING_R" />
+                    <circle
+                      class="ring-fill"
+                      cx="60" cy="60" :r="RING_R"
+                      :stroke-dasharray="ringDash(remainingPercent(item.window))"
+                      transform="rotate(-90 60 60)"
+                    />
+                  </svg>
+                  <div class="ring-value">
+                    <strong>{{ remainingPercent(item.window) }}%</strong>
+                    <span>{{ t('tray.remaining') }}</span>
+                  </div>
+                </div>
+                <span class="ring-label">{{ item.label }} {{ t('tray.limit') }}</span>
+              </div>
+            </div>
+            <div v-else-if="error" class="quota-message">
+              <strong>{{ t('tray.failed') }}</strong>
+              <span>{{ error }}</span>
+              <button @click="refresh()">{{ t('tray.retry') }}</button>
+            </div>
+            <div
+              v-else
+              class="quota-message quota-message--loading"
+              :class="{ 'quota-message--compact': !kimiUsage }"
+            >
+              {{ loading ? t('tray.query_wait') : t('tray.no_usage') }}
+            </div>
+          </div>
+
+          <footer class="tray-footer">
+            <span v-if="kimiUsage">{{ t('tray.last_query', { time: formatDate(kimiUsage.fetched_at) }) }}</span>
+          </footer>
+        </template>
+
+        <template v-else-if="selectedProvider === 'grok-build'">
           <div v-if="grokUsage" class="grok-meta">
             <span class="meta-pill meta-pill--account">{{ grokAccountName }}</span>
             <span class="meta-pill">{{ grokPlanBadge }}</span>
@@ -595,6 +705,11 @@ onBeforeUnmount(() => {
   padding: 3px;
   border-radius: 999px;
   background: var(--tray-inset);
+}
+
+/* Three-provider variant for Codex / Grok Build / Kimi Code. */
+.provider-switch--triple {
+  grid-template-columns: 1fr 1fr 1fr;
 }
 .provider-option {
   min-width: 0;

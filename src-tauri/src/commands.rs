@@ -1531,3 +1531,37 @@ pub fn get_hooks_status(
 ) -> std::collections::HashMap<String, bool> {
     monitor.hooks_status()
 }
+
+// --- Codex Session Monitor Commands ---
+
+#[tauri::command]
+pub fn get_codex_session_monitor_snapshot(
+    monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
+) -> crate::session_monitor::CodexMonitorSnapshot {
+    monitor.snapshot()
+}
+
+#[tauri::command]
+pub fn get_codex_hook_status() -> Result<crate::session_monitor::CodexHookStatus, CommandError> {
+    crate::session_monitor::get_hook_status().map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn preview_codex_hook_change(
+    action: String,
+) -> Result<crate::session_monitor::CodexHookChangePreview, CommandError> {
+    let action =
+        crate::session_monitor::HookAction::parse(&action).map_err(CommandError::General)?;
+    crate::session_monitor::preview_hook_change(action).map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn apply_codex_hook_change(
+    action: String,
+    expected_before_hash: String,
+) -> Result<crate::session_monitor::CodexHookStatus, CommandError> {
+    let action =
+        crate::session_monitor::HookAction::parse(&action).map_err(CommandError::General)?;
+    crate::session_monitor::apply_hook_change(action, &expected_before_hash)
+        .map_err(CommandError::General)
+}

@@ -4,10 +4,15 @@ import { createI18n } from 'vue-i18n'
 import App from './App.vue'
 import CodexTrayView from './components/tray/CodexTrayView.vue'
 import { vAutoResize } from './directives/auto-resize'
+import { platform } from './lib/utils'
 import en from './locales/en.json'
 import zhCN from './locales/zh-CN.json'
 import './assets/theme.css'
 import './assets/main.css'
+
+// Tag the root element with the host platform so styles can adapt the window
+// chrome (e.g. macOS traffic-light inset on the sidebar header).
+document.documentElement.dataset.platform = platform
 
 const savedLocale = localStorage.getItem('ah-locale') || 'zh-CN'
 

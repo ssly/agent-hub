@@ -927,6 +927,7 @@ fn resolve_grok_auth(grok_home: &std::path::Path) -> Result<GrokAuth, String> {
 pub struct UsageProviderAvailability {
     pub codex: bool,
     pub grok_build: bool,
+    pub kimi_code: bool,
 }
 
 /// Report which quota providers have usable local credentials without making
@@ -938,8 +939,13 @@ pub fn get_usage_provider_availability() -> UsageProviderAvailability {
     let grok_build = grok_home_dir()
         .and_then(|home| resolve_grok_auth(&home))
         .is_ok();
+    let kimi_code = resolve_kimi_auth().is_ok();
 
-    UsageProviderAvailability { codex, grok_build }
+    UsageProviderAvailability {
+        codex,
+        grok_build,
+        kimi_code,
+    }
 }
 
 fn json_number(node: Option<&serde_json::Value>) -> Option<f64> {
@@ -1143,6 +1149,506 @@ pub async fn get_grok_usage() -> Result<GrokUsageResponse, String> {
         Err(live_error) => read_cached_grok_usage(&grok_home, account_name)
             .map_err(|cache_error| format!("{live_error}；{cache_error}")),
     }
+}
+
+// --- Kimi Code quota via the Kimi CLI usages endpoint -----------------------
+
+const KIMI_USAGES_URL: &str = "https://api.kimi.com/coding/v1/usages";
+const KIMI_TOKEN_URL: &str = "https://auth.kimi.com/api/oauth/token";
+const KIMI_OAUTH_CLIENT_ID: &str = "17e5f671-d194-4dfb-9706-5516cb48c098";
+const KIMI_KEYCHAIN_SERVICE: &str = "kimi-code";
+const KIMI_KEYCHAIN_KEY: &str = "oauth/kimi-code";
+
+#[derive(serde::Serialize, Debug, Clone)]
+pub struct KimiUsageResponse {
+    /// Display label derived from the JWT email claim or credential file name.
+    pub account_name: Option<String>,
+    /// Membership tier reported by the usages endpoint, falls back to "Kimi Code".
+    pub plan_type: String,
+    /// Rolling windows (typically 5h primary + weekly). Sorted ascending.
+    pub usage_windows: Vec<UsageWindow>,
+    /// Raw weekly limit/used values when the endpoint exposes them.
+    pub limit_value: Option<f64>,
+    pub used_value: Option<f64>,
+    /// Only the live endpoint is queried for Kimi.
+    pub source: String,
+    pub fetched_at: u64,
+}
+
+/// The shape of the Kimi OAuth credential file at
+/// `~/.kimi/credentials/kimi-code.json` and the OS keychain entry.
+#[derive(serde::Deserialize, serde::Serialize, Clone, Default)]
+struct KimiCredentialRaw {
+    #[serde(default)]
+    access_token: String,
+    #[serde(default)]
+    refresh_token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expires_at: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    token_type: Option<String>,
+}
+
+impl KimiCredentialRaw {
+    fn is_usable(&self) -> bool {
+        !self.access_token.trim().is_empty()
+    }
+
+    /// `expires_at` shows up as a unix timestamp, an ISO string, or is missing
+    /// entirely. Normalise to unix seconds when possible.
+    fn expires_unix(&self) -> Option<u64> {
+        let value = self.expires_at.as_ref()?;
+        if let Some(n) = value.as_u64() {
+            return Some(n);
+        }
+        if let Some(n) = value.as_i64() {
+            return u64::try_from(n).ok();
+        }
+        value.as_str().and_then(|text| {
+            text.parse::<u64>()
+                .ok()
+                .or_else(|| {
+                    chrono::DateTime::parse_from_rfc3339(text)
+                        .ok()
+                        .and_then(|dt| u64::try_from(dt.timestamp()).ok())
+                })
+        })
+    }
+}
+
+struct KimiAuth {
+    access_token: String,
+    /// None when the source is a long-lived API key (no refresh flow).
+    refresh_token: Option<String>,
+    expires_at: Option<u64>,
+    account_name: Option<String>,
+}
+
+/// Where the credential came from so we can write refreshed tokens back home.
+#[derive(Clone, Copy, PartialEq)]
+enum KimiCredentialSource {
+    Keychain,
+    File,
+}
+
+struct KimiResolvedCredential {
+    raw: KimiCredentialRaw,
+    source: KimiCredentialSource,
+}
+
+fn kimi_home_dir() -> Result<PathBuf, String> {
+    match std::env::var("KIMI_CODE_HOME") {
+        Ok(dir) => Ok(PathBuf::from(dir)),
+        Err(_) => dirs::home_dir()
+            .map(|home| home.join(".kimi"))
+            .ok_or_else(|| "无法确定用户主目录".to_string()),
+    }
+}
+
+/// Decode the JWT payload (without signature verification) and pull the email
+/// claim out for display. Kimi access tokens carry the user email there.
+fn kimi_account_name_from_jwt(token: &str) -> Option<String> {
+    let mut parts = token.split('.');
+    parts.next()?;
+    let payload = parts.next()?;
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(payload))
+        .ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&decoded).ok()?;
+    value
+        .get("email")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn read_kimi_credential_file(home: &std::path::Path) -> Option<KimiCredentialRaw> {
+    let path = home.join("credentials/kimi-code.json");
+    let content = std::fs::read_to_string(&path).ok()?;
+    serde_json::from_str::<KimiCredentialRaw>(&content).ok()
+}
+
+fn read_kimi_credential_keychain() -> Option<KimiCredentialRaw> {
+    let entry = keyring::Entry::new(KIMI_KEYCHAIN_SERVICE, KIMI_KEYCHAIN_KEY).ok()?;
+    let value = entry.get_password().ok()?;
+    serde_json::from_str::<KimiCredentialRaw>(&value).ok()
+}
+
+/// Try the OS keychain first (Kimi CLI default), fall back to the credential
+/// file. We never rewrite, refresh, or switch these credentials from the
+/// Accounts view — only the usage endpoint consumes them.
+fn resolve_kimi_credential() -> Result<KimiResolvedCredential, String> {
+    if let Some(raw) = read_kimi_credential_keychain().filter(KimiCredentialRaw::is_usable) {
+        return Ok(KimiResolvedCredential {
+            raw,
+            source: KimiCredentialSource::Keychain,
+        });
+    }
+    let home = kimi_home_dir()?;
+    if let Some(raw) = read_kimi_credential_file(&home).filter(KimiCredentialRaw::is_usable) {
+        return Ok(KimiResolvedCredential {
+            raw,
+            source: KimiCredentialSource::File,
+        });
+    }
+    Err(
+        "未找到 Kimi Code 凭据（keychain 或 ~/.kimi/credentials/kimi-code.json）。请先在 Kimi CLI 中登录。"
+            .to_string(),
+    )
+}
+
+fn resolve_kimi_auth() -> Result<KimiAuth, String> {
+    let resolved = resolve_kimi_credential()?;
+    let access_token = resolved.raw.access_token.clone();
+    let refresh_token = {
+        let trimmed = resolved.raw.refresh_token.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    };
+    let expires_at = resolved.raw.expires_unix();
+    let account_name = kimi_account_name_from_jwt(&access_token);
+    Ok(KimiAuth {
+        access_token,
+        refresh_token,
+        expires_at,
+        account_name,
+    })
+}
+
+fn write_kimi_credential(resolved: &KimiResolvedCredential) {
+    let serialized = match serde_json::to_string(&resolved.raw) {
+        Ok(text) => text,
+        Err(_) => return,
+    };
+    match resolved.source {
+        KimiCredentialSource::Keychain => {
+            if let Ok(entry) = keyring::Entry::new(KIMI_KEYCHAIN_SERVICE, KIMI_KEYCHAIN_KEY) {
+                let _ = entry.set_password(&serialized);
+            }
+        }
+        KimiCredentialSource::File => {
+            if let Ok(home) = kimi_home_dir() {
+                let path = home.join("credentials/kimi-code.json");
+                if let Some(parent) = path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let tmp = path.with_extension("json.tmp");
+                if std::fs::write(&tmp, &serialized).is_ok() {
+                    let _ = std::fs::rename(&tmp, &path);
+                }
+            }
+        }
+    }
+}
+
+/// Exchange a refresh token for a new access token. Public client, no secret.
+async fn refresh_kimi_token(
+    refresh_token: &str,
+    source: KimiCredentialSource,
+) -> Result<KimiAuth, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("构建 Kimi OAuth 请求失败: {e}"))?;
+    let form = [
+        ("grant_type", "refresh_token"),
+        ("client_id", KIMI_OAUTH_CLIENT_ID),
+        ("refresh_token", refresh_token),
+    ];
+    let response = client
+        .post(KIMI_TOKEN_URL)
+        .form(&form)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| format!("请求 Kimi OAuth 刷新失败: {e}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("Kimi OAuth 刷新失败: HTTP {status}"));
+    }
+    let raw: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("解析 Kimi OAuth 响应失败: {e}"))?;
+    let access_token = raw
+        .get("access_token")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .ok_or_else(|| "Kimi OAuth 响应缺少 access_token".to_string())?;
+    let new_refresh = raw
+        .get("refresh_token")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| refresh_token.to_string());
+    let expires_in = raw.get("expires_in").and_then(|v| v.as_u64()).unwrap_or(0);
+    let expires_at = if expires_in > 0 {
+        Some(u64::try_from(Utc::now().timestamp()).unwrap_or(0) + expires_in)
+    } else {
+        None
+    };
+
+    // Persist refreshed credentials back to the original store so subsequent
+    // queries don't trigger another refresh round-trip.
+    let mut next_raw = KimiCredentialRaw {
+        access_token: access_token.clone(),
+        refresh_token: new_refresh.clone(),
+        ..Default::default()
+    };
+    next_raw.scope = Some("kimi-code".to_string());
+    next_raw.token_type = Some("Bearer".to_string());
+    if let Some(ts) = expires_at {
+        next_raw.expires_at = Some(serde_json::Value::from(ts));
+    }
+    write_kimi_credential(&KimiResolvedCredential {
+        raw: next_raw,
+        source,
+    });
+
+    let account_name = kimi_account_name_from_jwt(&access_token);
+    Ok(KimiAuth {
+        access_token,
+        refresh_token: Some(new_refresh),
+        expires_at,
+        account_name,
+    })
+}
+
+/// Normalise a limit/remaining node — Kimi returns them as JSON strings.
+fn kimi_quota_value(node: Option<&serde_json::Value>) -> Option<u64> {
+    let node = node?;
+    if let Some(n) = node.as_u64() {
+        return Some(n);
+    }
+    if let Some(n) = node.as_i64() {
+        return u64::try_from(n).ok();
+    }
+    if let Some(n) = node.as_f64() {
+        return Some(n.round() as u64);
+    }
+    node.as_str().and_then(|text| {
+        text.parse::<u64>()
+            .ok()
+            .or_else(|| text.parse::<f64>().ok().map(|v| v.round() as u64))
+    })
+}
+
+fn kimi_reset_unix(node: Option<&serde_json::Value>) -> Option<u64> {
+    let node = node?;
+    json_timestamp(Some(node))
+}
+
+/// Derive `window_seconds` from a Kimi `window` descriptor: `{duration, timeUnit}`.
+/// HOUR/MINUTE/DAY/MONTH are the units observed in the wild.
+fn kimi_window_seconds(window: Option<&serde_json::Value>) -> Option<u64> {
+    let window = window?;
+    let duration = window.get("duration").and_then(|v| v.as_u64())?;
+    let unit = window
+        .get("timeUnit")
+        .or_else(|| window.get("time_unit"))
+        .and_then(|v| v.as_str())?;
+    let multiplier = match unit.to_ascii_uppercase().as_str() {
+        "MINUTE" => 60,
+        "HOUR" => 3_600,
+        "DAY" => 86_400,
+        "MONTH" => 2_592_000,
+        _ => return None,
+    };
+    Some(duration.saturating_mul(multiplier))
+}
+
+/// Build a usage window from a `{limit, remaining, resetTime}` detail object.
+fn kimi_build_window(
+    detail: &serde_json::Value,
+    window_seconds: u64,
+    now: u64,
+) -> Option<UsageWindow> {
+    let limit = kimi_quota_value(detail.get("limit"))?;
+    let remaining = kimi_quota_value(detail.get("remaining"))?;
+    let used = limit.saturating_sub(remaining);
+    let used_percent = if limit > 0 {
+        ((used as f64 / limit as f64) * 100.0).round().clamp(0.0, 100.0) as u8
+    } else {
+        0
+    };
+    let reset_at = kimi_reset_unix(detail.get("resetTime"))
+        .or_else(|| kimi_reset_unix(detail.get("reset_at")))
+        .unwrap_or(0);
+    Some(UsageWindow {
+        used_percent,
+        remaining_percent: 100u8.saturating_sub(used_percent),
+        reset_after_seconds: reset_at.saturating_sub(now),
+        reset_at,
+        window_seconds,
+    })
+}
+
+fn map_kimi_usage(
+    raw: &serde_json::Value,
+    account_name: Option<String>,
+    fetched_at: u64,
+) -> Result<KimiUsageResponse, String> {
+    let now = u64::try_from(Utc::now().timestamp()).unwrap_or(0);
+    let mut windows: Vec<UsageWindow> = Vec::new();
+    let mut weekly_limit: Option<f64> = None;
+    let mut weekly_used: Option<f64> = None;
+
+    // Top-level `usage` is the rolling weekly window.
+    if let Some(usage) = raw.get("usage") {
+        if let Some(window) = kimi_build_window(usage, 604_800, now) {
+            if let (Some(limit), Some(remaining)) = (
+                kimi_quota_value(usage.get("limit")),
+                kimi_quota_value(usage.get("remaining")),
+            ) {
+                weekly_limit = Some(limit as f64);
+                weekly_used = Some(limit.saturating_sub(remaining) as f64);
+            }
+            windows.push(window);
+        }
+    }
+
+    // `limits[]` carries additional windows (typically the 5h rolling window).
+    if let Some(limits) = raw.get("limits").and_then(|v| v.as_array()) {
+        for entry in limits {
+            let window_seconds = kimi_window_seconds(entry.get("window"));
+            let detail = entry
+                .get("detail")
+                .or_else(|| entry.get("rateLimit"))
+                .or_else(|| entry.get("rate_limit"));
+            if let (Some(seconds), Some(detail)) = (window_seconds, detail) {
+                if let Some(window) = kimi_build_window(detail, seconds, now) {
+                    windows.push(window);
+                }
+            }
+        }
+    }
+
+    windows.sort_by_key(|w| w.window_seconds);
+    windows.dedup_by_key(|w| w.window_seconds);
+
+    let plan_type = raw
+        .get("user")
+        .and_then(|u| u.get("membership"))
+        .and_then(|m| m.get("level"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| "Kimi Code".to_string());
+
+    if windows.is_empty() {
+        return Err("Kimi 用量响应中没有可识别的窗口数据".to_string());
+    }
+
+    Ok(KimiUsageResponse {
+        account_name,
+        plan_type,
+        usage_windows: windows,
+        limit_value: weekly_limit,
+        used_value: weekly_used,
+        source: "live".to_string(),
+        fetched_at,
+    })
+}
+
+#[tauri::command]
+pub async fn get_kimi_usage() -> Result<KimiUsageResponse, String> {
+    let resolved = resolve_kimi_credential()?;
+    let refresh_token = {
+        let trimmed = resolved.raw.refresh_token.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    };
+    let mut auth = KimiAuth {
+        access_token: resolved.raw.access_token.clone(),
+        refresh_token,
+        expires_at: resolved.raw.expires_unix(),
+        account_name: kimi_account_name_from_jwt(&resolved.raw.access_token),
+    };
+    let source = resolved.source;
+    let now = u64::try_from(Utc::now().timestamp()).unwrap_or(0);
+
+    // Pre-emptively refresh when the token is within 60s of expiry.
+    if let Some(expires_at) = auth.expires_at {
+        if expires_at <= now + 60 {
+            if let Some(refresh) = auth.refresh_token.clone() {
+                if let Ok(refreshed) = refresh_kimi_token(&refresh, source).await {
+                    auth = refreshed;
+                }
+            }
+        }
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("构建 Kimi 用量请求失败: {e}"))?;
+
+    async fn fetch_usages(
+        client: &reqwest::Client,
+        token: &str,
+    ) -> Result<reqwest::Response, reqwest::Error> {
+        client
+            .get(KIMI_USAGES_URL)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Accept", "application/json")
+            .header("User-Agent", "Kimi CLI")
+            .send()
+            .await
+    }
+
+    let response = fetch_usages(&client, &auth.access_token)
+        .await
+        .map_err(|e| format!("请求 Kimi 用量接口失败: {e}"))?;
+    let status = response.status();
+
+    // On auth failure, attempt a single refresh then retry.
+    if status.as_u16() == 401 || status.as_u16() == 403 {
+        if let Some(refresh) = auth.refresh_token.clone() {
+            if let Ok(refreshed) = refresh_kimi_token(&refresh, source).await {
+                auth = refreshed;
+                let retry = fetch_usages(&client, &auth.access_token)
+                    .await
+                    .map_err(|e| format!("请求 Kimi 用量接口失败: {e}"))?;
+                if !retry.status().is_success() {
+                    return Err(format!(
+                        "Kimi 用量接口返回错误: HTTP {}",
+                        retry.status()
+                    ));
+                }
+                let raw: serde_json::Value = retry
+                    .json()
+                    .await
+                    .map_err(|e| format!("解析 Kimi 用量响应失败: {e}"))?;
+                return map_kimi_usage(
+                    &raw,
+                    auth.account_name,
+                    u64::try_from(Utc::now().timestamp()).unwrap_or(0),
+                );
+            }
+        }
+    }
+
+    if !status.is_success() {
+        return Err(format!("Kimi 用量接口返回错误: HTTP {status}"));
+    }
+
+    let raw: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("解析 Kimi 用量响应失败: {e}"))?;
+    map_kimi_usage(
+        &raw,
+        auth.account_name,
+        u64::try_from(Utc::now().timestamp()).unwrap_or(0),
+    )
 }
 
 #[cfg(test)]

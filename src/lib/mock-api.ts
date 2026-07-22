@@ -417,9 +417,111 @@ export async function getGrokUsage() {
   }
 }
 export async function getUsageProviderAvailability() {
-  return { codex: true, grok_build: true }
+  return { codex: true, grok_build: true, kimi_code: true }
 }
 export async function resizeUsageTray() {}
+
+export async function getKimiUsage() {
+  await delay()
+  const now = Math.floor(Date.now() / 1000)
+  return {
+    account_name: 'demo@kimi.com',
+    plan_type: 'Kimi Code Pro',
+    usage_windows: [
+      {
+        used_percent: 40,
+        remaining_percent: 60,
+        reset_after_seconds: 3_600 * 3,
+        reset_at: now + 3_600 * 3,
+        window_seconds: 18_000,
+      },
+      {
+        used_percent: 25,
+        remaining_percent: 75,
+        reset_after_seconds: 86_400 * 4,
+        reset_at: now + 86_400 * 4,
+        window_seconds: 604_800,
+      },
+    ],
+    limit_value: 130_000,
+    used_value: 32_500,
+    source: 'live',
+    fetched_at: now,
+  }
+}
+
+// Codex session monitor
+let codexHookInstalled = false
+
+export async function getCodexSessionMonitorSnapshot() {
+  await delay()
+  return {
+    revision: 2,
+    sessions: [
+      {
+        sessionId: '019f85-chatgpt',
+        turnId: 'turn-running',
+        source: 'chatgpt',
+        status: 'running',
+        cwd: '/Users/demo/projects/agent-hub',
+        userPrompt: '实现 Codex 会话监听，并确保 Hook 安装过程不会影响已有配置。',
+        assistantReply: null,
+        updatedAt: Date.now() - 12_000,
+      },
+      {
+        sessionId: '019f84-terminal',
+        turnId: 'turn-ended',
+        source: 'terminal',
+        status: 'ended',
+        cwd: '/Users/demo/projects/api-server',
+        userPrompt: '检查登录接口偶发 401 的原因，并给出修复建议。',
+        assistantReply: '问题来自刷新令牌并发更新，已增加单飞锁并补充回归测试。',
+        updatedAt: Date.now() - 180_000,
+      },
+    ],
+  }
+}
+
+export async function getCodexHookStatus() {
+  await delay()
+  return {
+    installed: codexHookInstalled,
+    configPath: '~/.codex/hooks.json',
+    command: "'/Applications/AGENT HUB.app/Contents/MacOS/agent-hub' --agent-hub-codex-hook",
+    managedHandlerCount: codexHookInstalled ? 2 : 0,
+    issue: null,
+  }
+}
+
+export async function previewCodexHookChange(action: 'install' | 'uninstall') {
+  await delay()
+  const adding = action === 'install'
+  const tag = adding ? 'added' : 'removed'
+  const prefix = adding ? '' : ''
+  return {
+    action,
+    configPath: '~/.codex/hooks.json',
+    command: "'/Applications/AGENT HUB.app/Contents/MacOS/agent-hub' --agent-hub-codex-hook",
+    beforeHash: 'mock-before-hash',
+    added: adding ? 14 : 0,
+    removed: adding ? 0 : 14,
+    changed: true,
+    diffLines: [
+      { tag: 'context', content: '{' },
+      { tag: 'context', content: '  "hooks": {' },
+      { tag, content: `${prefix}    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "… --agent-hub-codex-hook", "timeout": 10 }] }],` },
+      { tag, content: `${prefix}    "Stop": [{ "hooks": [{ "type": "command", "command": "… --agent-hub-codex-hook", "timeout": 10 }] }]` },
+      { tag: 'context', content: '  }' },
+      { tag: 'context', content: '}' },
+    ],
+  }
+}
+
+export async function applyCodexHookChange(action: 'install' | 'uninstall', _expectedBeforeHash: string) {
+  await delay(300)
+  codexHookInstalled = action === 'install'
+  return getCodexHookStatus()
+}
 
 // App
 export async function getAppVersion() { return '0.9.3-dev' }

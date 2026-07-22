@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import * as api from '@/lib/api'
-import type { CodexUsage, CodexResetCredits, GrokUsage } from '@/lib/api'
+import type { CodexUsage, CodexResetCredits, GrokUsage, KimiUsage } from '@/lib/api'
 
 export const useSwitchStore = defineStore('switch', () => {
   const selectedAgent = ref<string | null>(localStorage.getItem('ah-switch-agent'))
@@ -28,6 +28,14 @@ export const useSwitchStore = defineStore('switch', () => {
   const grokUsageLoading = ref(false)
   const grokUsageError = ref<string | null>(null)
   const grokUsageLastQuery = ref<number>(0)
+
+  // Kimi Code follows the same read-only model as Grok Build: we read the
+  // CLI's current OAuth login from the keychain/credential file and never
+  // switch accounts from Agent Hub.
+  const kimiUsage = ref<KimiUsage | null>(null)
+  const kimiUsageLoading = ref(false)
+  const kimiUsageError = ref<string | null>(null)
+  const kimiUsageLastQuery = ref<number>(0)
 
   // Edit modal state
   const editModalOpen = ref(false)
@@ -95,9 +103,26 @@ export const useSwitchStore = defineStore('switch', () => {
     }
   }
 
+  async function refreshKimiUsage() {
+    if (selectedAgent.value !== 'kimi-code' || kimiUsageLoading.value) return
+    kimiUsageLoading.value = true
+    kimiUsageError.value = null
+    try {
+      kimiUsage.value = await api.getKimiUsage()
+      kimiUsageLastQuery.value = (kimiUsage.value.fetched_at || Math.floor(Date.now() / 1000)) * 1000
+    } catch (reason: any) {
+      kimiUsageError.value = String(reason?.message || reason)
+      kimiUsage.value = null
+      kimiUsageLastQuery.value = 0
+    } finally {
+      kimiUsageLoading.value = false
+    }
+  }
+
   async function loadProfiles() {
     if (!selectedAgent.value) return
-    if (selectedAgent.value === 'grok-build') {
+    // Grok Build and Kimi Code are read-only: one current CLI account, no pool.
+    if (selectedAgent.value === 'grok-build' || selectedAgent.value === 'kimi-code') {
       profiles.value = []
       currentKey.value = null
       return
@@ -118,6 +143,7 @@ export const useSwitchStore = defineStore('switch', () => {
     await loadProfiles()
     if (selectedAgent.value === 'codex') await refreshCodexUsage()
     if (selectedAgent.value === 'grok-build') await refreshGrokUsage()
+    if (selectedAgent.value === 'kimi-code') await refreshKimiUsage()
   }
 
   async function openEditModal(profile: any) {
@@ -195,8 +221,9 @@ export const useSwitchStore = defineStore('switch', () => {
     clearActiveModalOpen, clearActiveLoading,
     codexUsage, codexUsageLoading, codexUsageError, codexUsageLastQuery, codexResetCredits,
     grokUsage, grokUsageLoading, grokUsageError, grokUsageLastQuery,
+    kimiUsage, kimiUsageLoading, kimiUsageError, kimiUsageLastQuery,
     selectAgent, loadProfiles, loadSelectedAgent, openEditModal, closeEditModal, resetState,
-    refreshCodexUsage, refreshGrokUsage,
+    refreshCodexUsage, refreshGrokUsage, refreshKimiUsage,
     openClearActiveModal, closeClearActiveModal, deleteActiveAuth,
   }
 })

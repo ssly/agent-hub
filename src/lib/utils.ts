@@ -5,6 +5,22 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+export type Platform = 'macos' | 'windows' | 'other'
+
+// True inside the real Tauri webview; false in the browser dev:web preview.
+export const isTauri = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__
+
+// Detected once at module load; used to adapt window chrome (traffic-light
+// inset on macOS, custom min/max/close buttons on Windows). Chrome tweaks
+// only apply in the desktop shell — browser previews keep plain layout.
+export const platform: Platform = (() => {
+  if (!isTauri) return 'other'
+  const ua = navigator.userAgent
+  if (/windows/i.test(ua)) return 'windows'
+  if (/macintosh|mac os x/i.test(ua)) return 'macos'
+  return 'other'
+})()
+
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return '0 B'
   if (bytes < 1024) return `${bytes} B`
