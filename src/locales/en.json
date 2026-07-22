@@ -341,8 +341,11 @@
     "kimi_read_only": "Read only",
     "kimi_usage_title": "Kimi Code Usage ({name})",
     "kimi_usage_loading": "Querying Kimi Code usage…",
+    "kimi_auth_api_key": "API key",
+    "kimi_auth_oauth": "OAuth login",
     "kimi_5h_window": "5-hour window",
-    "kimi_weekly_window": "Weekly limit",
+    "kimi_weekly_window": "Weekly quota",
+    "kimi_used_reset": "Used {used}% · resets {reset}",
     "kimi_used_limit_reset": "Used {used} / {limit} · resets {reset}"
   },
   "tray": {

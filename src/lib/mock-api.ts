@@ -424,28 +424,28 @@ export async function resizeUsageTray() {}
 export async function getKimiUsage() {
   await delay()
   const now = Math.floor(Date.now() / 1000)
+  const window5h = {
+    used_percent: 40,
+    remaining_percent: 60,
+    reset_after_seconds: 3_600 * 3,
+    reset_at: now + 3_600 * 3,
+    window_seconds: 18_000,
+  }
+  const windowWeekly = {
+    used_percent: 43,
+    remaining_percent: 57,
+    reset_after_seconds: 86_400 * 4,
+    reset_at: now + 86_400 * 4,
+    window_seconds: 604_800,
+  }
   return {
     account_name: 'demo@kimi.com',
-    plan_type: 'Kimi Code Pro',
-    usage_windows: [
-      {
-        used_percent: 40,
-        remaining_percent: 60,
-        reset_after_seconds: 3_600 * 3,
-        reset_at: now + 3_600 * 3,
-        window_seconds: 18_000,
-      },
-      {
-        used_percent: 25,
-        remaining_percent: 75,
-        reset_after_seconds: 86_400 * 4,
-        reset_at: now + 86_400 * 4,
-        window_seconds: 604_800,
-      },
-    ],
-    limit_value: 130_000,
-    used_value: 32_500,
-    source: 'live',
+    auth_method: 'METHOD_API_KEY',
+    window_5h: window5h,
+    window_weekly: windowWeekly,
+    weekly_limit: 100,
+    weekly_used: 43,
+    usage_windows: [window5h, windowWeekly],
     fetched_at: now,
   }
 }

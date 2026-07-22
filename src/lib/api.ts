@@ -272,17 +272,21 @@ export interface GrokUsage {
 }
 export const getGrokUsage = () => invoke<GrokUsage>('get_grok_usage')
 
-// Kimi Code uses only the CLI's current OAuth login. We read credentials from
-// the OS keychain (preferred) or ~/.kimi/credentials/kimi-code.json, and never
-// switch accounts from Agent Hub.
+// Kimi Code uses the CLI's `sk-kimi-…` API key from ~/.kimi-code/config.toml.
+// We never touch OAuth tokens (those are scoped to the kimi CLI itself).
 export interface KimiUsage {
   account_name: string | null
-  plan_type: string
-  // Rolling windows (typically 5h primary + weekly). Sorted by duration.
+  // `METHOD_API_KEY` for the long-lived Coding Plan key, `METHOD_OAUTH` for CLI.
+  auth_method: string
+  // The 5-hour rolling rate-limit window.
+  window_5h: UsageWindow | null
+  // The weekly quota window (resets every 7 days from subscription date).
+  window_weekly: UsageWindow | null
+  // Raw weekly limit/used values for "used / limit" display.
+  weekly_limit: number | null
+  weekly_used: number | null
+  // Windows in ascending order, for generic iteration.
   usage_windows: UsageWindow[]
-  limit_value: number | null
-  used_value: number | null
-  source: 'live'
   fetched_at: number
 }
 export const getKimiUsage = () => invoke<KimiUsage>('get_kimi_usage')

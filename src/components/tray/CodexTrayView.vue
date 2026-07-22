@@ -162,9 +162,12 @@ const grokPeriodLabel = computed(() =>
 const kimiAccountName = computed(() =>
   kimiUsage.value?.account_name || t('switch.kimi_default_account')
 )
-const kimiPlanBadge = computed(() =>
-  t('switch.usage_plan_badge', { plan: kimiUsage.value?.plan_type || 'Kimi Code' })
-)
+const kimiAuthBadge = computed(() => {
+  const method = kimiUsage.value?.auth_method
+  if (method === 'METHOD_API_KEY') return t('switch.kimi_auth_api_key')
+  if (method === 'METHOD_OAUTH') return t('switch.kimi_auth_oauth')
+  return method || t('switch.kimi_auth_api_key')
+})
 
 function clampHeight(height: number) {
   return Math.min(620, Math.max(120, height))
@@ -306,18 +309,17 @@ async function refresh(compact = false, syncWithAccounts = false) {
     selectedProvider.value = provider
     providerErrors.value[provider] = null
     queriedProviders.value[provider] = true
+    // Keep the cached payload until the fresh one arrives so switching tabs
+    // back to an already-queried provider never flashes an empty layout.
     if (provider === 'codex') {
-      snapshot.value = null
       const result = await getCodexTrayUsage()
       if (sequence !== refreshSequence) return
       snapshot.value = result
     } else if (provider === 'kimi-code') {
-      kimiUsage.value = null
       const result = await getKimiUsage()
       if (sequence !== refreshSequence) return
       kimiUsage.value = result
     } else {
-      grokUsage.value = null
       const result = await getGrokUsage()
       if (sequence !== refreshSequence) return
       grokUsage.value = result
@@ -331,6 +333,50 @@ async function refresh(compact = false, syncWithAccounts = false) {
       loading.value = false
     }
   }
+}
+
+/// Reopen the tray from the status-bar icon. We sync the selected provider
+/// with whatever the user last picked in the Accounts view, but we do NOT
+/// re-query a provider that already has a cached payload — the user can hit
+/// Retry/Refresh inside the popup to force a fresh fetch. First open (no cache
+/// anywhere) still triggers a live query so the popup isn't blank.
+async function handleTrayOpened() {
+  const status = await getUsageProviderAvailability()
+  availability.value = status
+
+  const preferred = preferredProviderFromAccounts()
+  const available = availableProvider(preferred, status)
+  if (!available) {
+    loginUnavailable.value = true
+    compactLoading.value = false
+    loading.value = false
+    return
+  }
+  loginUnavailable.value = false
+
+  // Only flip the visible provider if the Accounts-view selection maps to a
+  // usage provider we actually support — otherwise keep what the user last
+  // looked at in this tray session.
+  if (preferred !== selectedProvider.value) {
+    selectedProvider.value = available
+  }
+
+  // Show compact loading only when we genuinely have nothing to display yet.
+  // If the current provider already has cached data, just reveal it instantly.
+  const hasCache = available === 'codex'
+    ? snapshot.value !== null
+    : available === 'kimi-code'
+      ? kimiUsage.value !== null
+      : grokUsage.value !== null
+
+  if (hasCache) {
+    compactLoading.value = false
+    loading.value = false
+    return
+  }
+
+  // Nothing cached for the picked provider yet — fetch it now.
+  await refresh(true, false)
 }
 
 async function selectProvider(provider: UsageProvider) {
@@ -351,7 +397,7 @@ onMounted(async () => {
   }
 
   const listeners = await Promise.all([
-    listen('usage-tray-opened', () => refresh(true, true)),
+    listen('usage-tray-opened', () => handleTrayOpened()),
   ])
   unlisteners.push(...listeners)
 })
@@ -478,7 +524,7 @@ onBeforeUnmount(() => {
         <template v-else-if="selectedProvider === 'kimi-code'">
           <div v-if="kimiUsage" class="grok-meta">
             <span class="meta-pill meta-pill--account">{{ kimiAccountName }}</span>
-            <span class="meta-pill">{{ kimiPlanBadge }}</span>
+            <span class="meta-pill">{{ kimiAuthBadge }}</span>
             <span class="meta-pill meta-pill--live">{{ t('switch.grok_live_data') }}</span>
           </div>
 

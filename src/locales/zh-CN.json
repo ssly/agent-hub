@@ -341,8 +341,11 @@
     "kimi_read_only": "只读",
     "kimi_usage_title": "Kimi Code 用量（{name}）",
     "kimi_usage_loading": "正在查询 Kimi Code 用量…",
-    "kimi_5h_window": "5 小时窗",
-    "kimi_weekly_window": "周额度",
+    "kimi_auth_api_key": "API 认证",
+    "kimi_auth_oauth": "OAuth 登录",
+    "kimi_5h_window": "5 小时窗口",
+    "kimi_weekly_window": "每周额度",
+    "kimi_used_reset": "已用 {used}% · 重置 {reset}",
     "kimi_used_limit_reset": "已用 {used} / {limit} · 重置 {reset}"
   },
   "tray": {
