@@ -838,15 +838,21 @@ fn collect_usage_windows(rate: &serde_json::Value) -> Vec<UsageWindow> {
 }
 
 // --- Grok Build quota via the Grok CLI billing endpoint ---------------------
+//
+// Grok CLI requests `/v1/billing?format=credits`, which returns the unified
+// weekly credit window (`creditUsagePercent` + `currentPeriod`). The bare
+// `/v1/billing` endpoint still exists but serves a legacy monthly-credit
+// payload (monthlyLimit/used) that no longer matches the Recap UI.
 
-const GROK_BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing";
+const GROK_BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
 
 #[derive(serde::Serialize, Debug, Clone)]
 pub struct GrokUsageResponse {
     /// Display label derived from the current Grok CLI login when available.
     pub account_name: Option<String>,
     pub plan_type: String,
-    /// `monthly` for current Grok Build plans, `weekly` for older SuperGrok payloads.
+    /// `weekly` for SuperGrok / unified billing (`format=credits`);
+    /// `monthly` for the legacy monthly-credit payload.
     pub period_type: String,
     pub usage_window: UsageWindow,
     /// Raw credit values when the billing endpoint provides them.
@@ -856,7 +862,7 @@ pub struct GrokUsageResponse {
     pub on_demand_cap: Option<f64>,
     pub on_demand_used: Option<f64>,
     pub on_demand_enabled: Option<bool>,
-    /// `live` comes from /v1/billing; `cache` comes from Grok's own structured log.
+    /// `live` comes from /v1/billing?format=credits; `cache` comes from Grok's own structured log.
     pub source: String,
     pub fetched_at: u64,
     /// Cached data is stale when its billing period has already ended.
@@ -1526,33 +1532,43 @@ mod tests {
 
     #[test]
     fn map_grok_usage_reads_weekly_billing_payload() {
+        // Shape returned by /v1/billing?format=credits (and CLI logs).
         let raw = serde_json::json!({
-            "creditUsagePercent": 12.4,
-            "currentPeriod": {
-                "type": "USAGE_PERIOD_TYPE_WEEKLY",
-                "start": "2099-07-10T00:00:00Z",
-                "end": "2099-07-17T00:00:00Z"
+            "config": {
+                "creditUsagePercent": 4.0,
+                "currentPeriod": {
+                    "type": "USAGE_PERIOD_TYPE_WEEKLY",
+                    "start": "2099-07-10T00:00:00Z",
+                    "end": "2099-07-17T00:00:00Z"
+                },
+                "prepaidBalance": { "val": 0 },
+                "onDemandCap": { "val": 0 },
+                "onDemandUsed": { "val": 0 },
+                "isUnifiedBillingUser": true,
+                "billingPeriodStart": "2099-07-10T00:00:00Z",
+                "billingPeriodEnd": "2099-07-17T00:00:00Z"
             },
-            "prepaidBalance": { "val": 3.5 },
-            "onDemandCap": { "val": "20" },
-            "onDemandUsed": { "val": 2 },
             "subscriptionTier": "SuperGrok"
         });
 
         let usage = map_grok_usage(&raw, Some("user@example.com".to_string()), "live", 1)
-            .expect("maps Grok billing response");
+            .expect("maps Grok credits billing response");
         assert_eq!(usage.plan_type, "SuperGrok");
         assert_eq!(usage.period_type, "weekly");
-        assert_eq!(usage.usage_window.used_percent, 12);
-        assert_eq!(usage.usage_window.remaining_percent, 88);
+        assert_eq!(usage.usage_window.used_percent, 4);
+        assert_eq!(usage.usage_window.remaining_percent, 96);
         assert_eq!(usage.usage_window.window_seconds, 604_800);
-        assert_eq!(usage.prepaid_balance, Some(3.5));
-        assert_eq!(usage.on_demand_cap, Some(20.0));
+        assert_eq!(usage.used_value, None);
+        assert_eq!(usage.limit_value, None);
+        assert_eq!(usage.prepaid_balance, Some(0.0));
+        assert_eq!(usage.on_demand_cap, Some(0.0));
         assert!(!usage.stale);
     }
 
     #[test]
-    fn map_grok_usage_reads_current_monthly_billing_payload() {
+    fn map_grok_usage_reads_legacy_monthly_billing_payload() {
+        // Bare /v1/billing still returns this monthly-credit shape; keep
+        // parsing support so cached/older payloads do not break the UI.
         let raw = serde_json::json!({
             "config": {
                 "monthlyLimit": { "val": 15000 },
@@ -1564,7 +1580,7 @@ mod tests {
         });
 
         let usage = map_grok_usage(&raw, None, "live", 1)
-            .expect("maps current Grok monthly billing response");
+            .expect("maps legacy Grok monthly billing response");
         assert_eq!(usage.plan_type, "Grok");
         assert_eq!(usage.period_type, "monthly");
         assert_eq!(usage.limit_value, Some(15_000.0));
