@@ -21,7 +21,8 @@ impl<R: Runtime> CodexSessionMonitorService<R> {
     pub fn new(app: AppHandle<R>) -> Self {
         let root = dirs::home_dir()
             .unwrap_or_else(std::env::temp_dir)
-            .join(".agent-hub/session-monitor");
+            .join(".agent-hub")
+            .join("session-monitor");
         let inbox = root.join("inbox");
         let state_path = root.join("codex-state.json");
         let _ = fs::create_dir_all(&inbox);
@@ -154,6 +155,19 @@ fn process_event_file<R: Runtime>(
 }
 
 fn apply_event(snapshot: &mut CodexMonitorSnapshot, event: CodexHookEvent) {
+    // Defense in depth: events captured before the hook-side filter existed
+    // (or left over in the inbox) must not surface internal desktop turns.
+    if event.hook_event_name == "UserPromptSubmit" {
+        if let Some(prompt) = event.user_prompt.as_deref() {
+            if super::capture::is_internal_system_prompt(prompt) {
+                snapshot
+                    .sessions
+                    .retain(|session| session.session_id != event.session_id);
+                return;
+            }
+        }
+    }
+
     let index = snapshot
         .sessions
         .iter()
@@ -200,10 +214,20 @@ fn apply_event(snapshot: &mut CodexMonitorSnapshot, event: CodexHookEvent) {
 }
 
 fn load_snapshot(path: &Path) -> CodexMonitorSnapshot {
-    fs::read(path)
+    let mut snapshot: CodexMonitorSnapshot = fs::read(path)
         .ok()
         .and_then(|content| serde_json::from_slice(&content).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    // One-time cleanup of internal desktop turns captured before filtering
+    // existed (ambient suggestions, safety reviewer, memory consolidation).
+    snapshot.sessions.retain(|session| {
+        session
+            .user_prompt
+            .as_deref()
+            .map(|prompt| !super::capture::is_internal_system_prompt(prompt))
+            .unwrap_or(true)
+    });
+    snapshot
 }
 
 fn persist_snapshot(path: &Path, snapshot: &CodexMonitorSnapshot) -> Result<(), String> {
@@ -224,14 +248,8 @@ fn persist_snapshot(path: &Path, snapshot: &CodexMonitorSnapshot) -> Result<(), 
         .and_then(|_| temp.sync_all())
         .map_err(|error| format!("unable to persist monitor state: {error}"))?;
 
-    #[cfg(not(target_os = "windows"))]
-    fs::rename(&temp_path, path).map_err(|error| format!("unable to replace state: {error}"))?;
-    #[cfg(target_os = "windows")]
-    {
-        let _ = fs::remove_file(path);
-        fs::rename(&temp_path, path)
-            .map_err(|error| format!("unable to replace state: {error}"))?;
-    }
+    crate::paths::replace_file(&temp_path, path)
+        .map_err(|error| format!("unable to replace state: {error}"))?;
     Ok(())
 }
 
@@ -273,5 +291,40 @@ mod tests {
             snapshot.sessions[0].assistant_reply.as_deref(),
             Some("answer")
         );
+    }
+
+    #[test]
+    fn internal_system_prompt_creates_no_session_row() {
+        let mut snapshot = CodexMonitorSnapshot::default();
+        apply_event(
+            &mut snapshot,
+            event(
+                "UserPromptSubmit",
+                Some("You are an expert at upholding safety and compliance standards for Codex ambient suggestions."),
+                None,
+            ),
+        );
+        assert!(snapshot.sessions.is_empty());
+    }
+
+    #[test]
+    fn internal_system_prompt_removes_existing_row() {
+        // A session captured before the filter existed gets purged when its
+        // internal prompt is re-classified.
+        let mut snapshot = CodexMonitorSnapshot::default();
+        apply_event(
+            &mut snapshot,
+            event("UserPromptSubmit", Some("real question"), None),
+        );
+        assert_eq!(snapshot.sessions.len(), 1);
+        apply_event(
+            &mut snapshot,
+            event(
+                "UserPromptSubmit",
+                Some("## Memory Writing Agent: Phase 2 (Consolidation)"),
+                None,
+            ),
+        );
+        assert!(snapshot.sessions.is_empty());
     }
 }

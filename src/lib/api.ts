@@ -213,6 +213,8 @@ export interface ResetCredits {
   available_count: number
 }
 export interface CodexUsage {
+  // Email derived from the currently logged-in Codex CLI account.
+  account_name: string | null
   plan_type: string
   // All returned quota windows, sorted by duration. New tray UI uses this so
   // 5h/7d/30d can coexist without being capped at primary + secondary.

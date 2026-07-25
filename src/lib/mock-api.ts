@@ -326,6 +326,7 @@ export async function getCodexUsage() {
   await delay()
   // Simulate a Free plan: only a monthly primary window, no 5h/7d secondary.
   return {
+    account_name: 'codex@example.com',
     plan_type: 'free',
     usage_windows: [
       { used_percent: 5, remaining_percent: 95, reset_after_seconds: 2505600, reset_at: 1782799999, window_seconds: 2592000 },
@@ -368,6 +369,7 @@ export async function getCodexTrayUsage() {
   const expiries = [46, 118, 190, 262].map(hours => new Date(Date.now() + hours * 3600_000).toISOString())
   return {
     usage: {
+      account_name: 'codex@example.com',
       plan_type: 'plus',
       usage_windows: [
         { used_percent: 39, remaining_percent: 61, reset_after_seconds: 7740, reset_at: now + 7740, window_seconds: 18000 },

@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use crate::paths::join_relative;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum McpFormat {
     Json,
@@ -31,7 +33,7 @@ pub fn builtin_mcp_platforms() -> Vec<McpPlatformDef> {
             id: "cursor".into(),
             display_name: "Cursor".into(),
             presence_path: home.join(".cursor"),
-            config_path: home.join(".cursor/mcp.json"),
+            config_path: join_relative(home.clone(), ".cursor/mcp.json"),
             format: McpFormat::Json,
             mcp_key: "mcpServers".into(),
         },
@@ -39,7 +41,7 @@ pub fn builtin_mcp_platforms() -> Vec<McpPlatformDef> {
             id: "codex".into(),
             display_name: "Codex".into(),
             presence_path: home.join(".codex"),
-            config_path: home.join(".codex/config.toml"),
+            config_path: join_relative(home.clone(), ".codex/config.toml"),
             format: McpFormat::Toml,
             mcp_key: "mcp_servers".into(),
         },
@@ -47,7 +49,7 @@ pub fn builtin_mcp_platforms() -> Vec<McpPlatformDef> {
             id: "gemini".into(),
             display_name: "Gemini".into(),
             presence_path: home.join(".gemini"),
-            config_path: home.join(".gemini/settings.json"),
+            config_path: join_relative(home.clone(), ".gemini/settings.json"),
             format: McpFormat::Json,
             mcp_key: "mcpServers".into(),
         },
@@ -55,7 +57,7 @@ pub fn builtin_mcp_platforms() -> Vec<McpPlatformDef> {
             id: "kiro".into(),
             display_name: "Kiro".into(),
             presence_path: home.join(".kiro"),
-            config_path: home.join(".kiro/settings/mcp.json"),
+            config_path: join_relative(home.clone(), ".kiro/settings/mcp.json"),
             format: McpFormat::Json,
             mcp_key: "mcpServers".into(),
         },

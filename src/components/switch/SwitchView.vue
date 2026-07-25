@@ -25,13 +25,9 @@ const agentName = computed(
 const isCodex = computed(() => store.selectedAgent === 'codex')
 const isGrokBuild = computed(() => store.selectedAgent === 'grok-build')
 const isKimiCode = computed(() => store.selectedAgent === 'kimi-code')
-// Name of the currently active account (the one usage is actually queried for).
-const activeAccountName = computed(() => {
-  const active = store.profiles.find((p) => p.is_active)
-  if (!active) return ''
-  const idx = store.profiles.indexOf(active)
-  return active.note || t('switch.account_fallback', { n: idx + 1 })
-})
+const codexAccountName = computed(
+  () => store.codexUsage?.account_name || t('switch.codex_default_account')
+)
 
 // Absolute timestamp formatted as "YYYY-MM-DD HH:mm:ss" in the user's local
 // timezone. Uniform across locales so zh-CN/en-US render identically, and the
@@ -446,7 +442,7 @@ async function handleConfirmClear() {
                 <div
                   v-if="store.grokUsage.stale"
                   class="p-3 rounded-lg text-xs"
-                  style="background: color-mix(in srgb, var(--danger) 10%, transparent); color: var(--danger)"
+                  style="background: var(--warning-soft); color: var(--warning)"
                 >
                   {{ t('switch.grok_stale_warning') }}
                 </div>
@@ -574,8 +570,8 @@ async function handleConfirmClear() {
             </div>
           </div>
 
-          <!-- Toolbar -->
-          <div v-if="!isGrokBuild && !isKimiCode" class="flex gap-2 mb-4 flex-wrap items-center">
+          <!-- Only Claude Code keeps the switchable profile pool. -->
+          <div v-if="!isCodex && !isGrokBuild && !isKimiCode" class="flex gap-2 mb-4 flex-wrap items-center">
             <button class="btn btn-primary" @click="handleSaveCurrent">{{ t('switch.save_current') }}</button>
             <button class="btn btn-secondary" @click="store.addFormOpen = !store.addFormOpen">{{ t('switch.add_account') }}</button>
             <button
@@ -594,7 +590,7 @@ async function handleConfirmClear() {
 
           <!-- Add Form Card -->
           <div
-            v-if="store.addFormOpen"
+            v-if="!isCodex && !isGrokBuild && !isKimiCode && store.addFormOpen"
             class="ah-card mb-4 space-y-3"
             style="background: var(--surface); border-color: var(--border)"
           >
@@ -624,11 +620,11 @@ async function handleConfirmClear() {
           </div>
 
           <!-- Profiles -->
-          <div v-if="!isGrokBuild && !isKimiCode && store.profiles.length === 0" class="text-center py-12 text-sm" style="color: var(--ink-4)">
+          <div v-if="!isCodex && !isGrokBuild && !isKimiCode && store.profiles.length === 0" class="text-center py-12 text-sm" style="color: var(--ink-4)">
             {{ t('switch.empty') }}
           </div>
 
-          <div v-if="!isGrokBuild && !isKimiCode" class="space-y-2">
+          <div v-if="!isCodex && !isGrokBuild && !isKimiCode" class="space-y-2">
             <div
               v-for="(profile, idx) in store.profiles"
               :key="profile.id"
@@ -670,12 +666,29 @@ async function handleConfirmClear() {
             </div>
           </div>
 
+          <!-- Codex mirrors Kimi/Grok: current CLI account only, with no
+               profile-pool controls or credential mutations. -->
+          <div v-if="isCodex" class="ah-card switch-card--active switch-card--readonly mb-6">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <div class="flex items-center gap-2 mb-1">
+                  <span class="text-sm font-medium truncate" style="color: var(--ink)">{{ codexAccountName }}</span>
+                  <span class="switch-active-badge">{{ t('switch.active_badge') }}</span>
+                </div>
+                <div class="text-xs" style="color: var(--ink-3)">{{ t('switch.codex_default_account_hint') }}</div>
+              </div>
+              <span class="text-xs px-2 py-1 rounded-full flex-shrink-0" style="background: var(--sunken); color: var(--ink-2)">
+                {{ t('switch.codex_read_only') }}
+              </span>
+            </div>
+          </div>
+
           <!-- Codex usage panel -->
-          <div v-if="isCodex" class="ah-card mt-6" style="background: var(--surface); border-color: var(--border)">
+          <div v-if="isCodex" class="ah-card" style="background: var(--surface); border-color: var(--border)">
             <div class="flex items-center justify-between mb-3">
               <span class="text-base font-semibold flex items-center gap-2" style="color: var(--ink)">
                 <Gauge :size="18" :style="{ color: 'var(--accent)' }" />
-                {{ t('switch.usage_title', { name: activeAccountName || t('switch.active_badge') }) }}
+                {{ t('switch.usage_title', { name: codexAccountName }) }}
               </span>
               <button
                 class="btn btn-secondary btn-sm flex items-center gap-1"

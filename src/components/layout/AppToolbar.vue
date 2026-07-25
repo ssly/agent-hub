@@ -49,8 +49,16 @@ const breadcrumb = computed(() => {
     return p?.display_name || t('session.title')
   }
   if (appStore.currentTab === 'accounts') {
-    const names: Record<string, string> = { codex: 'Codex', 'claude-code': 'Claude Code' }
-    return switchStore.selectedAgent ? `${t('switch.title')} — ${names[switchStore.selectedAgent] || ''}` : t('switch.title')
+    const names: Record<string, string> = {
+      codex: 'Codex',
+      'claude-code': 'Claude Code',
+      'grok-build': 'Grok Build',
+      'kimi-code': 'Kimi Code',
+    }
+    if (!switchStore.selectedAgent) return t('switch.title')
+    const readOnly = ['codex', 'grok-build', 'kimi-code'].includes(switchStore.selectedAgent)
+    const title = readOnly ? t('switch.current_account_title') : t('switch.title')
+    return `${title} — ${names[switchStore.selectedAgent] || ''}`
   }
   if (appStore.currentView === 'plugins') {
     return t('plugin.title')

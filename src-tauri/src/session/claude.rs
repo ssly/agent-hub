@@ -6,6 +6,7 @@ use std::time::UNIX_EPOCH;
 use chrono::DateTime;
 use serde_json::Value;
 
+use crate::paths::join_relative;
 use crate::session::models::{SessionMessage, SessionSummary};
 
 const PLATFORM_ID: &str = "claude-code";
@@ -235,7 +236,7 @@ fn find_session_file_in_projects_dir(
 
 fn claude_projects_dir() -> Result<PathBuf, String> {
     let home = dirs::home_dir().ok_or_else(|| "Unable to resolve HOME directory".to_string())?;
-    Ok(home.join(".claude/projects"))
+    Ok(join_relative(home, ".claude/projects"))
 }
 
 fn collect_claude_session_candidates() -> Result<Vec<ClaudeSessionCandidate>, String> {

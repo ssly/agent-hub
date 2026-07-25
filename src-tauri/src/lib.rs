@@ -6,6 +6,7 @@ mod i18n;
 mod mcp;
 #[allow(dead_code)]
 mod monitor;
+mod paths;
 mod platform;
 mod session;
 mod session_monitor;

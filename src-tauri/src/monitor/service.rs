@@ -8,6 +8,8 @@ use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Runtime};
 use tauri_plugin_notification::NotificationExt;
 
+use crate::paths::join_relative;
+
 pub struct MonitorService<R: Runtime> {
     state: Arc<Mutex<MonitorState>>,
     sys: Arc<Mutex<sysinfo::System>>,
@@ -22,9 +24,10 @@ impl<R: Runtime> MonitorService<R> {
     pub fn new(app: AppHandle<R>, config: MonitorConfig) -> Self {
         let state = Arc::new(Mutex::new(MonitorState::new(config)));
         let sys = Arc::new(Mutex::new(sysinfo::System::new_all()));
-        let hooks_dir = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("/"))
-            .join(".agent-hub/hooks");
+        let hooks_dir = join_relative(
+            crate::paths::home_dir(),
+            ".agent-hub/hooks",
+        );
         let _ = std::fs::create_dir_all(&hooks_dir);
 
         let polling_enabled = Arc::new(AtomicBool::new(false));
@@ -422,7 +425,7 @@ PY
 
         match agent_type {
             "claude-code" => {
-                let settings_path = home.join(".claude/settings.json");
+                let settings_path = join_relative(home.clone(), ".claude/settings.json");
                 let mut settings: serde_json::Value = if settings_path.exists() {
                     serde_json::from_str(
                         &std::fs::read_to_string(&settings_path)
@@ -505,7 +508,7 @@ PY
                 log::info!("Configured Claude Code hooks in {:?}", settings_path);
             }
             "codex" => {
-                let config_path = home.join(".codex/config.toml");
+                let config_path = join_relative(home.clone(), ".codex/config.toml");
                 let mut content = if config_path.exists() {
                     std::fs::read_to_string(&config_path)
                         .map_err(|e| format!("Failed to read config: {e}"))?
@@ -531,7 +534,7 @@ PY
                 log::info!("Configured Codex hooks in {:?}", config_path);
             }
             "kiro" => {
-                let config_path = home.join(".kiro/agents/kiro-monitored.json");
+                let config_path = join_relative(home.clone(), ".kiro/agents/kiro-monitored.json");
                 let mut config: serde_json::Value = if config_path.exists() {
                     serde_json::from_str(
                         &std::fs::read_to_string(&config_path)
@@ -579,7 +582,7 @@ PY
 
         match agent_type {
             "claude-code" => {
-                let settings_path = home.join(".claude/settings.json");
+                let settings_path = join_relative(home.clone(), ".claude/settings.json");
                 if !settings_path.exists() {
                     return Ok(());
                 }
@@ -626,7 +629,7 @@ PY
                 log::info!("Removed Claude Code hooks from {:?}", settings_path);
             }
             "codex" => {
-                let config_path = home.join(".codex/config.toml");
+                let config_path = join_relative(home.clone(), ".codex/config.toml");
                 if !config_path.exists() {
                     return Ok(());
                 }
@@ -639,7 +642,7 @@ PY
                 log::info!("Removed Codex hooks from {:?}", config_path);
             }
             "kiro" => {
-                let config_path = home.join(".kiro/agents/kiro-monitored.json");
+                let config_path = join_relative(home.clone(), ".kiro/agents/kiro-monitored.json");
                 if !config_path.exists() {
                     return Ok(());
                 }
@@ -673,7 +676,7 @@ PY
         let mut status = HashMap::new();
 
         // Claude Code
-        let cc_settings = home.join(".claude/settings.json");
+        let cc_settings = join_relative(home.clone(), ".claude/settings.json");
         let cc_configured = if cc_settings.exists() {
             std::fs::read_to_string(&cc_settings)
                 .ok()
@@ -708,7 +711,7 @@ PY
         status.insert("claude-code".to_string(), cc_configured && cc_script_exists);
 
         // Codex
-        let codex_config = home.join(".codex/config.toml");
+        let codex_config = join_relative(home.clone(), ".codex/config.toml");
         let codex_script_exists = self.hooks_dir.join("codex-hook.sh").exists();
         let codex_configured = if codex_config.exists() {
             std::fs::read_to_string(&codex_config)
@@ -721,7 +724,7 @@ PY
         status.insert("codex".to_string(), codex_configured && codex_script_exists);
 
         // Kiro
-        let kiro_config = home.join(".kiro/agents/kiro-monitored.json");
+        let kiro_config = join_relative(home.clone(), ".kiro/agents/kiro-monitored.json");
         let kiro_configured = if kiro_config.exists() {
             std::fs::read_to_string(&kiro_config)
                 .ok()

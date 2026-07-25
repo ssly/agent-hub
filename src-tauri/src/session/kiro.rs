@@ -5,6 +5,7 @@ use std::time::UNIX_EPOCH;
 
 use serde_json::Value;
 
+use crate::paths::join_relative;
 use crate::session::models::{SessionMessage, SessionSummary};
 
 const PLATFORM_ID: &str = "kiro";
@@ -384,7 +385,7 @@ fn system_time_to_ms(time: std::time::SystemTime) -> Option<i64> {
 
 fn kiro_sessions_dir() -> Result<PathBuf, String> {
     let home = dirs::home_dir().ok_or_else(|| "Unable to resolve HOME directory".to_string())?;
-    Ok(home.join(".kiro/sessions/cli"))
+    Ok(join_relative(home, ".kiro/sessions/cli"))
 }
 
 pub fn search_kiro_messages(

@@ -5,13 +5,13 @@ use chrono::Utc;
 use uuid::Uuid;
 
 use super::model::{AuthProfile, ListSwitchResponse, ProfileMeta};
+use crate::paths::join_relative;
 
 /// Resolve the storage directory for a given agent type.
 fn profiles_dir(agent_type: &str) -> Result<PathBuf, String> {
     let slug = agent_slug(agent_type)?;
-    let dir = dirs::home_dir()
-        .ok_or("Cannot determine home directory")?
-        .join(format!(".agent-hub/switch/{slug}"));
+    let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
+    let dir = join_relative(home, &format!(".agent-hub/switch/{slug}"));
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
 }
@@ -20,8 +20,7 @@ fn profiles_dir(agent_type: &str) -> Result<PathBuf, String> {
 fn agent_config_path(agent_type: &str) -> Result<PathBuf, String> {
     let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
     let path = match agent_type {
-        "codex" => home.join(".codex/auth.json"),
-        "claude-code" => home.join(".claude/settings.json"),
+        "claude-code" => join_relative(home, ".claude/settings.json"),
         _ => return Err(format!("unknown_agent_type:{agent_type}")),
     };
     Ok(path)
@@ -30,7 +29,6 @@ fn agent_config_path(agent_type: &str) -> Result<PathBuf, String> {
 /// Validate & normalise the agent type, returns the directory slug.
 fn agent_slug(agent_type: &str) -> Result<&'static str, String> {
     match agent_type {
-        "codex" => Ok("codex"),
         "claude-code" => Ok("claude-code"),
         _ => Err(format!("unknown_agent_type:{agent_type}")),
     }
@@ -398,11 +396,11 @@ pub fn switch_auth_profile(agent_type: String, id: String) -> Result<(), String>
         let merged_str = serde_json::to_string_pretty(&current_val).map_err(|e| e.to_string())?;
         let tmp = dest.with_extension("json.tmp");
         std::fs::write(&tmp, merged_str.as_bytes()).map_err(|e| e.to_string())?;
-        std::fs::rename(&tmp, &dest).map_err(|e| e.to_string())?;
+        crate::paths::replace_file(&tmp, &dest).map_err(|e| e.to_string())?;
     } else {
         let tmp = dest.with_extension("json.tmp");
         std::fs::write(&tmp, &content).map_err(|e| e.to_string())?;
-        std::fs::rename(&tmp, &dest).map_err(|e| e.to_string())?;
+        crate::paths::replace_file(&tmp, &dest).map_err(|e| e.to_string())?;
     }
 
     Ok(())
@@ -461,7 +459,7 @@ pub fn update_auth_profile_content(
     let path = dir.join("config.json");
     let tmp = dir.join("config.json.tmp");
     std::fs::write(&tmp, content.as_bytes()).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+    crate::paths::replace_file(&tmp, &path).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -516,6 +514,7 @@ struct CodexAuthFile {
 struct CodexAuth {
     access_token: String,
     account_id: String,
+    account_name: Option<String>,
 }
 
 /// Read `~/.codex/auth.json` (honoring `CODEX_HOME`) and pull out the token +
@@ -540,6 +539,7 @@ fn resolve_codex_auth() -> Result<CodexAuth, String> {
 
     let content =
         std::fs::read_to_string(&auth_path).map_err(|e| format!("读取 auth.json 失败: {}", e))?;
+    let account_name = extract_account_name("codex", &content);
     let auth: CodexAuthFile =
         serde_json::from_str(&content).map_err(|e| format!("解析 auth.json 失败: {}", e))?;
 
@@ -555,6 +555,7 @@ fn resolve_codex_auth() -> Result<CodexAuth, String> {
     Ok(CodexAuth {
         access_token,
         account_id,
+        account_name,
     })
 }
 
@@ -603,6 +604,9 @@ pub struct ResetCredits {
 
 #[derive(serde::Serialize, Debug, Clone)]
 pub struct CodexUsageResponse {
+    /// Email derived from the current Codex CLI login's ID token. This is
+    /// display-only and never used as an authentication or switching key.
+    pub account_name: Option<String>,
     pub plan_type: String,
     /// Every usable quota window returned by the API, sorted shortest first.
     /// Keep the named fields below for the existing Accounts view while tray
@@ -644,6 +648,7 @@ pub async fn get_codex_usage() -> Result<CodexUsageResponse, String> {
         Some(v) => v,
         None => {
             return Ok(CodexUsageResponse {
+                account_name: auth.account_name,
                 plan_type: plan,
                 usage_windows: Vec::new(),
                 primary_window: None,
@@ -660,6 +665,7 @@ pub async fn get_codex_usage() -> Result<CodexUsageResponse, String> {
     let usage_windows = collect_usage_windows(rate);
 
     Ok(CodexUsageResponse {
+        account_name: auth.account_name,
         plan_type: plan,
         usage_windows,
         primary_window: primary,
@@ -1080,7 +1086,7 @@ fn read_cached_grok_usage(
     grok_home: &std::path::Path,
     account_name: Option<String>,
 ) -> Result<GrokUsageResponse, String> {
-    let log_path = grok_home.join("logs/unified.jsonl");
+    let log_path = join_relative(grok_home.to_path_buf(), "logs/unified.jsonl");
     let content =
         std::fs::read_to_string(&log_path).map_err(|e| format!("读取 Grok 用量缓存失败: {e}"))?;
 
@@ -1584,6 +1590,11 @@ mod tests {
     fn codex_identity_uses_account_id() {
         let id = extract_account_identity("codex", CODEX_AUTH);
         assert_eq!(id.as_deref(), Some("acct-abc-123"));
+    }
+
+    #[test]
+    fn codex_profile_pool_is_disabled() {
+        assert_eq!(agent_slug("codex").unwrap_err(), "unknown_agent_type:codex");
     }
 
     #[test]

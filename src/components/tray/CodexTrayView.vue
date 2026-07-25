@@ -671,6 +671,7 @@ onBeforeUnmount(() => {
   --tray-panel-shadow: 0 2px 6px rgba(42, 42, 46, .12);
   --tray-active-shadow: 0 1px 4px rgba(42, 42, 46, .10);
   --tray-success-soft: rgba(90, 143, 107, .12);
+  --tray-warning-soft: rgba(176, 122, 62, .10);
   --tray-danger-soft: rgba(176, 82, 74, .10);
 
   width: 100%;
@@ -848,8 +849,8 @@ onBeforeUnmount(() => {
   margin: 0;
   border-radius: 14px;
   padding: 7px 11px;
-  color: var(--tray-danger);
-  background: var(--tray-danger-soft);
+  color: var(--tray-warning);
+  background: var(--tray-warning-soft);
   font-size: 11px;
   line-height: 1.35;
 }
@@ -995,6 +996,7 @@ onBeforeUnmount(() => {
     --tray-panel-shadow: 0 2px 6px rgba(0, 0, 0, .35);
     --tray-active-shadow: 0 1px 4px rgba(0, 0, 0, .28);
     --tray-success-soft: rgba(143, 184, 154, .14);
+    --tray-warning-soft: rgba(214, 153, 99, .13);
     --tray-danger-soft: rgba(216, 128, 120, .13);
   }
 }

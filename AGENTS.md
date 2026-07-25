@@ -62,6 +62,7 @@ src-tauri/src/
   i18n.rs                 # 语言检测
   state.rs                # AppState（config, locale, platforms）
   trash.rs                # 回收站
+  paths.rs                # 跨平台路径公共库：join_relative 分段拼接、home_dir、replace_file（屏蔽 Windows/Mac 差异）
   platform/               # 平台发现和注册
     registry.rs           # 内置平台定义（9 个 Skill 平台）
     discovery.rs          # 自动发现 + 自定义平台

@@ -296,7 +296,7 @@ fn expected_command() -> Result<String, String> {
 
 fn codex_hooks_path() -> Result<PathBuf, String> {
     dirs::home_dir()
-        .map(|home| home.join(".codex/hooks.json"))
+        .map(|home| home.join(".codex").join("hooks.json"))
         .ok_or_else(|| "home directory is unavailable".to_string())
 }
 
@@ -374,33 +374,9 @@ fn atomic_write(path: &Path, content: &[u8], expected_before_hash: &str) -> Resu
         return Err("Codex Hook 配置文件已发生变化，请重新预览后再确认。".to_string());
     }
 
-    #[cfg(not(target_os = "windows"))]
-    {
-        if let Err(error) = fs::rename(&temp_path, path) {
-            let _ = fs::remove_file(&temp_path);
-            return Err(format!("unable to replace {}: {error}", path.display()));
-        }
-    }
-    #[cfg(target_os = "windows")]
-    {
-        let backup_path = parent.join(format!(".agent-hub-hooks-{}.bak", Uuid::new_v4()));
-        let had_existing = path.exists();
-        if had_existing {
-            if let Err(error) = fs::rename(path, &backup_path) {
-                let _ = fs::remove_file(&temp_path);
-                return Err(format!("unable to stage existing Hook config: {error}"));
-            }
-        }
-        if let Err(error) = fs::rename(&temp_path, path) {
-            if had_existing {
-                let _ = fs::rename(&backup_path, path);
-            }
-            let _ = fs::remove_file(&temp_path);
-            return Err(format!("unable to replace {}: {error}", path.display()));
-        }
-        if had_existing {
-            let _ = fs::remove_file(backup_path);
-        }
+    if let Err(error) = crate::paths::replace_file(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(format!("unable to replace {}: {error}", path.display()));
     }
     Ok(())
 }

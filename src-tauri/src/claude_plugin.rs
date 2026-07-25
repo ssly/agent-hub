@@ -6,6 +6,8 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use crate::paths::join_relative;
+
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
@@ -66,7 +68,7 @@ fn manifest_metadata(install_path: &str) -> (Option<String>, Option<String>) {
         return (None, None);
     }
 
-    let manifest_path = Path::new(install_path).join(".claude-plugin/plugin.json");
+    let manifest_path = join_relative(Path::new(install_path).to_path_buf(), ".claude-plugin/plugin.json");
     let Ok(text) = fs::read_to_string(manifest_path) else {
         return (None, None);
     };
@@ -170,10 +172,10 @@ fn claude_executable_candidates() -> Vec<PathBuf> {
     candidates.push(PathBuf::from("claude"));
 
     if let Some(home) = dirs::home_dir() {
-        candidates.push(home.join(".local/bin/claude"));
-        candidates.push(home.join(".claude/local/claude"));
+        candidates.push(join_relative(home.clone(), ".local/bin/claude"));
+        candidates.push(join_relative(home.clone(), ".claude/local/claude"));
         #[cfg(target_os = "windows")]
-        candidates.push(home.join("AppData/Roaming/npm/claude.cmd"));
+        candidates.push(join_relative(home.clone(), "AppData/Roaming/npm/claude.cmd"));
     }
 
     #[cfg(target_os = "macos")]

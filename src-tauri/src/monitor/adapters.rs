@@ -6,6 +6,8 @@ use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+use crate::paths::join_relative;
+
 const PREVIEW_MAX_LEN: usize = 150;
 
 fn truncate_preview(s: &str) -> String {
@@ -129,12 +131,12 @@ pub struct KiroAdapter {
 
 impl KiroAdapter {
     pub fn new() -> Self {
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+        let home = crate::paths::home_dir();
         Self { home }
     }
 
     fn sessions_dir(&self) -> PathBuf {
-        self.home.join(".kiro/sessions/cli")
+        join_relative(self.home.clone(), ".kiro/sessions/cli")
     }
 
     fn parse_lock_file(&self, path: &Path) -> Option<u32> {
@@ -419,12 +421,12 @@ pub struct ClaudeCodeAdapter {
 
 impl ClaudeCodeAdapter {
     pub fn new() -> Self {
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+        let home = crate::paths::home_dir();
         Self { home }
     }
 
     fn projects_dir(&self) -> PathBuf {
-        self.home.join(".claude/projects")
+        join_relative(self.home.clone(), ".claude/projects")
     }
 
     /// Resolve the JSONL file for a Claude Code session.
@@ -847,7 +849,7 @@ fn extract_codex_text_content(content: &serde_json::Value, item_type: &str) -> O
 
 impl CodexAdapter {
     pub fn new() -> Self {
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+        let home = crate::paths::home_dir();
         Self { home }
     }
 
@@ -1156,12 +1158,12 @@ pub struct GeminiAdapter {
 #[allow(dead_code)]
 impl GeminiAdapter {
     pub fn new() -> Self {
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+        let home = crate::paths::home_dir();
         Self { home }
     }
 
     fn gemini_tmp_dir(&self) -> PathBuf {
-        self.home.join(".gemini/tmp")
+        join_relative(self.home.clone(), ".gemini/tmp")
     }
 
     fn detect_from_processes(&self, sys: &sysinfo::System) -> Vec<AgentSession> {
@@ -1498,7 +1500,7 @@ mod tests {
     fn find_session_jsonl_uses_uuid_when_cwd_dir_missing() {
         use tempfile::TempDir;
         let tmp = TempDir::new().unwrap();
-        let projects_dir = tmp.path().join(".claude/projects");
+        let projects_dir = join_relative(tmp.path().to_path_buf(), ".claude/projects");
         let real_dir = projects_dir.join("-Users-x-code-myapp");
         fs::create_dir_all(&real_dir).unwrap();
         let uuid = "260e932f-7946-4650-a23c-30ba12c7ef57";
@@ -1519,7 +1521,7 @@ mod tests {
     fn find_session_jsonl_falls_back_to_cwd_encoding_without_uuid() {
         use tempfile::TempDir;
         let tmp = TempDir::new().unwrap();
-        let projects_dir = tmp.path().join(".claude/projects");
+        let projects_dir = join_relative(tmp.path().to_path_buf(), ".claude/projects");
         let dir = projects_dir.join("-Users-x-code-myapp");
         fs::create_dir_all(&dir).unwrap();
         let jsonl_path = dir.join("session-a.jsonl");

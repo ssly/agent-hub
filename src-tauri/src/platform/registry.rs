@@ -1,5 +1,9 @@
 use std::path::PathBuf;
 
+// Re-export so existing `crate::platform::registry::join_relative` call
+// sites keep working.
+pub use crate::paths::join_relative;
+
 #[derive(Debug, Clone)]
 pub struct PlatformDef {
     pub id: String,
@@ -7,21 +11,6 @@ pub struct PlatformDef {
     pub description: String,
     pub presence_path: PathBuf,
     pub skill_dir: PathBuf,
-}
-
-/// Join `base` with a relative path that may use either `/` or `\` as
-/// separator. We split on *both* and join each non-empty segment separately,
-/// so on Windows we don't end up with mixed-separator paths like
-/// `C:\Users\xxx\.claude/skills` (which `base.join(".claude/skills")` would
-/// produce, because the whole string is treated as a single component).
-pub fn join_relative(base: PathBuf, rel: &str) -> PathBuf {
-    let mut out = base;
-    for seg in rel.split(['/', '\\']) {
-        if !seg.is_empty() {
-            out = out.join(seg);
-        }
-    }
-    out
 }
 
 pub fn builtin_platforms() -> Vec<PlatformDef> {

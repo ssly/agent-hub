@@ -4,12 +4,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::paths::join_relative;
+
 const RETENTION_SECS: u64 = 7 * 24 * 3600;
 
 fn trash_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".agent-hub/trash")
+    join_relative(
+        dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")),
+        ".agent-hub/trash",
+    )
 }
 
 fn skills_dir() -> PathBuf {

@@ -10,7 +10,8 @@ export const useSwitchStore = defineStore('switch', () => {
   const addFormOpen = ref(false)
   const switchConfirmId = ref<string | null>(null)
 
-  // Codex usage windows for the currently active account.
+  // Codex is read-only: display the current CLI login and its usage without
+  // reading from or mutating Agent Hub's legacy profile pool.
   // Window presence/order varies; views label each item from window_seconds.
   // The Accounts view and tray popup both consume the same snapshot command.
   const codexUsage = ref<CodexUsage | null>(null)
@@ -121,8 +122,13 @@ export const useSwitchStore = defineStore('switch', () => {
 
   async function loadProfiles() {
     if (!selectedAgent.value) return
-    // Grok Build and Kimi Code are read-only: one current CLI account, no pool.
-    if (selectedAgent.value === 'grok-build' || selectedAgent.value === 'kimi-code') {
+    // Codex, Grok Build, and Kimi Code are read-only: one current CLI account,
+    // no Agent Hub profile pool.
+    if (
+      selectedAgent.value === 'codex'
+      || selectedAgent.value === 'grok-build'
+      || selectedAgent.value === 'kimi-code'
+    ) {
       profiles.value = []
       currentKey.value = null
       return
@@ -137,8 +143,8 @@ export const useSwitchStore = defineStore('switch', () => {
     }
   }
 
-  // Entering the selected account section always reloads profile state. Codex
-  // additionally performs a fresh quota query with no time-based cooldown.
+  // Entering the selected account section reloads its current read-only usage
+  // snapshot or the switchable profile pool (Claude Code only).
   async function loadSelectedAgent() {
     await loadProfiles()
     if (selectedAgent.value === 'codex') await refreshCodexUsage()

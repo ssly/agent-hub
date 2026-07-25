@@ -7,6 +7,7 @@ use std::time::Duration;
 use rusqlite::{Connection, OpenFlags, Row};
 use serde_json::Value;
 
+use crate::paths::join_relative;
 use crate::session::models::{SessionMessage, SessionSummary};
 
 const PLATFORM_ID: &str = "codex";
@@ -220,7 +221,7 @@ fn parse_codex_summary_row(row: &Row<'_>) -> Result<SessionSummary, rusqlite::Er
 
 fn codex_db_path() -> Result<PathBuf, String> {
     let home = dirs::home_dir().ok_or_else(|| "Unable to resolve HOME directory".to_string())?;
-    Ok(home.join(".codex/state_5.sqlite"))
+    Ok(join_relative(home, ".codex/state_5.sqlite"))
 }
 
 fn open_codex_db_readonly(path: &Path) -> Result<Connection, String> {

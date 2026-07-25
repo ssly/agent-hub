@@ -1,6 +1,8 @@
 use serde::Deserialize;
 use std::path::PathBuf;
 
+use crate::paths::join_relative;
+
 #[derive(Debug, Deserialize, Default, serde::Serialize)]
 pub struct Config {
     #[serde(default)]
@@ -35,8 +37,8 @@ pub struct CustomPlatform {
 impl Config {
     pub fn load() -> Self {
         let config_path = dirs::home_dir()
-            .map(|h| h.join(".agent-hub/config.toml"))
-            .unwrap_or_else(|| PathBuf::from(".agent-hub/config.toml"));
+            .map(|h| join_relative(h, ".agent-hub/config.toml"))
+            .unwrap_or_else(|| join_relative(PathBuf::new(), ".agent-hub/config.toml"));
 
         if config_path.exists() {
             if let Ok(content) = std::fs::read_to_string(&config_path) {
@@ -58,7 +60,7 @@ impl Config {
 
     pub fn save(&self) -> Result<(), String> {
         let config_path = dirs::home_dir()
-            .map(|h| h.join(".agent-hub/config.toml"))
+            .map(|h| join_relative(h, ".agent-hub/config.toml"))
             .ok_or("Cannot determine home directory")?;
         if let Some(parent) = config_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
