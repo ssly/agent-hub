@@ -244,19 +244,20 @@ export const getCodexResetCredits = () =>
   invoke<CodexResetCredits>('get_codex_reset_credits')
 
 // Shared Codex quota snapshot used by both the Accounts view and tray popup.
-// Every call performs a fresh usage query; reset-credit failure is non-fatal.
+// Backend caches for 10 minutes unless `force` is true (manual refresh).
 export interface CodexTraySnapshot {
   usage: CodexUsage
   reset_credits: CodexResetCredits | null
   last_query_at: number
 }
-export const getCodexTrayUsage = () =>
-  invoke<CodexTraySnapshot>('get_codex_tray_usage')
+export const getCodexTrayUsage = (force = false) =>
+  invoke<CodexTraySnapshot>('get_codex_tray_usage', { force })
 export const resizeUsageTray = (height: number) =>
   invoke<void>('resize_usage_tray', { height })
 
 // Grok Build uses only the CLI's current/default account. Agent Hub does not
 // manage or switch Grok credentials; this endpoint is read-only.
+// Backend caches for 10 minutes unless `force` is true (manual refresh).
 export interface GrokUsage {
   account_name: string | null
   plan_type: string
@@ -272,10 +273,12 @@ export interface GrokUsage {
   fetched_at: number
   stale: boolean
 }
-export const getGrokUsage = () => invoke<GrokUsage>('get_grok_usage')
+export const getGrokUsage = (force = false) =>
+  invoke<GrokUsage>('get_grok_usage', { force })
 
 // Kimi Code uses the CLI's `sk-kimi-…` API key from ~/.kimi-code/config.toml.
 // We never touch OAuth tokens (those are scoped to the kimi CLI itself).
+// Backend caches for 10 minutes unless `force` is true (manual refresh).
 export interface KimiUsage {
   account_name: string | null
   // `METHOD_API_KEY` for the long-lived Coding Plan key, `METHOD_OAUTH` for CLI.
@@ -291,7 +294,8 @@ export interface KimiUsage {
   usage_windows: UsageWindow[]
   fetched_at: number
 }
-export const getKimiUsage = () => invoke<KimiUsage>('get_kimi_usage')
+export const getKimiUsage = (force = false) =>
+  invoke<KimiUsage>('get_kimi_usage', { force })
 
 export interface UsageProviderAvailability {
   codex: boolean

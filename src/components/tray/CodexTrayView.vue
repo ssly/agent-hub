@@ -279,7 +279,9 @@ function splitExpiry(value?: string | null) {
   return { date: datePart, time: timePart }
 }
 
-async function refresh(compact = false, syncWithAccounts = false) {
+// force=true bypasses the shared 10-minute backend cache (Retry button).
+// force=false uses the same snapshot as the Accounts view when still fresh.
+async function refresh(compact = false, syncWithAccounts = false, force = false) {
   const sequence = ++refreshSequence
   let provider = selectedProvider.value
   if (compact) {
@@ -309,18 +311,18 @@ async function refresh(compact = false, syncWithAccounts = false) {
     selectedProvider.value = provider
     providerErrors.value[provider] = null
     queriedProviders.value[provider] = true
-    // Keep the cached payload until the fresh one arrives so switching tabs
-    // back to an already-queried provider never flashes an empty layout.
+    // Keep the previous payload until the response arrives so tab switches
+    // never flash an empty layout. Backend cache keeps Accounts + tray aligned.
     if (provider === 'codex') {
-      const result = await getCodexTrayUsage()
+      const result = await getCodexTrayUsage(force)
       if (sequence !== refreshSequence) return
       snapshot.value = result
     } else if (provider === 'kimi-code') {
-      const result = await getKimiUsage()
+      const result = await getKimiUsage(force)
       if (sequence !== refreshSequence) return
       kimiUsage.value = result
     } else {
-      const result = await getGrokUsage()
+      const result = await getGrokUsage(force)
       if (sequence !== refreshSequence) return
       grokUsage.value = result
     }
@@ -335,11 +337,9 @@ async function refresh(compact = false, syncWithAccounts = false) {
   }
 }
 
-/// Reopen the tray from the status-bar icon. We sync the selected provider
-/// with whatever the user last picked in the Accounts view, but we do NOT
-/// re-query a provider that already has a cached payload — the user can hit
-/// Retry/Refresh inside the popup to force a fresh fetch. First open (no cache
-/// anywhere) still triggers a live query so the popup isn't blank.
+/// Reopen the tray from the status-bar icon. Sync the selected provider with
+/// the Accounts view, then load the shared backend snapshot (force=false so
+/// we reuse data younger than 10 minutes instead of hitting the network again).
 async function handleTrayOpened() {
   const status = await getUsageProviderAvailability()
   availability.value = status
@@ -361,22 +361,16 @@ async function handleTrayOpened() {
     selectedProvider.value = available
   }
 
-  // Show compact loading only when we genuinely have nothing to display yet.
-  // If the current provider already has cached data, just reveal it instantly.
-  const hasCache = available === 'codex'
+  // Show compact loading only when we have nothing to display yet. When local
+  // data already exists, soft-refresh from the shared backend cache so timers
+  // stay current without a full loading flash.
+  const hasLocal = available === 'codex'
     ? snapshot.value !== null
     : available === 'kimi-code'
       ? kimiUsage.value !== null
       : grokUsage.value !== null
 
-  if (hasCache) {
-    compactLoading.value = false
-    loading.value = false
-    return
-  }
-
-  // Nothing cached for the picked provider yet — fetch it now.
-  await refresh(true, false)
+  await refresh(!hasLocal, false, false)
 }
 
 async function selectProvider(provider: UsageProvider) {
@@ -384,7 +378,7 @@ async function selectProvider(provider: UsageProvider) {
   if (availability.value && !providerAvailable(provider, availability.value)) return
   selectedProvider.value = provider
   if (!queriedProviders.value[provider]) {
-    await refresh()
+    await refresh(false, false, false)
   }
 }
 
@@ -489,7 +483,7 @@ onBeforeUnmount(() => {
             <div v-else-if="error" class="quota-message">
               <strong>{{ t('tray.failed') }}</strong>
               <span>{{ error }}</span>
-              <button @click="refresh()">{{ t('tray.retry') }}</button>
+              <button @click="refresh(false, false, true)">{{ t('tray.retry') }}</button>
             </div>
             <div
               v-else
@@ -552,7 +546,7 @@ onBeforeUnmount(() => {
             <div v-else-if="error" class="quota-message">
               <strong>{{ t('tray.failed') }}</strong>
               <span>{{ error }}</span>
-              <button @click="refresh()">{{ t('tray.retry') }}</button>
+              <button @click="refresh(false, false, true)">{{ t('tray.retry') }}</button>
             </div>
             <div
               v-else
@@ -605,7 +599,7 @@ onBeforeUnmount(() => {
             <div v-else-if="error" class="quota-message">
               <strong>{{ t('tray.failed') }}</strong>
               <span>{{ error }}</span>
-              <button @click="refresh()">{{ t('tray.retry') }}</button>
+              <button @click="refresh(false, false, true)">{{ t('tray.retry') }}</button>
             </div>
             <div
               v-else

@@ -68,14 +68,14 @@ export const useSwitchStore = defineStore('switch', () => {
     await loadSelectedAgent()
   }
 
-  // Every invocation performs a fresh query. This is used when entering Codex,
-  // after switching accounts, and when the user presses Refresh.
-  async function refreshCodexUsage() {
+  // Shared with the tray popup via backend 10-minute cache.
+  // Pass force=true only for the explicit Refresh button.
+  async function refreshCodexUsage(force = false) {
     if (selectedAgent.value !== 'codex' || codexUsageLoading.value) return
     codexUsageLoading.value = true
     codexUsageError.value = null
     try {
-      const snapshot = await api.getCodexTrayUsage()
+      const snapshot = await api.getCodexTrayUsage(force)
       codexUsage.value = snapshot.usage
       codexResetCredits.value = snapshot.reset_credits
       codexUsageLastQuery.value = snapshot.last_query_at * 1000
@@ -88,12 +88,12 @@ export const useSwitchStore = defineStore('switch', () => {
     }
   }
 
-  async function refreshGrokUsage() {
+  async function refreshGrokUsage(force = false) {
     if (selectedAgent.value !== 'grok-build' || grokUsageLoading.value) return
     grokUsageLoading.value = true
     grokUsageError.value = null
     try {
-      grokUsage.value = await api.getGrokUsage()
+      grokUsage.value = await api.getGrokUsage(force)
       grokUsageLastQuery.value = (grokUsage.value.fetched_at || Math.floor(Date.now() / 1000)) * 1000
     } catch (reason: any) {
       grokUsageError.value = String(reason?.message || reason)
@@ -104,12 +104,12 @@ export const useSwitchStore = defineStore('switch', () => {
     }
   }
 
-  async function refreshKimiUsage() {
+  async function refreshKimiUsage(force = false) {
     if (selectedAgent.value !== 'kimi-code' || kimiUsageLoading.value) return
     kimiUsageLoading.value = true
     kimiUsageError.value = null
     try {
-      kimiUsage.value = await api.getKimiUsage()
+      kimiUsage.value = await api.getKimiUsage(force)
       kimiUsageLastQuery.value = (kimiUsage.value.fetched_at || Math.floor(Date.now() / 1000)) * 1000
     } catch (reason: any) {
       kimiUsageError.value = String(reason?.message || reason)
@@ -143,13 +143,13 @@ export const useSwitchStore = defineStore('switch', () => {
     }
   }
 
-  // Entering the selected account section reloads its current read-only usage
-  // snapshot or the switchable profile pool (Claude Code only).
+  // Entering the selected account section loads the shared usage snapshot
+  // (backend serves cache when younger than 10 minutes) or Claude profiles.
   async function loadSelectedAgent() {
     await loadProfiles()
-    if (selectedAgent.value === 'codex') await refreshCodexUsage()
-    if (selectedAgent.value === 'grok-build') await refreshGrokUsage()
-    if (selectedAgent.value === 'kimi-code') await refreshKimiUsage()
+    if (selectedAgent.value === 'codex') await refreshCodexUsage(false)
+    if (selectedAgent.value === 'grok-build') await refreshGrokUsage(false)
+    if (selectedAgent.value === 'kimi-code') await refreshKimiUsage(false)
   }
 
   async function openEditModal(profile: any) {

@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use chrono::Utc;
@@ -6,6 +8,71 @@ use uuid::Uuid;
 
 use super::model::{AuthProfile, ListSwitchResponse, ProfileMeta};
 use crate::paths::join_relative;
+
+/// Minimum interval between automatic usage network queries (Accounts + tray).
+const USAGE_CACHE_TTL_SECS: u64 = 600; // 10 minutes
+
+struct UsageCacheEntry<T> {
+    fetched_at: u64,
+    data: T,
+}
+
+static CODEX_USAGE_CACHE: Mutex<Option<UsageCacheEntry<CodexTraySnapshot>>> = Mutex::new(None);
+static GROK_USAGE_CACHE: Mutex<Option<UsageCacheEntry<GrokUsageResponse>>> = Mutex::new(None);
+static KIMI_USAGE_CACHE: Mutex<Option<UsageCacheEntry<KimiUsageResponse>>> = Mutex::new(None);
+
+fn usage_unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn usage_cache_is_fresh(fetched_at: u64, now: u64) -> bool {
+    now.saturating_sub(fetched_at) < USAGE_CACHE_TTL_SECS
+}
+
+fn refresh_usage_window_timers(window: &mut UsageWindow, now: u64) {
+    window.reset_after_seconds = window.reset_at.saturating_sub(now);
+}
+
+fn refresh_usage_windows(windows: &mut [UsageWindow], now: u64) {
+    for window in windows {
+        refresh_usage_window_timers(window, now);
+    }
+}
+
+/// Shared Codex snapshot consumed by the Accounts view and the tray popup.
+#[derive(Clone, serde::Serialize, Debug)]
+pub struct CodexTraySnapshot {
+    pub usage: CodexUsageResponse,
+    pub reset_credits: Option<CodexResetCreditsResponse>,
+    pub last_query_at: u64,
+}
+
+fn apply_codex_snapshot_timers(snapshot: &mut CodexTraySnapshot, now: u64) {
+    refresh_usage_windows(&mut snapshot.usage.usage_windows, now);
+    if let Some(window) = snapshot.usage.primary_window.as_mut() {
+        refresh_usage_window_timers(window, now);
+    }
+    if let Some(window) = snapshot.usage.secondary_window.as_mut() {
+        refresh_usage_window_timers(window, now);
+    }
+}
+
+fn apply_grok_usage_timers(usage: &mut GrokUsageResponse, now: u64) {
+    refresh_usage_window_timers(&mut usage.usage_window, now);
+}
+
+fn apply_kimi_usage_timers(usage: &mut KimiUsageResponse, now: u64) {
+    refresh_usage_windows(&mut usage.usage_windows, now);
+    if let Some(window) = usage.window_5h.as_mut() {
+        refresh_usage_window_timers(window, now);
+    }
+    if let Some(window) = usage.window_weekly.as_mut() {
+        refresh_usage_window_timers(window, now);
+    }
+}
 
 /// Resolve the storage directory for a given agent type.
 fn profiles_dir(agent_type: &str) -> Result<PathBuf, String> {
@@ -1115,8 +1182,7 @@ fn read_cached_grok_usage(
     Err("Grok 日志中没有可用的额度缓存".to_string())
 }
 
-#[tauri::command]
-pub async fn get_grok_usage() -> Result<GrokUsageResponse, String> {
+async fn fetch_grok_usage() -> Result<GrokUsageResponse, String> {
     let grok_home = grok_home_dir()?;
     let auth = resolve_grok_auth(&grok_home);
     let account_name = auth
@@ -1161,6 +1227,36 @@ pub async fn get_grok_usage() -> Result<GrokUsageResponse, String> {
         Err(live_error) => read_cached_grok_usage(&grok_home, account_name)
             .map_err(|cache_error| format!("{live_error}；{cache_error}")),
     }
+}
+
+/// Grok Build usage. Shared by the Accounts view and tray popup.
+///
+/// When `force` is false/omitted, returns the in-memory cache if it is younger
+/// than 10 minutes. Manual refresh buttons should pass `force: true`.
+#[tauri::command]
+pub async fn get_grok_usage(force: Option<bool>) -> Result<GrokUsageResponse, String> {
+    let force = force.unwrap_or(false);
+    let now = usage_unix_now();
+    if !force {
+        if let Ok(guard) = GROK_USAGE_CACHE.lock() {
+            if let Some(entry) = guard.as_ref() {
+                if usage_cache_is_fresh(entry.fetched_at, now) {
+                    let mut usage = entry.data.clone();
+                    apply_grok_usage_timers(&mut usage, now);
+                    return Ok(usage);
+                }
+            }
+        }
+    }
+
+    let usage = fetch_grok_usage().await?;
+    if let Ok(mut guard) = GROK_USAGE_CACHE.lock() {
+        *guard = Some(UsageCacheEntry {
+            fetched_at: usage.fetched_at.max(now),
+            data: usage.clone(),
+        });
+    }
+    Ok(usage)
 }
 
 // --- Kimi Code quota via the Kimi CLI usages endpoint -----------------------
@@ -1441,8 +1537,7 @@ fn map_kimi_usage(
     })
 }
 
-#[tauri::command]
-pub async fn get_kimi_usage() -> Result<KimiUsageResponse, String> {
+async fn fetch_kimi_usage() -> Result<KimiUsageResponse, String> {
     let cred = resolve_kimi_credential()?;
 
     let client = reqwest::Client::builder()
@@ -1473,6 +1568,78 @@ pub async fn get_kimi_usage() -> Result<KimiUsageResponse, String> {
         cred.account_name,
         u64::try_from(Utc::now().timestamp()).unwrap_or(0),
     )
+}
+
+/// Kimi Code usage. Shared by the Accounts view and tray popup.
+///
+/// When `force` is false/omitted, returns the in-memory cache if it is younger
+/// than 10 minutes. Manual refresh buttons should pass `force: true`.
+#[tauri::command]
+pub async fn get_kimi_usage(force: Option<bool>) -> Result<KimiUsageResponse, String> {
+    let force = force.unwrap_or(false);
+    let now = usage_unix_now();
+    if !force {
+        if let Ok(guard) = KIMI_USAGE_CACHE.lock() {
+            if let Some(entry) = guard.as_ref() {
+                if usage_cache_is_fresh(entry.fetched_at, now) {
+                    let mut usage = entry.data.clone();
+                    apply_kimi_usage_timers(&mut usage, now);
+                    return Ok(usage);
+                }
+            }
+        }
+    }
+
+    let usage = fetch_kimi_usage().await?;
+    if let Ok(mut guard) = KIMI_USAGE_CACHE.lock() {
+        *guard = Some(UsageCacheEntry {
+            fetched_at: usage.fetched_at.max(now),
+            data: usage.clone(),
+        });
+    }
+    Ok(usage)
+}
+
+async fn fetch_codex_tray_snapshot() -> Result<CodexTraySnapshot, String> {
+    let (usage_result, credits_result) =
+        futures_util::future::join(get_codex_usage(), get_codex_reset_credits()).await;
+    let usage = usage_result?;
+    let now = usage_unix_now();
+    Ok(CodexTraySnapshot {
+        usage,
+        reset_credits: credits_result.ok(),
+        last_query_at: now,
+    })
+}
+
+/// Shared Codex usage snapshot for the Accounts view and tray popup.
+///
+/// When `force` is false/omitted, returns the in-memory cache if it is younger
+/// than 10 minutes. Manual refresh buttons should pass `force: true`.
+#[tauri::command]
+pub async fn get_codex_tray_usage(force: Option<bool>) -> Result<CodexTraySnapshot, String> {
+    let force = force.unwrap_or(false);
+    let now = usage_unix_now();
+    if !force {
+        if let Ok(guard) = CODEX_USAGE_CACHE.lock() {
+            if let Some(entry) = guard.as_ref() {
+                if usage_cache_is_fresh(entry.fetched_at, now) {
+                    let mut snapshot = entry.data.clone();
+                    apply_codex_snapshot_timers(&mut snapshot, now);
+                    return Ok(snapshot);
+                }
+            }
+        }
+    }
+
+    let snapshot = fetch_codex_tray_snapshot().await?;
+    if let Ok(mut guard) = CODEX_USAGE_CACHE.lock() {
+        *guard = Some(UsageCacheEntry {
+            fetched_at: snapshot.last_query_at,
+            data: snapshot.clone(),
+        });
+    }
+    Ok(snapshot)
 }
 
 #[cfg(test)]
@@ -1563,6 +1730,27 @@ mod tests {
         assert_eq!(usage.prepaid_balance, Some(0.0));
         assert_eq!(usage.on_demand_cap, Some(0.0));
         assert!(!usage.stale);
+    }
+
+    #[test]
+    fn usage_cache_ttl_is_ten_minutes() {
+        assert_eq!(USAGE_CACHE_TTL_SECS, 600);
+        let t0 = 1_000_000u64;
+        assert!(usage_cache_is_fresh(t0, t0 + 599));
+        assert!(!usage_cache_is_fresh(t0, t0 + 600));
+    }
+
+    #[test]
+    fn refresh_usage_window_timers_uses_reset_at() {
+        let mut window = UsageWindow {
+            used_percent: 10,
+            remaining_percent: 90,
+            reset_after_seconds: 9999,
+            reset_at: 1_000_500,
+            window_seconds: 18_000,
+        };
+        refresh_usage_window_timers(&mut window, 1_000_000);
+        assert_eq!(window.reset_after_seconds, 500);
     }
 
     #[test]
@@ -1808,7 +1996,7 @@ api_key = "sk-kimi-test-abc123"
             "expected the config.toml API key to start with sk-"
         );
 
-        let usage = tauri::async_runtime::block_on(get_kimi_usage())
+        let usage = tauri::async_runtime::block_on(get_kimi_usage(Some(true)))
             .expect("live usage query should succeed with config.toml credentials");
         assert!(
             !usage.usage_windows.is_empty(),

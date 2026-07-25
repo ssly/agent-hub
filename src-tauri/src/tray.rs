@@ -1,50 +1,12 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use serde::Serialize;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use tauri::Manager;
 use tauri::{App, AppHandle};
-
-use crate::switch::commands::{
-    get_codex_reset_credits, get_codex_usage, CodexResetCreditsResponse, CodexUsageResponse,
-};
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 const TRAY_ID: &str = "codex-usage-tray";
 const TRAY_WINDOW_WIDTH: f64 = 400.0;
 const TRAY_LOADING_HEIGHT: f64 = 120.0;
 const TRAY_MAX_HEIGHT: f64 = 620.0;
-
-#[derive(Clone, Serialize)]
-pub struct CodexTraySnapshot {
-    pub usage: CodexUsageResponse,
-    pub reset_credits: Option<CodexResetCreditsResponse>,
-    pub last_query_at: u64,
-}
-
-fn unix_now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
-
-async fn refresh_snapshot() -> Result<CodexTraySnapshot, String> {
-    let (usage_result, credits_result) =
-        futures_util::future::join(get_codex_usage(), get_codex_reset_credits()).await;
-
-    let usage = usage_result?;
-    Ok(CodexTraySnapshot {
-        usage,
-        reset_credits: credits_result.ok(),
-        last_query_at: unix_now(),
-    })
-}
-
-#[tauri::command]
-pub async fn get_codex_tray_usage() -> Result<CodexTraySnapshot, String> {
-    refresh_snapshot().await
-}
 
 #[tauri::command]
 pub fn resize_usage_tray(app: AppHandle, height: f64) {

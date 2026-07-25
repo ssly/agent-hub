@@ -363,11 +363,24 @@ export async function getCodexResetCredits() {
     ],
   }
 }
-export async function getCodexTrayUsage() {
+// In-memory mock cache mirrors the real 10-minute backend TTL.
+const MOCK_USAGE_TTL_MS = 10 * 60 * 1000
+let mockCodexTray: { at: number; data: any } | null = null
+let mockGrokUsage: { at: number; data: any } | null = null
+let mockKimiUsage: { at: number; data: any } | null = null
+
+function mockCacheFresh(entry: { at: number } | null) {
+  return Boolean(entry && Date.now() - entry.at < MOCK_USAGE_TTL_MS)
+}
+
+export async function getCodexTrayUsage(force = false) {
+  if (!force && mockCacheFresh(mockCodexTray)) {
+    return structuredClone(mockCodexTray!.data)
+  }
   await delay()
   const now = Math.floor(Date.now() / 1000)
   const expiries = [46, 118, 190, 262].map(hours => new Date(Date.now() + hours * 3600_000).toISOString())
-  return {
+  const payload = {
     usage: {
       account_name: 'codex@example.com',
       plan_type: 'plus',
@@ -392,23 +405,28 @@ export async function getCodexTrayUsage() {
     },
     last_query_at: now,
   }
+  mockCodexTray = { at: Date.now(), data: payload }
+  return structuredClone(payload)
 }
-export async function getGrokUsage() {
+export async function getGrokUsage(force = false) {
+  if (!force && mockCacheFresh(mockGrokUsage)) {
+    return structuredClone(mockGrokUsage!.data)
+  }
   await delay()
   const now = Math.floor(Date.now() / 1000)
-  return {
+  const payload = {
     account_name: 'default@grok.build',
     plan_type: 'SuperGrok',
-    period_type: 'monthly',
+    period_type: 'weekly',
     usage_window: {
-      used_percent: 5,
-      remaining_percent: 95,
+      used_percent: 4,
+      remaining_percent: 96,
       reset_after_seconds: 345600,
       reset_at: now + 345600,
-      window_seconds: 2678400,
+      window_seconds: 604800,
     },
-    limit_value: 15000,
-    used_value: 728,
+    limit_value: null,
+    used_value: null,
     prepaid_balance: 0,
     on_demand_cap: 0,
     on_demand_used: 0,
@@ -417,13 +435,18 @@ export async function getGrokUsage() {
     fetched_at: now,
     stale: false,
   }
+  mockGrokUsage = { at: Date.now(), data: payload }
+  return structuredClone(payload)
 }
 export async function getUsageProviderAvailability() {
   return { codex: true, grok_build: true, kimi_code: true }
 }
 export async function resizeUsageTray() {}
 
-export async function getKimiUsage() {
+export async function getKimiUsage(force = false) {
+  if (!force && mockCacheFresh(mockKimiUsage)) {
+    return structuredClone(mockKimiUsage!.data)
+  }
   await delay()
   const now = Math.floor(Date.now() / 1000)
   const window5h = {
@@ -440,7 +463,7 @@ export async function getKimiUsage() {
     reset_at: now + 86_400 * 4,
     window_seconds: 604_800,
   }
-  return {
+  const payload = {
     account_name: 'demo@kimi.com',
     auth_method: 'METHOD_API_KEY',
     window_5h: window5h,
@@ -450,6 +473,8 @@ export async function getKimiUsage() {
     usage_windows: [window5h, windowWeekly],
     fetched_at: now,
   }
+  mockKimiUsage = { at: Date.now(), data: payload }
+  return structuredClone(payload)
 }
 
 // Codex session monitor

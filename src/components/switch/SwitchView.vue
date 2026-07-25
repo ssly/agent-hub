@@ -187,7 +187,8 @@ function fmtLastQuery(): string {
 
 async function handleRefreshUsage() {
   if (store.codexUsageLoading) return
-  await store.refreshCodexUsage()
+  // Explicit refresh always bypasses the 10-minute backend cache.
+  await store.refreshCodexUsage(true)
   if (store.codexUsageError) {
     showToast(t('switch.usage_failed'), 'error')
   } else {
@@ -197,7 +198,7 @@ async function handleRefreshUsage() {
 
 async function handleRefreshGrokUsage() {
   if (store.grokUsageLoading) return
-  await store.refreshGrokUsage()
+  await store.refreshGrokUsage(true)
   if (store.grokUsageError) {
     showToast(t('switch.usage_failed'), 'error')
   } else {
@@ -207,7 +208,7 @@ async function handleRefreshGrokUsage() {
 
 async function handleRefreshKimiUsage() {
   if (store.kimiUsageLoading) return
-  await store.refreshKimiUsage()
+  await store.refreshKimiUsage(true)
   if (store.kimiUsageError) {
     showToast(t('switch.usage_failed'), 'error')
   } else {
