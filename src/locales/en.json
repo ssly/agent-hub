@@ -355,6 +355,8 @@
   "tray": {
     "title": "Usage Query",
     "provider": "Usage provider",
+    "menu_check_updates": "Check for Updates",
+    "menu_quit": "Quit",
     "login_required": "You are not signed in to Codex, Grok Build, or Kimi Code. Sign in, then query again.",
     "query_wait": "Querying, please wait…",
     "retry": "Retry",

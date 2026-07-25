@@ -355,6 +355,8 @@
   "tray": {
     "title": "用量查询",
     "provider": "用量平台",
+    "menu_check_updates": "检查更新",
+    "menu_quit": "退出",
     "login_required": "你没有登录 Codex、Grok Build、Kimi Code 等账号，请先登录后再次查询。",
     "query_wait": "正在查询，请稍候…",
     "retry": "重试",

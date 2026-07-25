@@ -494,15 +494,24 @@ pub fn get_locale(state: tauri::State<'_, SafeState>) -> String {
 }
 
 #[tauri::command]
-pub fn set_locale(state: tauri::State<'_, SafeState>, locale: String) -> String {
-    let mut s = state.lock().unwrap();
-    s.locale = match locale.as_str() {
-        "zh-CN" | "zh" => crate::i18n::Locale::ZhCn,
-        _ => crate::i18n::Locale::En,
+pub fn set_locale(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SafeState>,
+    locale: String,
+) -> String {
+    let tag = {
+        let mut s = state.lock().unwrap();
+        s.locale = match locale.as_str() {
+            "zh-CN" | "zh" => crate::i18n::Locale::ZhCn,
+            _ => crate::i18n::Locale::En,
+        };
+        s.config.general.language = s.locale.tag().to_string();
+        let _ = s.config.save();
+        s.locale.tag().to_string()
     };
-    s.config.general.language = s.locale.tag().to_string();
-    let _ = s.config.save();
-    s.locale.tag().to_string()
+    // Keep the native tray right-click menu in sync with the UI language.
+    crate::tray::apply_locale(&app, &tag);
+    tag
 }
 
 #[tauri::command]

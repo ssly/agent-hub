@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { onMounted, watch, computed } from 'vue'
+import { onMounted, onBeforeUnmount, watch, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { invoke, Channel } from '@tauri-apps/api/core'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useAppStore } from '@/stores/app'
 import { useSkillsStore } from '@/stores/skills'
 import { useToast } from '@/composables/useToast'
@@ -301,8 +302,26 @@ watch(() => appStore.locale, (newVal) => {
   locale.value = newVal
 }, { immediate: true })
 
+// Unlisten handles for tray → main-window events.
+let trayUnlisten: UnlistenFn | null = null
+
 onMounted(async () => {
   await appStore.init()
+
+  // Tray right-click "Check for Updates" opens About and runs the same flow
+  // as the sidebar About modal (no separate updater path).
+  if (isTauri) {
+    try {
+      trayUnlisten = await listen('tray-check-updates', async () => {
+        appStore.aboutModalOpen = true
+        if (appStore.updateStatus !== 'installing' && appStore.updateStatus !== 'checking') {
+          await handleCheckUpdates()
+        }
+      })
+    } catch (e) {
+      console.warn('[tray] failed to listen for tray-check-updates', e)
+    }
+  }
 
   // Perform a silent background update check shortly after launch.
   // This provides the "update notification" the user expects.
@@ -310,6 +329,11 @@ onMounted(async () => {
   setTimeout(() => {
     checkForUpdatesSilently()
   }, 2500)
+})
+
+onBeforeUnmount(() => {
+  trayUnlisten?.()
+  trayUnlisten = null
 })
 </script>
 
