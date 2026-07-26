@@ -1,6 +1,6 @@
 {
   "ui": {
-    "title": "智能体中枢",
+    "title": "中枢",
     "platforms": "平台列表",
     "plugins_tab": "插件",
     "sessions_tab": "会话",
@@ -431,8 +431,8 @@
     "source_chatgpt": "ChatGPT 客户端",
     "status_running": "进行中",
     "status_ended": "已结束",
-    "user_question": "用户问题",
-    "assistant_reply": "Agent 回复",
+    "user_question": "问题",
+    "assistant_reply": "回答",
     "no_prompt": "暂未捕获用户问题",
     "waiting_reply": "正在等待 Codex 回复…",
     "no_reply": "暂未捕获 Agent 回复",

@@ -47,6 +47,9 @@ src/
     switch.ts             # 账号切换 + Codex 用量
   composables/
     useToast.ts           # 全局 toast
+  directives/
+    auto-resize.ts        # v-auto-resize：textarea 自适应高度
+    tooltip.ts            # v-tooltip：替代原生 title 的主题化悬浮提示
   lib/
     api.ts                # Tauri invoke 封装（所有后端命令，含 getCodexUsage）
     mock-api.ts           # 浏览器调试 mock 数据
@@ -102,7 +105,7 @@ npm run version [-- <ver>] # 从 git tag 同步版本号
 ## 前端约定
 
 - Vue 3 SPA，通过 `src/App.vue` + Pinia `stores/app.ts` 切换视图
-- 侧边栏 tabs：Plugins、Sessions、Accounts；Plugins 内聚合 Skill、MCP 与 Claude Code 原生插件
+- 侧边栏顶部为纵向导航（图标 + 文字）：Plugins、Sessions、Monitor、Accounts；Plugins 内聚合 Skill、MCP 与 Claude Code 原生插件
 - 数据流：组件 → `stores/*` → `lib/api.ts` → Tauri IPC → Rust 命令
 - 国际化：vue-i18n 加载 `src/locales/*.json`
 - 主题：`src/assets/theme.css` CSS 变量 + localStorage 持久化

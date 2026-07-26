@@ -1,6 +1,6 @@
 {
   "ui": {
-    "title": "AGENT HUB",
+    "title": "HUB",
     "platforms": "Platforms",
     "plugins_tab": "Plugins",
     "sessions_tab": "Sessions",
@@ -431,8 +431,8 @@
     "source_chatgpt": "ChatGPT client",
     "status_running": "Running",
     "status_ended": "Ended",
-    "user_question": "User prompt",
-    "assistant_reply": "Agent reply",
+    "user_question": "Question",
+    "assistant_reply": "Answer",
     "no_prompt": "No user prompt captured",
     "waiting_reply": "Waiting for Codex to reply…",
     "no_reply": "No Agent reply captured",

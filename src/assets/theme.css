@@ -870,31 +870,6 @@
 .ah-sidebar__header-btn svg { display: block; }
 .ah-sidebar__header-btn:hover { color: var(--ink); background: var(--hover); }
 
-/* Tab Bar */
-.ah-tab-bar {
-  display: flex;
-  border-bottom: 1px solid var(--hairline);
-}
-.ah-tab {
-  flex: 1 1 0;
-  min-width: 0;
-  padding: 9px 8px;
-  font-size: 13px;
-  font-weight: 400;
-  color: var(--ink-3);
-  cursor: pointer;
-  border: none;
-  background: transparent;
-  border-bottom: 2px solid transparent;
-  transition: color var(--dur-fast) var(--ease-soft), background var(--dur-fast) var(--ease-soft);
-}
-.ah-tab:hover { color: var(--ink); background: var(--hover); }
-.ah-tab.is-active {
-  color: var(--ink);
-  font-weight: 500;
-  border-bottom-color: var(--accent);
-}
-
 /* Platform List */
 .ah-platform-list { padding: 7px 10px; }
 .ah-platform-item {
@@ -1209,3 +1184,30 @@ button:active:not(:disabled) {
   overflow-wrap: anywhere;
   word-break: break-word;
 }
+
+
+/* ============================================================
+   § 22. Tooltip (v-tooltip directive, single shared element)
+   ============================================================ */
+/* Inverted ink/canvas pair: dark bubble on the light theme, light bubble
+   on the night theme — always from the same palette. */
+.ah-tooltip {
+  position: fixed;
+  z-index: 90;
+  max-width: 26rem;
+  max-height: 40vh;
+  overflow: hidden;
+  padding: 7px 11px;
+  border-radius: var(--radius-sm);
+  background: var(--ink);
+  color: var(--canvas);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  box-shadow: var(--shadow-soft);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease-soft);
+}
+.ah-tooltip.is-visible { opacity: 0.96; }

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { FolderOpen, Globe2, X } from 'lucide-vue-next'
+import { Activity, Blocks, FolderOpen, Globe2, MessagesSquare, UserRound, X } from 'lucide-vue-next'
 import { useAppStore } from '@/stores/app'
 import { useSkillsStore } from '@/stores/skills'
 import { usePluginsStore } from '@/stores/plugins'
@@ -48,10 +48,10 @@ async function handleUseGlobalDirectory() {
 }
 
 const tabs = [
-  { id: 'plugins' as const, labelKey: 'ui.plugins_tab' },
-  { id: 'sessions' as const, labelKey: 'ui.sessions_tab' },
-  { id: 'monitor' as const, labelKey: 'ui.monitor_tab' },
-  { id: 'accounts' as const, labelKey: 'ui.accounts_tab' },
+  { id: 'plugins' as const, labelKey: 'ui.plugins_tab', icon: Blocks },
+  { id: 'sessions' as const, labelKey: 'ui.sessions_tab', icon: MessagesSquare },
+  { id: 'monitor' as const, labelKey: 'ui.monitor_tab', icon: Activity },
+  { id: 'accounts' as const, labelKey: 'ui.accounts_tab', icon: UserRound },
 ]
 
 async function handleTabClick(tabId: typeof tabs[number]['id']) {
@@ -150,7 +150,7 @@ function handleSessionSearch(e: Event) {
       <span v-show="!appStore.sidebarCollapsed" class="ah-sidebar__brand">
         {{ t('ui.title') }}
       </span>
-      <div class="flex items-center gap-0.5 shrink-0">
+      <div class="flex items-center gap-0.5 shrink-0 ml-auto">
         <button v-show="!appStore.sidebarCollapsed" class="ah-sidebar__header-btn" @click="appStore.switchLocale()">
           {{ appStore.locale === 'en' ? 'EN' : '中' }}
         </button>
@@ -165,17 +165,18 @@ function handleSessionSearch(e: Event) {
 
     <!-- Content (hidden when collapsed) -->
     <template v-if="!appStore.sidebarCollapsed">
-      <!-- Tab Bar -->
-      <div class="ah-tab-bar ah-tab-bar--dense">
+      <!-- Vertical nav (language-agnostic widths, matches platform list) -->
+      <nav class="ah-nav">
         <button
           v-for="tab in tabs"
           :key="tab.id"
-          :class="['ah-tab', appStore.currentTab === tab.id ? 'is-active' : '']"
+          :class="['ah-nav-item', appStore.currentTab === tab.id ? 'is-active' : '']"
           @click="handleTabClick(tab.id)"
         >
-          {{ t(tab.labelKey) }}
+          <component :is="tab.icon" :size="15" class="ah-nav-item__icon" />
+          <span>{{ t(tab.labelKey) }}</span>
         </button>
-      </div>
+      </nav>
 
       <div v-if="appStore.currentTab === 'plugins'" class="ah-scope-picker">
         <div class="ah-scope-picker__label">{{ t('plugin.scope_label') }}</div>
@@ -290,12 +291,36 @@ function handleSessionSearch(e: Event) {
 </template>
 
 <style scoped>
-.ah-tab-bar--dense .ah-tab {
-  padding-right: 4px;
-  padding-left: 4px;
-  font-size: 12px;
-  white-space: nowrap;
+.ah-nav {
+  padding: 8px 10px 7px;
+  border-bottom: 1px solid var(--hairline);
 }
+.ah-nav-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 9px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  margin-bottom: 1px;
+  transition: background var(--dur-fast) var(--ease-soft), color var(--dur-fast) var(--ease-soft);
+}
+.ah-nav-item:hover { background: var(--hover); color: var(--ink); }
+.ah-nav-item.is-active {
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+.ah-nav-item__icon { flex-shrink: 0; color: var(--ink-3); transition: color var(--dur-fast) var(--ease-soft); }
+.ah-nav-item:hover .ah-nav-item__icon { color: var(--ink-2); }
+.ah-nav-item.is-active .ah-nav-item__icon { color: var(--accent); }
 .ah-scope-picker {
   padding: 10px;
   border-bottom: 1px solid var(--hairline);

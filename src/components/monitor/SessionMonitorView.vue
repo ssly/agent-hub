@@ -128,11 +128,11 @@ onUnmounted(() => store.dispose())
           <time class="session-time">{{ formatTime(session.updatedAt) }}</time>
         </div>
 
-        <div class="session-row__line" :title="session.userPrompt || ''">
+        <div class="session-row__line" v-tooltip="session.userPrompt">
           <span>{{ t('session_monitor.user_question') }}</span>
           <p>{{ session.userPrompt || t('session_monitor.no_prompt') }}</p>
         </div>
-        <div class="session-row__line" :title="session.assistantReply || ''">
+        <div class="session-row__line" v-tooltip="session.assistantReply">
           <span>{{ t('session_monitor.assistant_reply') }}</span>
           <p>{{ session.assistantReply || (session.status === 'running' ? t('session_monitor.waiting_reply') : t('session_monitor.no_reply')) }}</p>
         </div>
@@ -226,7 +226,7 @@ onUnmounted(() => store.dispose())
 .session-status--running { color: var(--success); }
 .session-status--ended { color: var(--ink-4); }
 .session-time { margin-left: auto; color: var(--ink-4); font: 11px/1 var(--font-mono); }
-.session-row__line { display: grid; grid-template-columns: 58px minmax(0, 1fr); align-items: center; gap: 7px; min-width: 0; font-size: 12.5px; line-height: 1.8; }
+.session-row__line { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px; min-width: 0; font-size: 12.5px; line-height: 1.8; }
 .session-row__line > span { color: var(--ink-4); }
 .session-row__line > p { min-width: 0; overflow: hidden; color: var(--ink-2); text-overflow: ellipsis; white-space: nowrap; }
 .monitor-empty { min-height: 230px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--ink-4); text-align: center; }

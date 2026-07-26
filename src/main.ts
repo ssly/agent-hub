@@ -4,6 +4,7 @@ import { createI18n } from 'vue-i18n'
 import App from './App.vue'
 import CodexTrayView from './components/tray/CodexTrayView.vue'
 import { vAutoResize } from './directives/auto-resize'
+import { vTooltip } from './directives/tooltip'
 import { platform } from './lib/utils'
 import en from './locales/en.json'
 import zhCN from './locales/zh-CN.json'
@@ -36,4 +37,5 @@ const app = createApp(rootComponent)
 app.use(createPinia())
 app.use(i18n)
 app.directive('auto-resize', vAutoResize)
+app.directive('tooltip', vTooltip)
 app.mount('#app')
