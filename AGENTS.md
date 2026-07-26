@@ -35,6 +35,7 @@ src/
     mcp/                  # McpListView
     sessions/             # SessionListView
     switch/               # SwitchView（含 Codex 用量面板）
+    tray/                 # 托盘用量弹窗：CodexTrayView + UsageOrb（泡泡水 + 圆环可视化）
     diff/                 # DiffView
     search/               # SearchResults
   stores/                 # Pinia stores

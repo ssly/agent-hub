@@ -78,6 +78,7 @@ function fmtCreditExpiry(iso?: string | null): string {
 // the panel reads fully translated under zh-CN.
 const CREDIT_TITLE_MAP: Record<string, string> = {
   'full reset (weekly + 5 hr)': 'switch.usage_credit_title_full',
+  'full reset': 'switch.usage_credit_title_full_plain',
 }
 function fmtCreditTitle(title?: string | null): string {
   if (!title) return t('switch.usage_credit_default_title')

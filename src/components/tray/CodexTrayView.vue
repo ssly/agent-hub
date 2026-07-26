@@ -11,6 +11,7 @@ import type {
   UsageProviderAvailability,
   UsageWindow,
 } from '@/lib/api'
+import UsageOrb, { type OrbTone, type OrbWindow } from './UsageOrb.vue'
 
 const { t, locale } = useI18n()
 type UsageProvider = 'codex' | 'grok-build' | 'kimi-code'
@@ -40,13 +41,8 @@ const initialLoading = computed(() => compactLoading.value)
 let refreshSequence = 0
 let resizeSequence = 0
 
-type WindowTone = 'primary' | 'secondary' | 'monthly'
-interface TrayUsageWindow {
-  key: string
-  label: string
-  tone: WindowTone
-  window: UsageWindow
-}
+type WindowTone = OrbTone
+type TrayUsageWindow = OrbWindow
 
 function preferredProviderFromAccounts(): UsageProvider {
   const stored = localStorage.getItem('ah-switch-agent')
@@ -153,11 +149,17 @@ const grokAccountName = computed(() =>
 const grokPlanBadge = computed(() =>
   t('switch.usage_plan_badge', { plan: grokUsage.value?.plan_type || 'Grok' })
 )
-const grokPeriodLabel = computed(() =>
-  grokUsage.value?.period_type === 'monthly'
-    ? t('switch.grok_monthly_window')
-    : t('switch.grok_weekly_window')
-)
+// Grok exposes a single window, rendered by the orb as a lone bubble tank.
+const grokWindows = computed<TrayUsageWindow[]>(() => {
+  const window = grokUsage.value?.usage_window
+  if (!window) return []
+  return [{
+    key: 'grok',
+    label: windowLabel(window.window_seconds),
+    tone: windowTone(window.window_seconds),
+    window,
+  }]
+})
 
 const kimiAccountName = computed(() =>
   kimiUsage.value?.account_name || t('switch.kimi_default_account')
@@ -173,48 +175,24 @@ function clampHeight(height: number) {
   return Math.min(620, Math.max(120, height))
 }
 
-function contentHeight() {
-  if (loginUnavailable.value) return 210
-  if (error.value) return 300
+const panelRef = ref<HTMLElement | null>(null)
 
-  // Constants mirror the tray stylesheet: base chrome = panel padding 24 +
-  // header 32 + provider switch 40 + footer 24 = 120. Quota = wrap padding 22
-  // + ring (100 single / 88 multi) + gap 6 + label 14. Credit rows = chips of
-  // 28px + 8px gaps + 10px section padding, 3 chips per row.
-  if (selectedProvider.value === 'codex') {
-    if (!snapshot.value) return 240
-    const creditCount = resetCards.value.length
-    const quotaHeight = usageWindows.value.length > 0
-      ? (usageWindows.value.length === 1 ? 142 : 130)
-      : 70
-    const creditRows = Math.ceil(creditCount / 3)
-    const creditHeight = snapshot.value
-      ? (creditCount > 0 ? 10 + creditRows * 28 + (creditRows - 1) * 8 : 44)
-      : 0
-    return clampHeight(120 + quotaHeight + creditHeight)
-  }
-
-  if (selectedProvider.value === 'kimi-code') {
-    // Same multi-window ring layout as Codex, minus the credit section.
-    if (!kimiUsage.value) return 240
-    const quotaHeight = kimiWindows.value.length > 0
-      ? (kimiWindows.value.length === 1 ? 142 : 130)
-      : 70
-    return clampHeight(120 + quotaHeight)
-  }
-
-  if (!grokUsage.value) return 240
-  // Base chrome 120 + metadata 44 + quota ring 142.
-  return clampHeight(306 + (grokUsage.value.stale ? 40 : 0))
-}
-
+// Measure the rendered panel instead of maintaining per-state height
+// constants: the window always fits the content exactly, so footer rows
+// (e.g. last-query time) can never be clipped by the sections above.
 async function applyContentHeight() {
   const sequence = ++resizeSequence
   await nextTick()
   await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
   if (sequence !== resizeSequence || compactLoading.value) return
+  const panel = panelRef.value
+  if (!panel) return
+  // Force synchronous layout at natural height, then restore before paint.
+  panel.style.height = 'auto'
+  const measured = panel.offsetHeight
+  panel.style.height = ''
   try {
-    await resizeUsageTray(contentHeight())
+    await resizeUsageTray(clampHeight(measured + 16)) // + shell padding 8×2
   } catch {
     // Browser preview and unsupported platforms may not own a native tray window.
   }
@@ -230,22 +208,6 @@ watch(
   },
   { flush: 'post' },
 )
-
-function safePercent(window: UsageWindow) {
-  return Math.min(100, Math.max(0, window.used_percent ?? 0))
-}
-
-function remainingPercent(window: UsageWindow) {
-  const remaining = window.remaining_percent ?? (100 - safePercent(window))
-  return Math.min(100, Math.max(0, Math.round(remaining)))
-}
-
-// SVG progress-ring geometry (viewBox 0 0 120 120).
-const RING_R = 52
-const RING_C = 2 * Math.PI * RING_R
-function ringDash(percent: number) {
-  return `${((RING_C * percent) / 100).toFixed(1)} ${RING_C.toFixed(1)}`
-}
 
 function formatDate(value: number | string, withSeconds = false) {
   const date = typeof value === 'number' ? new Date(value * 1000) : new Date(value)
@@ -403,7 +365,7 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="tray-shell">
-    <section class="tray-panel" :class="{ 'tray-panel--loading': initialLoading }">
+    <section ref="panelRef" class="tray-panel" :class="{ 'tray-panel--loading': initialLoading }">
       <header class="tray-header">
         <div class="tray-title">
           <span v-if="!initialLoading" class="tray-logo" aria-hidden="true">
@@ -460,26 +422,7 @@ onBeforeUnmount(() => {
 
         <template v-else-if="selectedProvider === 'codex'">
           <div class="quota-wrap" :class="{ 'is-loading': loading }">
-            <div v-if="usageWindows.length" class="ring-list" :class="{ 'ring-list--single': usageWindows.length === 1 }">
-              <div v-for="item in usageWindows" :key="item.key" class="ring-item" :class="`ring-item--${item.tone}`">
-                <div class="ring-graph">
-                  <svg viewBox="0 0 120 120" aria-hidden="true">
-                    <circle class="ring-track" cx="60" cy="60" :r="RING_R" />
-                    <circle
-                      class="ring-fill"
-                      cx="60" cy="60" :r="RING_R"
-                      :stroke-dasharray="ringDash(remainingPercent(item.window))"
-                      transform="rotate(-90 60 60)"
-                    />
-                  </svg>
-                  <div class="ring-value">
-                    <strong>{{ remainingPercent(item.window) }}%</strong>
-                    <span>{{ t('tray.remaining') }}</span>
-                  </div>
-                </div>
-                <span class="ring-label">{{ item.label }} {{ t('tray.limit') }}</span>
-              </div>
-            </div>
+            <UsageOrb v-if="usageWindows.length" :windows="usageWindows" />
             <div v-else-if="error" class="quota-message">
               <strong>{{ t('tray.failed') }}</strong>
               <span>{{ error }}</span>
@@ -523,26 +466,7 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="quota-wrap" :class="{ 'is-loading': loading }">
-            <div v-if="kimiWindows.length" class="ring-list" :class="{ 'ring-list--single': kimiWindows.length === 1 }">
-              <div v-for="item in kimiWindows" :key="item.key" class="ring-item" :class="`ring-item--${item.tone}`">
-                <div class="ring-graph">
-                  <svg viewBox="0 0 120 120" aria-hidden="true">
-                    <circle class="ring-track" cx="60" cy="60" :r="RING_R" />
-                    <circle
-                      class="ring-fill"
-                      cx="60" cy="60" :r="RING_R"
-                      :stroke-dasharray="ringDash(remainingPercent(item.window))"
-                      transform="rotate(-90 60 60)"
-                    />
-                  </svg>
-                  <div class="ring-value">
-                    <strong>{{ remainingPercent(item.window) }}%</strong>
-                    <span>{{ t('tray.remaining') }}</span>
-                  </div>
-                </div>
-                <span class="ring-label">{{ item.label }} {{ t('tray.limit') }}</span>
-              </div>
-            </div>
+            <UsageOrb v-if="kimiWindows.length" :windows="kimiWindows" />
             <div v-else-if="error" class="quota-message">
               <strong>{{ t('tray.failed') }}</strong>
               <span>{{ error }}</span>
@@ -575,27 +499,8 @@ onBeforeUnmount(() => {
             {{ t('switch.grok_stale_warning') }}
           </div>
 
-          <div class="quota-wrap quota-wrap--grok" :class="{ 'is-loading': loading }">
-            <div v-if="grokUsage" class="ring-list ring-list--single">
-              <div class="ring-item ring-item--secondary">
-                <div class="ring-graph">
-                  <svg viewBox="0 0 120 120" aria-hidden="true">
-                    <circle class="ring-track" cx="60" cy="60" :r="RING_R" />
-                    <circle
-                      class="ring-fill"
-                      cx="60" cy="60" :r="RING_R"
-                      :stroke-dasharray="ringDash(remainingPercent(grokUsage.usage_window))"
-                      transform="rotate(-90 60 60)"
-                    />
-                  </svg>
-                  <div class="ring-value">
-                    <strong>{{ remainingPercent(grokUsage.usage_window) }}%</strong>
-                    <span>{{ t('tray.remaining') }}</span>
-                  </div>
-                </div>
-                <span class="ring-label">{{ grokPeriodLabel }}</span>
-              </div>
-            </div>
+          <div class="quota-wrap" :class="{ 'is-loading': loading }">
+            <UsageOrb v-if="grokWindows.length" :windows="grokWindows" />
             <div v-else-if="error" class="quota-message">
               <strong>{{ t('tray.failed') }}</strong>
               <span>{{ error }}</span>
@@ -856,48 +761,6 @@ onBeforeUnmount(() => {
   transition: opacity .18s ease;
 }
 .quota-wrap.is-loading { opacity: .72; }
-
-/* Remaining-quota rings. Tone colors come from currentColor on .ring-item. */
-.ring-list { display: flex; justify-content: center; gap: 24px; }
-.ring-item { display: flex; flex-direction: column; align-items: center; gap: 6px; }
-.ring-graph { position: relative; width: 88px; height: 88px; }
-.ring-list--single .ring-graph { width: 100px; height: 100px; }
-.ring-graph svg { display: block; width: 100%; height: 100%; }
-.ring-track { fill: none; stroke: var(--tray-inset); stroke-width: 10; }
-.ring-fill {
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 10;
-  stroke-linecap: round;
-  transition: stroke-dasharray .5s cubic-bezier(.2, .8, .2, 1);
-}
-.ring-item--primary { color: var(--tray-accent); }
-.ring-item--secondary { color: var(--tray-success); }
-.ring-item--monthly { color: var(--tray-highlight); }
-.ring-value {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0;
-}
-.ring-value strong {
-  color: var(--tray-ink);
-  font-size: 16px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-.ring-list--single .ring-value strong { font-size: 19px; }
-.ring-value span { color: var(--tray-ink-3); font-size: 10px; }
-.ring-label {
-  color: var(--tray-ink-2);
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
 
 .quota-message {
   display: flex;

@@ -321,6 +321,7 @@
     "usage_credit_expires_at": "(expires {date})",
     "usage_reset_at": "(resets {date})",
     "usage_credit_title_full": "Full reset (Weekly + 5-hour)",
+    "usage_credit_title_full_plain": "Full reset",
     "usage_credit_available": "Available",
     "usage_credit_used": "Used",
     "usage_credit_redeemed": "Redeemed",
@@ -374,6 +375,7 @@
     "remaining": "left",
     "no_usage": "No usage windows returned for this account",
     "last_query": "Last query: {time}",
+    "reset_at": "Resets {time}",
     "failed": "Query failed"
   },
   "monitor": {

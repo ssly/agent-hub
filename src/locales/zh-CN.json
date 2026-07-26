@@ -321,6 +321,7 @@
     "usage_credit_expires_at": "（{date} 到期）",
     "usage_reset_at": "（{date} 重置）",
     "usage_credit_title_full": "完整重置（周窗 + 5 小时窗）",
+    "usage_credit_title_full_plain": "完整重置",
     "usage_credit_available": "可用",
     "usage_credit_used": "已使用",
     "usage_credit_redeemed": "已兑换",
@@ -374,6 +375,7 @@
     "remaining": "剩余",
     "no_usage": "当前账号没有返回用量窗口",
     "last_query": "上次查询：{time}",
+    "reset_at": "重置：{time}",
     "failed": "查询失败"
   },
   "monitor": {
