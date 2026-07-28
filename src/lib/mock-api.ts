@@ -8,21 +8,51 @@
 
 const PLATFORMS = [
   {
-    id: 'claude-code',
-    display_name: 'Claude Code',
-    skill_dir: '~/.claude/commands',
-    skill_count: 12,
+    id: 'shared-pool',
+    display_name: 'Shared Pool',
+    skill_dir: '~/.agents/skills',
+    skill_count: 8,
   },
   {
     id: 'codex',
     display_name: 'Codex',
-    skill_dir: '~/.codex/skills',
-    skill_count: 5,
+    skill_dir: '~/.agents/skills',
+    skill_count: 8,
+  },
+  {
+    id: 'claude-code',
+    display_name: 'Claude Code',
+    skill_dir: '~/.claude/skills',
+    skill_count: 12,
+  },
+  {
+    id: 'antigravity',
+    display_name: 'Antigravity',
+    skill_dir: '~/.gemini/config/skills',
+    skill_count: 4,
+  },
+  {
+    id: 'gemini',
+    display_name: 'Gemini CLI',
+    skill_dir: '~/.gemini/skills',
+    skill_count: 3,
+  },
+  {
+    id: 'grok-build',
+    display_name: 'Grok Build',
+    skill_dir: '~/.grok/skills',
+    skill_count: 2,
+  },
+  {
+    id: 'kimi-code',
+    display_name: 'Kimi Code',
+    skill_dir: '~/.kimi-code/skills',
+    skill_count: 6,
   },
   {
     id: 'cursor',
     display_name: 'Cursor',
-    skill_dir: '~/.cursor/commands',
+    skill_dir: '~/.cursor/skills',
     skill_count: 3,
   },
 ]
@@ -56,7 +86,12 @@ function makeSkillDetail(name: string) {
 }
 
 const MCP_PLATFORMS = [
+  { id: 'codex', display_name: 'Codex', server_count: 3, config_path: '~/.codex/config.toml', format: 'toml' },
   { id: 'claude-code', display_name: 'Claude Code', server_count: 4, config_path: '~/.claude.json', format: 'json' },
+  { id: 'antigravity', display_name: 'Antigravity', server_count: 2, config_path: '~/.gemini/config/mcp_config.json', format: 'json' },
+  { id: 'gemini', display_name: 'Gemini CLI', server_count: 1, config_path: '~/.gemini/settings.json', format: 'json' },
+  { id: 'grok-build', display_name: 'Grok Build', server_count: 1, config_path: '~/.grok/config.toml', format: 'toml' },
+  { id: 'kimi-code', display_name: 'Kimi Code', server_count: 2, config_path: '~/.kimi-code/mcp.json', format: 'json' },
   { id: 'cursor', display_name: 'Cursor', server_count: 2, config_path: '~/.cursor/mcp.json', format: 'json' },
 ]
 
@@ -83,8 +118,10 @@ function makeMcpServers(platformId: string) {
 }
 
 const SESSION_PLATFORMS = [
-  { id: 'claude-code', display_name: 'Claude Code', session_count: 28 },
   { id: 'codex', display_name: 'Codex', session_count: 5 },
+  { id: 'claude-code', display_name: 'Claude Code', session_count: 28 },
+  { id: 'grok', display_name: 'Grok Build', session_count: 2 },
+  { id: 'kiro', display_name: 'Kiro', session_count: 3 },
 ]
 
 function makeSessions(offset: number, limit: number) {
@@ -223,6 +260,14 @@ export async function listSessionTerminals() {
   ]
 }
 export async function resumeSession() { await delay(300); return 'claude --resume session-0' }
+export async function getSessionResumePreview(platformId: string, sessionId: string) {
+  await delay(300)
+  return {
+    command: `cd '/Users/demo/projects/agent-hub' && ${platformId === 'codex' ? `codex resume ${sessionId}` : `claude --resume ${sessionId}`}`,
+    last_user_message: '帮我把这个 Vue 3 组件重构成组合式函数,逻辑复用性太差了。',
+    last_assistant_message: '已完成重构,逻辑抽到了 useSessionList 里,组件只负责渲染。',
+  }
+}
 export async function getSessionMessages() {
   await delay();
   const now = Date.now();
@@ -477,58 +522,78 @@ export async function getKimiUsage(force = false) {
   return structuredClone(payload)
 }
 
-// Codex session monitor
+// Session monitor
 let codexHookInstalled = false
+let claudeHookInstalled = false
 
-export async function getCodexSessionMonitorSnapshot() {
-  await delay()
-  return {
-    revision: 2,
-    sessions: [
-      {
-        sessionId: '019f85-chatgpt',
-        turnId: 'turn-running',
-        source: 'chatgpt',
-        status: 'running',
-        cwd: '/Users/demo/projects/agent-hub',
-        userPrompt: '实现 Codex 会话监听，并确保 Hook 安装过程不会影响已有配置。',
-        assistantReply: null,
-        updatedAt: Date.now() - 12_000,
-      },
-      {
-        sessionId: '019f84-terminal',
-        turnId: 'turn-ended',
-        source: 'terminal',
-        status: 'ended',
-        cwd: '/Users/demo/projects/api-server',
-        userPrompt: '检查登录接口偶发 401 的原因，并给出修复建议。',
-        assistantReply: '问题来自刷新令牌并发更新，已增加单飞锁并补充回归测试。',
-        updatedAt: Date.now() - 180_000,
-      },
-    ],
-  }
-}
+let codexMonitorSessions = [
+  {
+    sessionId: '019f85-chatgpt',
+    turnId: 'turn-running',
+    source: 'chatgpt',
+    status: 'running',
+    cwd: '/Users/demo/projects/agent-hub',
+    userPrompt: '实现 Codex 会话监听，并确保 Hook 安装过程不会影响已有配置。',
+    assistantReply: null,
+    updatedAt: Date.now() - 12_000,
+  },
+  {
+    sessionId: '019f84-terminal',
+    turnId: 'turn-ended',
+    source: 'terminal',
+    status: 'ended',
+    cwd: '/Users/demo/projects/api-server',
+    userPrompt: '检查登录接口偶发 401 的原因，并给出修复建议。',
+    assistantReply: '问题来自刷新令牌并发更新，已增加单飞锁并补充回归测试。',
+    updatedAt: Date.now() - 180_000,
+  },
+]
 
-export async function getCodexHookStatus() {
-  await delay()
+let claudeMonitorSessions = [
+  {
+    sessionId: 'c4f2a1-terminal',
+    turnId: 'prompt-1',
+    source: 'terminal',
+    status: 'running',
+    cwd: '/Users/demo/projects/web-app',
+    userPrompt: '帮我把登录页改成暗色主题。',
+    assistantReply: null,
+    updatedAt: Date.now() - 30_000,
+  },
+]
+
+let kiroMonitorSessions = [
+  {
+    sessionId: 'kiro-7d21',
+    turnId: 'turn-1',
+    source: 'terminal',
+    status: 'ended',
+    cwd: '/Users/demo/projects/data-pipeline',
+    userPrompt: '优化定时任务的失败重试逻辑。',
+    assistantReply: '已把固定间隔重试改成指数退避，并加了最大重试次数上限。',
+    updatedAt: Date.now() - 600_000,
+  },
+]
+
+let kiroMonitorEnabled = true
+
+function makeHookStatus(installed: boolean, configPath: string, command: string) {
   return {
-    installed: codexHookInstalled,
-    configPath: '~/.codex/hooks.json',
-    command: "'/Applications/AGENT HUB.app/Contents/MacOS/agent-hub' --agent-hub-codex-hook",
-    managedHandlerCount: codexHookInstalled ? 2 : 0,
+    installed,
+    configPath,
+    command,
+    managedHandlerCount: installed ? 2 : 0,
     issue: null,
   }
 }
 
-export async function previewCodexHookChange(action: 'install' | 'uninstall') {
-  await delay()
+function makeHookPreview(action: 'install' | 'uninstall', configPath: string, command: string) {
   const adding = action === 'install'
   const tag = adding ? 'added' : 'removed'
-  const prefix = adding ? '' : ''
   return {
     action,
-    configPath: '~/.codex/hooks.json',
-    command: "'/Applications/AGENT HUB.app/Contents/MacOS/agent-hub' --agent-hub-codex-hook",
+    configPath,
+    command,
     beforeHash: 'mock-before-hash',
     added: adding ? 14 : 0,
     removed: adding ? 0 : 14,
@@ -536,18 +601,107 @@ export async function previewCodexHookChange(action: 'install' | 'uninstall') {
     diffLines: [
       { tag: 'context', content: '{' },
       { tag: 'context', content: '  "hooks": {' },
-      { tag, content: `${prefix}    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "… --agent-hub-codex-hook", "timeout": 10 }] }],` },
-      { tag, content: `${prefix}    "Stop": [{ "hooks": [{ "type": "command", "command": "… --agent-hub-codex-hook", "timeout": 10 }] }]` },
+      { tag, content: `    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "…", "timeout": 10 }] }],` },
+      { tag, content: `    "Stop": [{ "hooks": [{ "type": "command", "command": "…", "timeout": 10 }] }]` },
       { tag: 'context', content: '  }' },
       { tag: 'context', content: '}' },
     ],
   }
 }
 
+export async function getCodexSessionMonitorSnapshot() {
+  await delay()
+  return {
+    revision: 2,
+    sessions: codexMonitorSessions,
+  }
+}
+
+export async function deleteCodexSessionMonitorSession(sessionId: string) {
+  await delay()
+  codexMonitorSessions = codexMonitorSessions.filter(
+    session => session.sessionId !== sessionId,
+  )
+}
+
+const CODEX_HOOK_COMMAND = "'/Applications/AGENT HUB.app/Contents/MacOS/agent-hub' --agent-hub-codex-hook"
+const CLAUDE_HOOK_COMMAND = "'/Applications/AGENT HUB.app/Contents/MacOS/agent-hub' --agent-hub-claude-hook"
+
+export async function getCodexHookStatus() {
+  await delay()
+  return makeHookStatus(codexHookInstalled, '~/.codex/hooks.json', CODEX_HOOK_COMMAND)
+}
+
+export async function previewCodexHookChange(action: 'install' | 'uninstall') {
+  await delay()
+  return makeHookPreview(action, '~/.codex/hooks.json', CODEX_HOOK_COMMAND)
+}
+
 export async function applyCodexHookChange(action: 'install' | 'uninstall', _expectedBeforeHash: string) {
   await delay(300)
   codexHookInstalled = action === 'install'
   return getCodexHookStatus()
+}
+
+export async function getClaudeSessionMonitorSnapshot() {
+  await delay()
+  return {
+    revision: 1,
+    sessions: claudeMonitorSessions,
+  }
+}
+
+export async function deleteClaudeSessionMonitorSession(sessionId: string) {
+  await delay()
+  claudeMonitorSessions = claudeMonitorSessions.filter(
+    session => session.sessionId !== sessionId,
+  )
+}
+
+export async function getClaudeHookStatus() {
+  await delay()
+  return makeHookStatus(claudeHookInstalled, '~/.claude/settings.json', CLAUDE_HOOK_COMMAND)
+}
+
+export async function previewClaudeHookChange(action: 'install' | 'uninstall') {
+  await delay()
+  return makeHookPreview(action, '~/.claude/settings.json', CLAUDE_HOOK_COMMAND)
+}
+
+export async function applyClaudeHookChange(action: 'install' | 'uninstall', _expectedBeforeHash: string) {
+  await delay(300)
+  claudeHookInstalled = action === 'install'
+  return getClaudeHookStatus()
+}
+
+export async function getKiroSessionMonitorSnapshot() {
+  await delay()
+  return {
+    revision: 1,
+    sessions: kiroMonitorSessions,
+  }
+}
+
+export async function deleteKiroSessionMonitorSession(sessionId: string) {
+  await delay()
+  kiroMonitorSessions = kiroMonitorSessions.filter(
+    session => session.sessionId !== sessionId,
+  )
+}
+
+export async function getKiroMonitorStatus() {
+  await delay()
+  return {
+    available: true,
+    sessionsDir: '~/.kiro/sessions/cli',
+    enabled: kiroMonitorEnabled,
+  }
+}
+
+export async function setKiroMonitorEnabled(enabled: boolean) {
+  await delay(200)
+  kiroMonitorEnabled = enabled
+  return getKiroMonitorStatus()
 }
 
 // App

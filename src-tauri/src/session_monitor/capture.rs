@@ -1,11 +1,12 @@
-use super::types::{CodexHookEvent, SessionSource};
+use super::types::{AgentKind, HookEvent, SessionSource};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
-pub const HOOK_ARG: &str = "--agent-hub-codex-hook";
+pub const CODEX_HOOK_ARG: &str = "--agent-hub-codex-hook";
+pub const CLAUDE_HOOK_ARG: &str = "--agent-hub-claude-hook";
 const MAX_HOOK_INPUT_BYTES: u64 = 256 * 1024;
 const MAX_IGNORED_SESSIONS: usize = 200;
 
@@ -33,20 +34,25 @@ pub fn is_internal_system_prompt(prompt: &str) -> bool {
     false
 }
 
-pub fn try_capture_codex_hook_event() -> bool {
-    if !std::env::args().any(|arg| arg == HOOK_ARG) {
+pub fn try_capture_hook_event() -> bool {
+    let agent = if std::env::args().any(|arg| arg == CODEX_HOOK_ARG) {
+        AgentKind::Codex
+    } else if std::env::args().any(|arg| arg == CLAUDE_HOOK_ARG) {
+        AgentKind::Claude
+    } else {
         return false;
-    }
+    };
 
-    if let Err(error) = capture_stdin_event() {
-        // Hooks must never block or fail a Codex turn. This process intentionally
-        // exits successfully even when the local event inbox is unavailable.
-        eprintln!("agent-hub Codex hook capture skipped: {error}");
+    if let Err(error) = capture_stdin_event(agent) {
+        // Hooks must never block or fail an agent turn. This process
+        // intentionally exits successfully even when the local event inbox is
+        // unavailable.
+        eprintln!("agent-hub {} hook capture skipped: {error}", agent.as_str());
     }
     true
 }
 
-fn capture_stdin_event() -> Result<(), String> {
+fn capture_stdin_event(agent: AgentKind) -> Result<(), String> {
     let mut bytes = Vec::new();
     std::io::stdin()
         .take(MAX_HOOK_INPUT_BYTES + 1)
@@ -62,7 +68,7 @@ fn capture_stdin_event() -> Result<(), String> {
         .get("hook_event_name")
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| "hook_event_name is missing".to_string())?;
-    if event_name != "UserPromptSubmit" && event_name != "Stop" {
+    if !accepted_event(event_name) {
         return Ok(());
     }
 
@@ -72,28 +78,40 @@ fn capture_stdin_event() -> Result<(), String> {
         .unwrap_or_else(|| format!("unknown-{event_id}"));
     let user_prompt = string_field(&input, "prompt");
 
-    // Drop internal desktop turns (ambient suggestions, safety reviewer,
-    // memory consolidation). Their Stop event carries no prompt, so remember
-    // the session id and drop the matching Stop when it arrives.
-    if event_name == "UserPromptSubmit" {
-        if let Some(prompt) = user_prompt.as_deref() {
-            if is_internal_system_prompt(prompt) {
-                let _ = mark_session_ignored(&session_id);
-                return Ok(());
+    // Codex desktop only: drop internal desktop turns (ambient suggestions,
+    // safety reviewer, memory consolidation). Their Stop event carries no
+    // prompt, so remember the session id and drop the matching Stop when it
+    // arrives. Claude Code has no such hidden turns.
+    if agent == AgentKind::Codex {
+        if event_name == "UserPromptSubmit" {
+            if let Some(prompt) = user_prompt.as_deref() {
+                if is_internal_system_prompt(prompt) {
+                    let _ = mark_session_ignored(&session_id);
+                    return Ok(());
+                }
             }
         }
-    }
-    if event_name == "Stop" && take_ignored_session(&session_id) {
-        return Ok(());
+        if event_name == "Stop" && take_ignored_session(&session_id) {
+            return Ok(());
+        }
     }
 
-    let turn_id = string_field(&input, "turn_id").unwrap_or_else(|| event_id.clone());
-    let event = CodexHookEvent {
+    // Codex provides `turn_id`, Claude Code provides `prompt_id` (v2.1.196+).
+    let turn_id = resolve_turn_id(&input, &event_id);
+    let source = match agent {
+        AgentKind::Codex => detect_source(),
+        // Claude Desktop is intentionally out of scope; the Claude Code hook
+        // only fires for terminal sessions. Kiro events come from the file
+        // watcher, not from hooks.
+        _ => SessionSource::Terminal,
+    };
+    let event = HookEvent {
         event_id: event_id.clone(),
+        agent,
         hook_event_name: event_name.to_string(),
         session_id,
         turn_id,
-        source: detect_source(),
+        source,
         cwd: string_field(&input, "cwd"),
         user_prompt,
         assistant_reply: string_field(&input, "last_assistant_message"),
@@ -120,8 +138,17 @@ fn capture_stdin_event() -> Result<(), String> {
     Ok(())
 }
 
-fn string_field(input: &serde_json::Value, key: &str) -> Option<String> {
-    input
+fn accepted_event(name: &str) -> bool {
+    name == "UserPromptSubmit" || name == "Stop"
+}
+
+fn resolve_turn_id(input: &serde_json::Value, fallback: &str) -> String {
+    string_field(input, "turn_id")
+        .or_else(|| string_field(input, "prompt_id"))
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+fn string_field(input: &serde_json::Value, key: &str) -> Option<String> {    input
         .get(key)
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
@@ -222,6 +249,26 @@ mod tests {
         );
         assert_eq!(source_from_originator("chatgpt"), SessionSource::Chatgpt);
         assert_eq!(source_from_originator("codex cli"), SessionSource::Terminal);
+    }
+
+    #[test]
+    fn only_prompt_submit_and_stop_events_are_accepted() {
+        assert!(accepted_event("UserPromptSubmit"));
+        assert!(accepted_event("Stop"));
+        assert!(!accepted_event("SessionStart"));
+        assert!(!accepted_event("SessionEnd"));
+        assert!(!accepted_event("Notification"));
+        assert!(!accepted_event("SubagentStop"));
+    }
+
+    #[test]
+    fn turn_id_falls_back_to_prompt_id_then_event_id() {
+        let with_turn = serde_json::json!({"turn_id": "turn-1", "prompt_id": "prompt-1"});
+        assert_eq!(resolve_turn_id(&with_turn, "event-1"), "turn-1");
+        let claude_style = serde_json::json!({"prompt_id": "prompt-1"});
+        assert_eq!(resolve_turn_id(&claude_style, "event-1"), "prompt-1");
+        let bare = serde_json::json!({});
+        assert_eq!(resolve_turn_id(&bare, "event-1"), "event-1");
     }
 
     #[test]

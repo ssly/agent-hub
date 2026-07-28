@@ -1,12 +1,14 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import * as api from '@/lib/api'
 
 export type HookAction = 'install' | 'uninstall'
 export type SessionSource = 'terminal' | 'chatgpt'
 export type RuntimeStatus = 'running' | 'ended'
+export type MonitorAgent = 'codex' | 'claude' | 'kiro'
+export const MONITOR_AGENTS: MonitorAgent[] = ['codex', 'claude', 'kiro']
 
-export interface CodexSessionState {
+export interface SessionState {
   sessionId: string
   turnId: string
   source: SessionSource
@@ -17,12 +19,12 @@ export interface CodexSessionState {
   updatedAt: number
 }
 
-export interface CodexMonitorSnapshot {
+export interface MonitorSnapshot {
   revision: number
-  sessions: CodexSessionState[]
+  sessions: SessionState[]
 }
 
-export interface CodexHookStatus {
+export interface HookStatus {
   installed: boolean
   configPath: string
   command: string
@@ -30,12 +32,18 @@ export interface CodexHookStatus {
   issue?: string | null
 }
 
+export interface KiroMonitorStatus {
+  available: boolean
+  sessionsDir: string
+  enabled: boolean
+}
+
 export interface HookDiffLine {
   tag: 'added' | 'removed' | 'context'
   content: string
 }
 
-export interface CodexHookChangePreview {
+export interface HookChangePreview {
   action: HookAction
   configPath: string
   command: string
@@ -46,40 +54,117 @@ export interface CodexHookChangePreview {
   changed: boolean
 }
 
+const CHANGED_EVENTS: Record<MonitorAgent, string> = {
+  codex: 'session-monitor:codex-changed',
+  claude: 'session-monitor:claude-changed',
+  kiro: 'session-monitor:kiro-changed',
+}
+
+const snapshotApi: Record<MonitorAgent, () => Promise<MonitorSnapshot>> = {
+  codex: api.getCodexSessionMonitorSnapshot,
+  claude: api.getClaudeSessionMonitorSnapshot,
+  kiro: api.getKiroSessionMonitorSnapshot,
+}
+
+const deleteSessionApi: Record<MonitorAgent, (sessionId: string) => Promise<void>> = {
+  codex: api.deleteCodexSessionMonitorSession,
+  claude: api.deleteClaudeSessionMonitorSession,
+  kiro: api.deleteKiroSessionMonitorSession,
+}
+
+const hookApi: Record<'codex' | 'claude', {
+  status: () => Promise<HookStatus>
+  preview: (action: HookAction) => Promise<HookChangePreview>
+  apply: (action: HookAction, expectedBeforeHash: string) => Promise<HookStatus>
+}> = {
+  codex: {
+    status: api.getCodexHookStatus,
+    preview: api.previewCodexHookChange,
+    apply: api.applyCodexHookChange,
+  },
+  claude: {
+    status: api.getClaudeHookStatus,
+    preview: api.previewClaudeHookChange,
+    apply: api.applyClaudeHookChange,
+  },
+}
+
+function supportsHooks(agent: MonitorAgent): agent is 'codex' | 'claude' {
+  return agent !== 'kiro'
+}
+
+function emptySnapshot(): MonitorSnapshot {
+  return { revision: 0, sessions: [] }
+}
+
 function errorMessage(error: any): string {
   return error?.General || error?.message || String(error)
 }
 
 export const useSessionMonitorStore = defineStore('session-monitor', () => {
-  const snapshot = ref<CodexMonitorSnapshot>({ revision: 0, sessions: [] })
-  const hookStatus = ref<CodexHookStatus | null>(null)
+  const activeAgent = ref<MonitorAgent>('codex')
+  const snapshots = ref<Record<MonitorAgent, MonitorSnapshot>>({
+    codex: emptySnapshot(),
+    claude: emptySnapshot(),
+    kiro: emptySnapshot(),
+  })
+  const hookStatuses = ref<Record<'codex' | 'claude', HookStatus | null>>({
+    codex: null,
+    claude: null,
+  })
+  const kiroStatus = ref<KiroMonitorStatus | null>(null)
   const loading = ref(false)
   const hookLoading = ref(false)
   const error = ref('')
   const previewOpen = ref(false)
   const previewLoading = ref(false)
-  const preview = ref<CodexHookChangePreview | null>(null)
+  const previewAgent = ref<'codex' | 'claude'>('codex')
+  const preview = ref<HookChangePreview | null>(null)
   const previewError = ref('')
   let initialized = false
-  let unlisten: (() => void) | undefined
+  let unlisten: (() => void)[] = []
+
+  const snapshot = computed(() => snapshots.value[activeAgent.value])
+  const hookStatus = computed(() =>
+    supportsHooks(activeAgent.value) ? hookStatuses.value[activeAgent.value] : null,
+  )
 
   async function refresh() {
     loading.value = true
     error.value = ''
-    const [snapshotResult, hookResult] = await Promise.allSettled([
-      api.getCodexSessionMonitorSnapshot(),
-      api.getCodexHookStatus(),
+    const messages: string[] = []
+    const snapshotResults = await Promise.allSettled(
+      MONITOR_AGENTS.map(agent => snapshotApi[agent]()),
+    )
+    MONITOR_AGENTS.forEach((agent, index) => {
+      const result = snapshotResults[index]
+      if (result.status === 'fulfilled') {
+        snapshots.value[agent] = result.value || emptySnapshot()
+      } else {
+        messages.push(errorMessage(result.reason))
+      }
+    })
+    const hookResults = await Promise.allSettled([
+      hookApi.codex.status(),
+      hookApi.claude.status(),
     ])
-    if (snapshotResult.status === 'fulfilled') {
-      snapshot.value = snapshotResult.value || { revision: 0, sessions: [] }
+    const [codexHook, claudeHook] = hookResults
+    if (codexHook.status === 'fulfilled') {
+      hookStatuses.value.codex = codexHook.value
     } else {
-      error.value = errorMessage(snapshotResult.reason)
+      messages.push(errorMessage(codexHook.reason))
     }
-    if (hookResult.status === 'fulfilled') {
-      hookStatus.value = hookResult.value
+    if (claudeHook.status === 'fulfilled') {
+      hookStatuses.value.claude = claudeHook.value
     } else {
-      error.value = [error.value, errorMessage(hookResult.reason)].filter(Boolean).join('；')
+      messages.push(errorMessage(claudeHook.reason))
     }
+    try {
+      kiroStatus.value = await api.getKiroMonitorStatus()
+    } catch (cause) {
+      messages.push(errorMessage(cause))
+    }
+    error.value = messages.filter(Boolean).join('；')
     loading.value = false
   }
 
@@ -89,27 +174,32 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
       const isTauri = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__
       if (isTauri) {
         const { listen } = await import('@tauri-apps/api/event')
-        unlisten = await listen<CodexMonitorSnapshot>('session-monitor:codex-changed', event => {
-          snapshot.value = event.payload
-        })
+        unlisten = await Promise.all(
+          MONITOR_AGENTS.map(agent =>
+            listen<MonitorSnapshot>(CHANGED_EVENTS[agent], event => {
+              snapshots.value[agent] = event.payload
+            }),
+          ),
+        )
       }
     }
     await refresh()
   }
 
   function dispose() {
-    unlisten?.()
-    unlisten = undefined
+    unlisten.forEach(fn => fn())
+    unlisten = []
     initialized = false
   }
 
-  async function openHookPreview(action: HookAction) {
+  async function openHookPreview(agent: 'codex' | 'claude', action: HookAction) {
+    previewAgent.value = agent
     previewOpen.value = true
     previewLoading.value = true
     previewError.value = ''
     preview.value = null
     try {
-      preview.value = await api.previewCodexHookChange(action)
+      preview.value = await hookApi[agent].preview(action)
     } catch (cause) {
       previewError.value = errorMessage(cause)
     } finally {
@@ -129,7 +219,7 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     hookLoading.value = true
     previewError.value = ''
     try {
-      hookStatus.value = await api.applyCodexHookChange(
+      hookStatuses.value[previewAgent.value] = await hookApi[previewAgent.value].apply(
         preview.value.action,
         preview.value.beforeHash,
       )
@@ -142,14 +232,42 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     }
   }
 
+  // Manual delete: no confirmation by design — the row is low-value history.
+  async function deleteSession(sessionId: string) {
+    const agent = activeAgent.value
+    try {
+      await deleteSessionApi[agent](sessionId)
+      const current = snapshots.value[agent]
+      snapshots.value[agent] = {
+        ...current,
+        sessions: current.sessions.filter(session => session.sessionId !== sessionId),
+      }
+    } catch (cause) {
+      error.value = errorMessage(cause)
+    }
+  }
+
+  async function setKiroEnabled(enabled: boolean) {
+    try {
+      kiroStatus.value = await api.setKiroMonitorEnabled(enabled)
+    } catch (cause) {
+      error.value = errorMessage(cause)
+    }
+  }
+
   return {
+    activeAgent,
+    snapshots,
     snapshot,
+    hookStatuses,
     hookStatus,
+    kiroStatus,
     loading,
     hookLoading,
     error,
     previewOpen,
     previewLoading,
+    previewAgent,
     preview,
     previewError,
     initialize,
@@ -158,5 +276,7 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     openHookPreview,
     closeHookPreview,
     applyHookPreview,
+    deleteSession,
+    setKiroEnabled,
   }
 })

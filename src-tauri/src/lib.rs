@@ -24,8 +24,8 @@ use tauri::Manager;
 /// download. Set by `cancel_update_download`, checked in the download loop.
 pub type UpdateCancelFlag = std::sync::atomic::AtomicBool;
 
-pub fn try_handle_codex_hook_event() -> bool {
-    session_monitor::try_capture_codex_hook_event()
+pub fn try_handle_hook_event() -> bool {
+    session_monitor::try_capture_hook_event()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -43,10 +43,11 @@ pub fn run() {
             app.handle().plugin(tauri_plugin_shell::init())?;
             #[cfg(desktop)]
             app.handle().plugin(tauri_plugin_dialog::init())?;
-            // Only watch Agent Hub's own small event inbox. This does not scan
-            // Codex session directories or poll processes.
+            // Watch Agent Hub's own small hook-event inbox plus the Kiro CLI
+            // session directory (read-only). No agent session directories are
+            // scanned and no processes are polled.
             app.manage(std::sync::Arc::new(
-                session_monitor::CodexSessionMonitorService::new(app.handle().clone()),
+                session_monitor::SessionMonitorService::new(app.handle().clone()),
             ));
 
             #[cfg(desktop)]
@@ -100,15 +101,26 @@ pub fn run() {
             commands::list_sessions,
             commands::list_session_terminals,
             commands::resume_session,
+            commands::get_session_resume_preview,
             commands::get_session_messages,
             commands::search_session_messages,
             commands::delete_session,
             commands::delete_sessions,
             commands::export_sessions_html,
             commands::get_codex_session_monitor_snapshot,
+            commands::delete_codex_session_monitor_session,
             commands::get_codex_hook_status,
             commands::preview_codex_hook_change,
             commands::apply_codex_hook_change,
+            commands::get_claude_session_monitor_snapshot,
+            commands::delete_claude_session_monitor_session,
+            commands::get_claude_hook_status,
+            commands::preview_claude_hook_change,
+            commands::apply_claude_hook_change,
+            commands::get_kiro_session_monitor_snapshot,
+            commands::delete_kiro_session_monitor_session,
+            commands::get_kiro_monitor_status,
+            commands::set_kiro_monitor_enabled,
             claude_plugin::list_claude_plugins,
             claude_plugin::set_claude_plugin_enabled,
             switch::commands::list_switch_profiles,

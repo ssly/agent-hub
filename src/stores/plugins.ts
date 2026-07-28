@@ -17,10 +17,12 @@ export const usePluginsStore = defineStore('plugins', () => {
   function workspaceSkillPath(platformId: string) {
     const relativeByPlatform: Record<string, string> = {
       'claude-code': '.claude/skills',
-      codex: '.codex/skills',
-      cursor: '.cursor/skills-cursor',
+      codex: '.agents/skills',
+      antigravity: '.agents/skills',
+      cursor: '.cursor/skills',
       gemini: '.gemini/skills',
-      openclaw: '.openclaw/skills',
+      'grok-build': '.grok/skills',
+      'kimi-code': '.kimi-code/skills',
       hermes: '.hermes/skills',
       trae: '.trae/skills',
       kiro: '.kiro/skills',

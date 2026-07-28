@@ -6,7 +6,7 @@ import { useAppStore } from '@/stores/app'
 import { useSkillsStore } from '@/stores/skills'
 import { usePluginsStore } from '@/stores/plugins'
 import { useSessionsStore } from '@/stores/sessions'
-import { useSessionMonitorStore } from '@/stores/session-monitor'
+import { useSessionMonitorStore, type MonitorAgent } from '@/stores/session-monitor'
 import { useSwitchStore } from '@/stores/switch'
 import { useToast } from '@/composables/useToast'
 import { pickPluginDirectory } from '@/lib/api'
@@ -58,10 +58,7 @@ async function handleTabClick(tabId: typeof tabs[number]['id']) {
   appStore.switchTab(tabId)
   if (tabId === 'sessions') {
     sessionsStore.isLoading = true
-    Promise.all([
-      sessionsStore.refreshPlatforms(),
-      sessionsStore.refreshTerminals(),
-    ]).finally(() => {
+    sessionsStore.refreshPlatforms().finally(() => {
       sessionsStore.isLoading = false
     })
   } else if (tabId === 'accounts') {
@@ -80,7 +77,7 @@ async function handleRefresh() {
     await pluginsStore.refreshPlatforms()
   } else if (appStore.currentTab === 'sessions') {
     sessionsStore.isLoading = true
-    await Promise.all([sessionsStore.refreshPlatforms(true), sessionsStore.refreshTerminals()])
+    await sessionsStore.refreshPlatforms(true)
     sessionsStore.isLoading = false
   } else if (appStore.currentTab === 'accounts') {
     if (switchStore.selectedAgent) await switchStore.loadSelectedAgent()
@@ -91,7 +88,11 @@ async function handleRefresh() {
 
 function getSidebarItems() {
   if (appStore.currentTab === 'sessions') return sessionsStore.platforms
-  if (appStore.currentTab === 'monitor') return [{ id: 'codex', display_name: 'Codex' }]
+  if (appStore.currentTab === 'monitor') return [
+    { id: 'codex', display_name: 'Codex' },
+    { id: 'claude', display_name: 'Claude Code' },
+    { id: 'kiro', display_name: 'Kiro' },
+  ]
   if (appStore.currentTab === 'accounts') return [
     { id: 'codex', display_name: 'Codex' },
     { id: 'claude-code', display_name: 'Claude Code' },
@@ -103,14 +104,14 @@ function getSidebarItems() {
 
 function getSelectedId() {
   if (appStore.currentTab === 'sessions') return sessionsStore.selectedPlatformId
-  if (appStore.currentTab === 'monitor') return 'codex'
+  if (appStore.currentTab === 'monitor') return sessionMonitorStore.activeAgent
   if (appStore.currentTab === 'accounts') return switchStore.selectedAgent
   return pluginsStore.selectedPlatformId
 }
 
 async function handleItemClick(id: string) {
   if (appStore.currentTab === 'sessions') sessionsStore.selectPlatform(id)
-  else if (appStore.currentTab === 'monitor') return
+  else if (appStore.currentTab === 'monitor') sessionMonitorStore.activeAgent = id as MonitorAgent
   else if (appStore.currentTab === 'accounts') await switchStore.selectAgent(id)
   else {
     pluginsStore.selectPlatform(id)

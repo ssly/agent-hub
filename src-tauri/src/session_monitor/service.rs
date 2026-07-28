@@ -1,61 +1,288 @@
-use super::types::{CodexHookEvent, CodexMonitorSnapshot, CodexSessionState, RuntimeStatus};
+use super::kiro::KiroWatcher;
+use super::types::{AgentKind, HookEvent, KiroMonitorStatus, MonitorSnapshot, RuntimeStatus, SessionState};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Runtime};
 use uuid::Uuid;
 
-const CHANGED_EVENT: &str = "session-monitor:codex-changed";
 const MAX_SESSIONS: usize = 100;
+/// Sessions older than this are pruned on every snapshot query.
+const SESSION_TTL_MILLIS: i64 = 24 * 60 * 60 * 1000;
+/// Kiro running/ended status comes from lock-file pid liveness, which
+/// produces no file events — re-check it on this interval and push changes.
+const KIRO_STATUS_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 
-pub struct CodexSessionMonitorService<R: Runtime> {
-    snapshot: Arc<Mutex<CodexMonitorSnapshot>>,
+struct AgentSlot {
+    snapshot: Mutex<MonitorSnapshot>,
     state_path: PathBuf,
-    _watcher: Option<RecommendedWatcher>,
+}
+
+type Slots = Arc<HashMap<AgentKind, AgentSlot>>;
+
+pub struct SessionMonitorService<R: Runtime> {
+    slots: Slots,
+    kiro_sessions_dir: PathBuf,
+    kiro_toggle_path: PathBuf,
+    kiro_enabled: Arc<AtomicBool>,
+    kiro_watcher: Mutex<Option<KiroWatcher>>,
+    _inbox_watcher: Option<RecommendedWatcher>,
     _app: AppHandle<R>,
 }
 
-impl<R: Runtime> CodexSessionMonitorService<R> {
+impl<R: Runtime> SessionMonitorService<R> {
     pub fn new(app: AppHandle<R>) -> Self {
         let root = dirs::home_dir()
             .unwrap_or_else(std::env::temp_dir)
             .join(".agent-hub")
             .join("session-monitor");
         let inbox = root.join("inbox");
-        let state_path = root.join("codex-state.json");
         let _ = fs::create_dir_all(&inbox);
-        let snapshot = Arc::new(Mutex::new(load_snapshot(&state_path)));
 
-        let watcher = init_watcher(&inbox, snapshot.clone(), state_path.clone(), app.clone());
-        process_pending_events(&inbox, &snapshot, &state_path, &app);
+        let slots: Slots = Arc::new(
+            AgentKind::ALL
+                .into_iter()
+                .map(|agent| {
+                    let state_path = root.join(agent.state_file_name());
+                    let slot = AgentSlot {
+                        snapshot: Mutex::new(load_snapshot(&state_path)),
+                        state_path,
+                    };
+                    (agent, slot)
+                })
+                .collect(),
+        );
+
+        let inbox_watcher = init_watcher(&inbox, slots.clone(), app.clone());
+        process_pending_events(&inbox, &slots, &app);
+
+        // Kiro: stable kiro-cli 2.x does not load hook configs, so
+        // ~/.kiro/sessions/cli is watched directly (read-only). The watcher
+        // and the status thread can be toggled by the user; the choice
+        // persists in kiro-monitor.json.
+        let kiro_sessions_dir = dirs::home_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join(".kiro")
+            .join("sessions")
+            .join("cli");
+        let kiro_toggle_path = root.join("kiro-monitor.json");
+        let kiro_enabled = Arc::new(AtomicBool::new(load_kiro_enabled(&kiro_toggle_path)));
+        let kiro_watcher = Mutex::new(if kiro_enabled.load(Ordering::Acquire) {
+            create_kiro_watcher(&kiro_sessions_dir, &slots, &app)
+        } else {
+            None
+        });
+        // Kiro sessions going idle produce no file event (the CLI just exits
+        // and its lock pid dies), so poll pid liveness on a slow interval and
+        // emit only when a status actually flips. Without this the UI would
+        // show "running" until a manual refresh. While monitoring is off the
+        // thread just sleeps — a few nanoseconds every interval.
+        {
+            let slots = slots.clone();
+            let dir = kiro_sessions_dir.clone();
+            let app = app.clone();
+            let enabled = kiro_enabled.clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(KIRO_STATUS_REFRESH_INTERVAL);
+                if enabled.load(Ordering::Acquire) {
+                    refresh_kiro_statuses(&slots, &dir, &app);
+                }
+            });
+        }
 
         Self {
-            snapshot,
-            state_path,
-            _watcher: watcher,
+            slots,
+            kiro_sessions_dir,
+            kiro_toggle_path,
+            kiro_enabled,
+            kiro_watcher,
+            _inbox_watcher: inbox_watcher,
             _app: app,
         }
     }
 
-    pub fn snapshot(&self) -> CodexMonitorSnapshot {
-        self.snapshot
-            .lock()
-            .map(|snapshot| snapshot.clone())
+    pub fn snapshot(&self, agent: AgentKind) -> MonitorSnapshot {
+        self.prune_expired(agent);
+        if agent == AgentKind::Kiro && self.kiro_enabled.load(Ordering::Acquire) {
+            refresh_kiro_statuses(&self.slots, &self.kiro_sessions_dir, &self._app);
+        }
+        self.slots
+            .get(&agent)
+            .and_then(|slot| slot.snapshot.lock().ok().map(|snapshot| snapshot.clone()))
             .unwrap_or_default()
     }
 
-    #[allow(dead_code)]
-    pub fn state_path(&self) -> &Path {
-        &self.state_path
+    pub fn kiro_status(&self) -> KiroMonitorStatus {
+        KiroMonitorStatus {
+            available: self.kiro_sessions_dir.is_dir(),
+            sessions_dir: self.kiro_sessions_dir.display().to_string(),
+            enabled: self.kiro_enabled.load(Ordering::Acquire),
+        }
     }
+
+    /// Toggle the Kiro file watcher + status thread. Persisted so the choice
+    /// survives restarts.
+    pub fn set_kiro_enabled(&self, enabled: bool) -> Result<KiroMonitorStatus, String> {
+        self.kiro_enabled.store(enabled, Ordering::Release);
+        if let Ok(mut watcher) = self.kiro_watcher.lock() {
+            match (enabled, watcher.is_some()) {
+                (true, false) => {
+                    *watcher = create_kiro_watcher(&self.kiro_sessions_dir, &self.slots, &self._app);
+                }
+                (false, true) => {
+                    // Dropping the watcher unregisters it from the OS.
+                    *watcher = None;
+                }
+                _ => {}
+            }
+        }
+        persist_kiro_enabled(&self.kiro_toggle_path, enabled)?;
+        Ok(self.kiro_status())
+    }
+
+    /// Manually delete one session row. No-op when the id is unknown.
+    pub fn remove_session(&self, agent: AgentKind, session_id: &str) -> Result<(), String> {
+        let Some(slot) = self.slots.get(&agent) else {
+            return Ok(());
+        };
+        let next_snapshot = {
+            let Ok(mut current) = slot.snapshot.lock() else {
+                return Err("session monitor state is unavailable".to_string());
+            };
+            if !remove_session_from(&mut current, session_id) {
+                return Ok(());
+            }
+            current.revision = current.revision.saturating_add(1);
+            current.clone()
+        };
+        persist_snapshot(&slot.state_path, &next_snapshot)?;
+        let _ = self._app.emit(agent.changed_event(), &next_snapshot);
+        Ok(())
+    }
+
+    /// Drop sessions older than SESSION_TTL_MILLIS. Called on every snapshot
+    /// query so stale rows age out without a background timer.
+    fn prune_expired(&self, agent: AgentKind) {
+        let cutoff = now_millis() - SESSION_TTL_MILLIS;
+        let Some(slot) = self.slots.get(&agent) else {
+            return;
+        };
+        let next_snapshot = {
+            let Ok(mut current) = slot.snapshot.lock() else {
+                return;
+            };
+            if !prune_sessions_older_than(&mut current, cutoff) {
+                return;
+            }
+            current.revision = current.revision.saturating_add(1);
+            current.clone()
+        };
+        if persist_snapshot(&slot.state_path, &next_snapshot).is_ok() {
+            let _ = self._app.emit(agent.changed_event(), &next_snapshot);
+        }
+    }
+}
+
+/// Turn-level status comes from the event stream (Prompt → running,
+/// AssistantMessage → ended), same as Codex/Claude. The lock pid is only a
+/// one-way safety net: a session whose CLI process died mid-turn is flipped
+/// running → ended. A live-but-idle chat process (sitting at the prompt)
+/// must NOT flip a finished turn back to running. Called on snapshot queries
+/// and on a slow background interval; emits only when a status flips.
+fn refresh_kiro_statuses<R: Runtime>(slots: &Slots, sessions_dir: &Path, app: &AppHandle<R>) {
+    let Some(slot) = slots.get(&AgentKind::Kiro) else {
+        return;
+    };
+    let next_snapshot = {
+        let Ok(mut current) = slot.snapshot.lock() else {
+            return;
+        };
+        if current.sessions.is_empty() {
+            return;
+        }
+        let mut changed = false;
+        for session in &mut current.sessions {
+            if session.status != RuntimeStatus::Running {
+                continue;
+            }
+            if kiro_session_status(sessions_dir, &session.session_id) == RuntimeStatus::Ended {
+                session.status = RuntimeStatus::Ended;
+                changed = true;
+            }
+        }
+        if !changed {
+            return;
+        }
+        current.revision = current.revision.saturating_add(1);
+        current.clone()
+    };
+    if persist_snapshot(&slot.state_path, &next_snapshot).is_ok() {
+        let _ = app.emit(AgentKind::Kiro.changed_event(), &next_snapshot);
+    }
+}
+
+fn kiro_session_status(sessions_dir: &Path, session_id: &str) -> RuntimeStatus {
+    let lock_path = sessions_dir.join(format!("{session_id}.lock"));
+    let pid = fs::read_to_string(&lock_path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+        .and_then(|value| value.get("pid").and_then(serde_json::Value::as_u64))
+        .map(|pid| pid as u32);
+    match pid {
+        Some(pid) if pid_alive(pid) => RuntimeStatus::Running,
+        _ => RuntimeStatus::Ended,
+    }
+}
+
+fn pid_alive(pid: u32) -> bool {
+    let mut system = sysinfo::System::new();
+    system.refresh_processes(
+        sysinfo::ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(pid)]),
+        true,
+    ) > 0
+}
+
+fn create_kiro_watcher<R: Runtime>(
+    sessions_dir: &Path,
+    slots: &Slots,
+    app: &AppHandle<R>,
+) -> Option<KiroWatcher> {
+    let slots = slots.clone();
+    let app = app.clone();
+    KiroWatcher::new(sessions_dir.to_path_buf(), move |event| {
+        apply_and_emit(&slots, &app, event);
+    })
+}
+
+fn load_kiro_enabled(path: &Path) -> bool {
+    fs::read(path)
+        .ok()
+        .and_then(|content| serde_json::from_slice::<serde_json::Value>(&content).ok())
+        .and_then(|value| value.get("enabled").and_then(serde_json::Value::as_bool))
+        .unwrap_or(true)
+}
+
+fn persist_kiro_enabled(path: &Path, enabled: bool) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "kiro monitor toggle has no parent directory".to_string())?;
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("unable to create toggle directory: {error}"))?;
+    let temp_path = parent.join(format!(".kiro-monitor-{}.tmp", Uuid::new_v4()));
+    let payload = serde_json::json!({ "enabled": enabled }).to_string();
+    fs::write(&temp_path, payload)
+        .map_err(|error| format!("unable to persist monitor toggle: {error}"))?;
+    crate::paths::replace_file(&temp_path, path)
+        .map_err(|error| format!("unable to persist monitor toggle: {error}"))
 }
 
 fn init_watcher<R: Runtime>(
     inbox: &Path,
-    snapshot: Arc<Mutex<CodexMonitorSnapshot>>,
-    state_path: PathBuf,
+    slots: Slots,
     app: AppHandle<R>,
 ) -> Option<RecommendedWatcher> {
     let mut watcher = match RecommendedWatcher::new(
@@ -68,7 +295,7 @@ fn init_watcher<R: Runtime>(
             }
             for path in event.paths {
                 if path.extension().and_then(|extension| extension.to_str()) == Some("json") {
-                    process_event_file(&path, &snapshot, &state_path, &app);
+                    process_event_file(&path, &slots, &app);
                 }
             }
         },
@@ -76,25 +303,20 @@ fn init_watcher<R: Runtime>(
     ) {
         Ok(watcher) => watcher,
         Err(error) => {
-            log::warn!("Unable to create Codex session monitor watcher: {error}");
+            log::warn!("Unable to create session monitor watcher: {error}");
             return None;
         }
     };
 
     if let Err(error) = watcher.watch(inbox, RecursiveMode::NonRecursive) {
-        log::warn!("Unable to watch Codex session event inbox: {error}");
+        log::warn!("Unable to watch session monitor event inbox: {error}");
         None
     } else {
         Some(watcher)
     }
 }
 
-fn process_pending_events<R: Runtime>(
-    inbox: &Path,
-    snapshot: &Arc<Mutex<CodexMonitorSnapshot>>,
-    state_path: &Path,
-    app: &AppHandle<R>,
-) {
+fn process_pending_events<R: Runtime>(inbox: &Path, slots: &Slots, app: &AppHandle<R>) {
     let Ok(entries) = fs::read_dir(inbox) else {
         return;
     };
@@ -105,32 +327,27 @@ fn process_pending_events<R: Runtime>(
         .collect::<Vec<_>>();
     paths.sort();
     for path in paths {
-        process_event_file(&path, snapshot, state_path, app);
+        process_event_file(&path, slots, app);
     }
 }
 
-fn process_event_file<R: Runtime>(
-    path: &Path,
-    snapshot: &Arc<Mutex<CodexMonitorSnapshot>>,
-    state_path: &Path,
-    app: &AppHandle<R>,
-) {
+fn process_event_file<R: Runtime>(path: &Path, slots: &Slots, app: &AppHandle<R>) {
     let content = match fs::read(path) {
         Ok(content) => content,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
         Err(error) => {
             log::warn!(
-                "Unable to read Codex session event {}: {error}",
+                "Unable to read session monitor event {}: {error}",
                 path.display()
             );
             return;
         }
     };
-    let event: CodexHookEvent = match serde_json::from_slice(&content) {
+    let event: HookEvent = match serde_json::from_slice(&content) {
         Ok(event) => event,
         Err(error) => {
             log::warn!(
-                "Discarding invalid Codex session event {}: {error}",
+                "Discarding invalid session monitor event {}: {error}",
                 path.display()
             );
             let _ = fs::remove_file(path);
@@ -138,26 +355,35 @@ fn process_event_file<R: Runtime>(
         }
     };
 
+    apply_and_emit(slots, app, event);
+    let _ = fs::remove_file(path);
+}
+
+fn apply_and_emit<R: Runtime>(slots: &Slots, app: &AppHandle<R>, event: HookEvent) {
+    let agent = event.agent;
+    let Some(slot) = slots.get(&agent) else {
+        return;
+    };
     let next_snapshot = {
-        let Ok(mut current) = snapshot.lock() else {
+        let Ok(mut current) = slot.snapshot.lock() else {
             return;
         };
         apply_event(&mut current, event);
         current.revision = current.revision.saturating_add(1);
         current.clone()
     };
-    if let Err(error) = persist_snapshot(state_path, &next_snapshot) {
-        log::warn!("Unable to persist Codex session monitor state: {error}");
+    if let Err(error) = persist_snapshot(&slot.state_path, &next_snapshot) {
+        log::warn!("Unable to persist session monitor state: {error}");
         return;
     }
-    let _ = fs::remove_file(path);
-    let _ = app.emit(CHANGED_EVENT, &next_snapshot);
+    let _ = app.emit(agent.changed_event(), &next_snapshot);
 }
 
-fn apply_event(snapshot: &mut CodexMonitorSnapshot, event: CodexHookEvent) {
-    // Defense in depth: events captured before the hook-side filter existed
-    // (or left over in the inbox) must not surface internal desktop turns.
-    if event.hook_event_name == "UserPromptSubmit" {
+fn apply_event(snapshot: &mut MonitorSnapshot, event: HookEvent) {
+    // Defense in depth: Codex events captured before the hook-side filter
+    // existed (or left over in the inbox) must not surface internal desktop
+    // turns.
+    if event.agent == AgentKind::Codex && event.hook_event_name == "UserPromptSubmit" {
         if let Some(prompt) = event.user_prompt.as_deref() {
             if super::capture::is_internal_system_prompt(prompt) {
                 snapshot
@@ -195,7 +421,7 @@ fn apply_event(snapshot: &mut CodexMonitorSnapshot, event: CodexHookEvent) {
             session.assistant_reply = event.assistant_reply;
         }
     } else {
-        snapshot.sessions.push(CodexSessionState {
+        snapshot.sessions.push(SessionState {
             session_id: event.session_id,
             turn_id: event.turn_id,
             source: event.source,
@@ -213,8 +439,33 @@ fn apply_event(snapshot: &mut CodexMonitorSnapshot, event: CodexHookEvent) {
     snapshot.sessions.truncate(MAX_SESSIONS);
 }
 
-fn load_snapshot(path: &Path) -> CodexMonitorSnapshot {
-    let mut snapshot: CodexMonitorSnapshot = fs::read(path)
+/// Remove a session by id. Returns true when a row was actually removed.
+fn remove_session_from(snapshot: &mut MonitorSnapshot, session_id: &str) -> bool {
+    let before = snapshot.sessions.len();
+    snapshot
+        .sessions
+        .retain(|session| session.session_id != session_id);
+    snapshot.sessions.len() != before
+}
+
+/// Drop sessions last updated before `cutoff`. Returns true when anything was pruned.
+fn prune_sessions_older_than(snapshot: &mut MonitorSnapshot, cutoff: i64) -> bool {
+    let before = snapshot.sessions.len();
+    snapshot
+        .sessions
+        .retain(|session| session.updated_at >= cutoff);
+    snapshot.sessions.len() != before
+}
+
+fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or_default()
+}
+
+fn load_snapshot(path: &Path) -> MonitorSnapshot {
+    let mut snapshot: MonitorSnapshot = fs::read(path)
         .ok()
         .and_then(|content| serde_json::from_slice(&content).ok())
         .unwrap_or_default();
@@ -230,13 +481,17 @@ fn load_snapshot(path: &Path) -> CodexMonitorSnapshot {
     snapshot
 }
 
-fn persist_snapshot(path: &Path, snapshot: &CodexMonitorSnapshot) -> Result<(), String> {
+fn persist_snapshot(path: &Path, snapshot: &MonitorSnapshot) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| "session monitor state has no parent directory".to_string())?;
     fs::create_dir_all(parent)
         .map_err(|error| format!("unable to create state directory: {error}"))?;
-    let temp_path = parent.join(format!(".codex-state-{}.tmp", Uuid::new_v4()));
+    let file_stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("state");
+    let temp_path = parent.join(format!(".{file_stem}-{}.tmp", Uuid::new_v4()));
     let payload = serde_json::to_vec(snapshot)
         .map_err(|error| format!("unable to serialize monitor state: {error}"))?;
     let mut temp = OpenOptions::new()
@@ -258,9 +513,10 @@ mod tests {
     use super::*;
     use crate::session_monitor::types::SessionSource;
 
-    fn event(name: &str, prompt: Option<&str>, reply: Option<&str>) -> CodexHookEvent {
-        CodexHookEvent {
+    fn event(name: &str, prompt: Option<&str>, reply: Option<&str>) -> HookEvent {
+        HookEvent {
             event_id: Uuid::new_v4().to_string(),
+            agent: AgentKind::Codex,
             hook_event_name: name.to_string(),
             session_id: "session-1".to_string(),
             turn_id: "turn-1".to_string(),
@@ -274,7 +530,7 @@ mod tests {
 
     #[test]
     fn prompt_and_stop_form_one_session_row() {
-        let mut snapshot = CodexMonitorSnapshot::default();
+        let mut snapshot = MonitorSnapshot::default();
         apply_event(
             &mut snapshot,
             event("UserPromptSubmit", Some("question"), None),
@@ -295,7 +551,7 @@ mod tests {
 
     #[test]
     fn internal_system_prompt_creates_no_session_row() {
-        let mut snapshot = CodexMonitorSnapshot::default();
+        let mut snapshot = MonitorSnapshot::default();
         apply_event(
             &mut snapshot,
             event(
@@ -308,10 +564,23 @@ mod tests {
     }
 
     #[test]
+    fn internal_prompt_filter_does_not_apply_to_other_agents() {
+        let mut snapshot = MonitorSnapshot::default();
+        let mut claude_event = event(
+            "UserPromptSubmit",
+            Some("You are an expert at upholding safety and compliance standards for Codex ambient suggestions."),
+            None,
+        );
+        claude_event.agent = AgentKind::Claude;
+        apply_event(&mut snapshot, claude_event);
+        assert_eq!(snapshot.sessions.len(), 1);
+    }
+
+    #[test]
     fn internal_system_prompt_removes_existing_row() {
         // A session captured before the filter existed gets purged when its
         // internal prompt is re-classified.
-        let mut snapshot = CodexMonitorSnapshot::default();
+        let mut snapshot = MonitorSnapshot::default();
         apply_event(
             &mut snapshot,
             event("UserPromptSubmit", Some("real question"), None),
@@ -326,5 +595,36 @@ mod tests {
             ),
         );
         assert!(snapshot.sessions.is_empty());
+    }
+
+    #[test]
+    fn remove_session_from_deletes_only_the_matching_row() {
+        let mut snapshot = MonitorSnapshot::default();
+        apply_event(
+            &mut snapshot,
+            event("UserPromptSubmit", Some("question"), None),
+        );
+        assert!(remove_session_from(&mut snapshot, "session-1"));
+        assert!(snapshot.sessions.is_empty());
+        // Unknown id is a no-op and reports no change.
+        assert!(!remove_session_from(&mut snapshot, "session-1"));
+    }
+
+    #[test]
+    fn prune_sessions_older_than_drops_only_expired_rows() {
+        let mut snapshot = MonitorSnapshot::default();
+        let mut stale = event("Stop", None, Some("old"));
+        stale.occurred_at = 1_000;
+        apply_event(&mut snapshot, stale);
+        let mut fresh = event("Stop", None, Some("new"));
+        fresh.session_id = "session-2".to_string();
+        fresh.occurred_at = 2_000;
+        apply_event(&mut snapshot, fresh);
+
+        assert!(prune_sessions_older_than(&mut snapshot, 1_500));
+        assert_eq!(snapshot.sessions.len(), 1);
+        assert_eq!(snapshot.sessions[0].session_id, "session-2");
+        // Second pass with the same cutoff prunes nothing further.
+        assert!(!prune_sessions_older_than(&mut snapshot, 1_500));
     }
 }

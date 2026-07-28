@@ -1,5 +1,5 @@
-use super::capture::HOOK_ARG;
-use super::types::{CodexHookChangePreview, CodexHookStatus, HookDiffLine};
+use super::capture::{CLAUDE_HOOK_ARG, CODEX_HOOK_ARG};
+use super::types::{AgentKind, HookChangePreview, HookDiffLine, HookStatus};
 use serde_json::{json, Map, Value};
 use similar::{ChangeTag, TextDiff};
 use std::fs::{self, OpenOptions};
@@ -33,11 +33,48 @@ impl HookAction {
     }
 }
 
-pub fn get_hook_status() -> Result<CodexHookStatus, String> {
-    let path = codex_hooks_path()?;
-    let command = expected_command()?;
+fn hook_arg(agent: AgentKind) -> Result<&'static str, String> {
+    match agent {
+        AgentKind::Codex => Ok(CODEX_HOOK_ARG),
+        AgentKind::Claude => Ok(CLAUDE_HOOK_ARG),
+        // Kiro is covered by read-only file watching: stable kiro-cli 2.x
+        // does not load hook configs at all, and injecting agent-embedded
+        // hooks would change the user's default agent.
+        AgentKind::Kiro => Err("Kiro 会话监听基于文件监听，无需安装 Hook。".to_string()),
+    }
+}
+
+fn config_path(agent: AgentKind) -> Result<PathBuf, String> {
+    let home = dirs::home_dir().ok_or_else(|| "home directory is unavailable".to_string())?;
+    match agent {
+        AgentKind::Codex => Ok(home.join(".codex").join("hooks.json")),
+        AgentKind::Claude => Ok(home.join(".claude").join("settings.json")),
+        AgentKind::Kiro => Err("Kiro 会话监听基于文件监听，无需安装 Hook。".to_string()),
+    }
+}
+
+fn config_label(agent: AgentKind) -> &'static str {
+    match agent {
+        AgentKind::Codex => "Codex Hook 配置文件",
+        AgentKind::Claude => "Claude Code 配置文件",
+        AgentKind::Kiro => "Kiro Hook 文件",
+    }
+}
+
+fn agent_label(agent: AgentKind) -> &'static str {
+    match agent {
+        AgentKind::Codex => "Codex",
+        AgentKind::Claude => "Claude Code",
+        AgentKind::Kiro => "Kiro",
+    }
+}
+
+pub fn get_hook_status(agent: AgentKind) -> Result<HookStatus, String> {
+    let path = config_path(agent)?;
+    let arg = hook_arg(agent)?;
+    let command = expected_command(arg)?;
     if !path.exists() {
-        return Ok(CodexHookStatus {
+        return Ok(HookStatus {
             installed: false,
             config_path: path.display().to_string(),
             command,
@@ -49,21 +86,35 @@ pub fn get_hook_status() -> Result<CodexHookStatus, String> {
     let content = fs::read_to_string(&path)
         .map_err(|error| format!("unable to read {}: {error}", path.display()))?;
     let root = parse_root(&content, &path)?;
-    let prompt_commands = managed_commands_for(&root, USER_PROMPT_SUBMIT);
-    let stop_commands = managed_commands_for(&root, STOP);
-    let managed_handler_count = managed_command_count(&root);
+    let prompt_commands = managed_commands_for(&root, USER_PROMPT_SUBMIT, arg);
+    let stop_commands = managed_commands_for(&root, STOP, arg);
+    let managed_handler_count = managed_command_count(&root, arg);
     let installed = managed_handler_count == 2
         && prompt_commands.len() == 1
         && stop_commands.len() == 1
         && prompt_commands[0] == command
         && stop_commands[0] == command;
     let issue = if installed || managed_handler_count == 0 {
-        None
+        // Claude Code lets users disable every hook with one switch; an
+        // installed-but-disabled hook looks broken, so surface it.
+        if agent == AgentKind::Claude
+            && root
+                .get("disableAllHooks")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        {
+            Some("Claude Code 已设置 disableAllHooks，所有 Hook 都不会执行，请先关闭该选项。".to_string())
+        } else {
+            None
+        }
     } else {
-        Some("Codex Hook 配置不完整或命令路径已变化，可重新安装进行修复。".to_string())
+        Some(format!(
+            "{} Hook 配置不完整或命令路径已变化，可重新安装进行修复。",
+            agent_label(agent)
+        ))
     };
 
-    Ok(CodexHookStatus {
+    Ok(HookStatus {
         installed,
         config_path: path.display().to_string(),
         command,
@@ -72,27 +123,36 @@ pub fn get_hook_status() -> Result<CodexHookStatus, String> {
     })
 }
 
-pub fn preview_hook_change(action: HookAction) -> Result<CodexHookChangePreview, String> {
-    let path = codex_hooks_path()?;
-    let command = expected_command()?;
+pub fn preview_hook_change(
+    agent: AgentKind,
+    action: HookAction,
+) -> Result<HookChangePreview, String> {
+    let path = config_path(agent)?;
+    let arg = hook_arg(agent)?;
+    let command = expected_command(arg)?;
     let before = read_existing(&path)?;
-    build_preview(action, &path, &command, &before)
+    let after = render_after(agent, action, &path, &command, arg, &before)?;
+    Ok(build_preview(action, &path, &command, &before, &after))
 }
 
 pub fn apply_hook_change(
+    agent: AgentKind,
     action: HookAction,
     expected_before_hash: &str,
-) -> Result<CodexHookStatus, String> {
-    let path = codex_hooks_path()?;
-    let command = expected_command()?;
+) -> Result<HookStatus, String> {
+    let path = config_path(agent)?;
+    let arg = hook_arg(agent)?;
+    let command = expected_command(arg)?;
     let before = read_existing(&path)?;
     if content_hash(&before) != expected_before_hash {
-        return Err("Codex Hook 配置文件已发生变化，请重新预览后再确认。".to_string());
+        return Err(format!(
+            "{}已发生变化，请重新预览后再确认。",
+            config_label(agent)
+        ));
     }
 
-    let preview = build_preview(action, &path, &command, &before)?;
-    if preview.changed {
-        let after = render_after(action, &path, &command, &before)?;
+    let after = render_after(agent, action, &path, &command, arg, &before)?;
+    if before != after {
         if action == HookAction::Install {
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)
@@ -100,9 +160,9 @@ pub fn apply_hook_change(
             }
         }
         let write_path = resolve_write_target(&path)?;
-        atomic_write(&write_path, after.as_bytes(), expected_before_hash)?;
+        atomic_write(agent, &write_path, after.as_bytes(), expected_before_hash)?;
     }
-    get_hook_status()
+    get_hook_status(agent)
 }
 
 fn build_preview(
@@ -110,12 +170,12 @@ fn build_preview(
     path: &Path,
     command: &str,
     before: &str,
-) -> Result<CodexHookChangePreview, String> {
-    let after = render_after(action, path, command, before)?;
+    after: &str,
+) -> HookChangePreview {
     let mut diff_lines = Vec::new();
     let mut added = 0;
     let mut removed = 0;
-    for change in TextDiff::from_lines(before, &after).iter_all_changes() {
+    for change in TextDiff::from_lines(before, after).iter_all_changes() {
         let tag = match change.tag() {
             ChangeTag::Delete => {
                 removed += 1;
@@ -133,7 +193,7 @@ fn build_preview(
         });
     }
 
-    Ok(CodexHookChangePreview {
+    HookChangePreview {
         action: action.as_str().to_string(),
         config_path: path.display().to_string(),
         command: command.to_string(),
@@ -142,13 +202,15 @@ fn build_preview(
         diff_lines,
         added,
         removed,
-    })
+    }
 }
 
 fn render_after(
+    agent: AgentKind,
     action: HookAction,
     path: &Path,
     command: &str,
+    arg: &str,
     before: &str,
 ) -> Result<String, String> {
     if action == HookAction::Uninstall && before.is_empty() {
@@ -159,13 +221,13 @@ fn render_after(
     } else {
         parse_root(before, path)?
     };
-    remove_managed_handlers(&mut root)?;
+    remove_managed_handlers(agent, &mut root, arg)?;
     if action == HookAction::Install {
         append_managed_handler(&mut root, USER_PROMPT_SUBMIT, command)?;
         append_managed_handler(&mut root, STOP, command)?;
     }
     let mut rendered = serde_json::to_string_pretty(&root)
-        .map_err(|error| format!("unable to serialize Codex Hook config: {error}"))?;
+        .map_err(|error| format!("unable to serialize {}: {error}", config_label(agent)))?;
     rendered.push('\n');
     Ok(rendered)
 }
@@ -182,7 +244,7 @@ fn parse_root(content: &str, path: &Path) -> Result<Value, String> {
 fn append_managed_handler(root: &mut Value, event_name: &str, command: &str) -> Result<(), String> {
     let root_object = root
         .as_object_mut()
-        .ok_or_else(|| "Codex Hook config root is not an object".to_string())?;
+        .ok_or_else(|| "Hook config root is not an object".to_string())?;
     let hooks = root_object
         .entry("hooks".to_string())
         .or_insert_with(|| Value::Object(Map::new()))
@@ -203,9 +265,9 @@ fn append_managed_handler(root: &mut Value, event_name: &str, command: &str) -> 
     Ok(())
 }
 
-fn remove_managed_handlers(root: &mut Value) -> Result<(), String> {
+fn remove_managed_handlers(agent: AgentKind, root: &mut Value, arg: &str) -> Result<(), String> {
     let Some(root_object) = root.as_object_mut() else {
-        return Err("Codex Hook config root is not an object".to_string());
+        return Err(format!("{} root is not an object", config_label(agent)));
     };
     let Some(hooks_value) = root_object.get_mut("hooks") else {
         return Ok(());
@@ -228,7 +290,7 @@ fn remove_managed_handlers(root: &mut Value) -> Result<(), String> {
             let Some(handlers) = handlers_value.as_array_mut() else {
                 continue;
             };
-            handlers.retain(|handler| !is_managed_handler(handler));
+            handlers.retain(|handler| !is_managed_handler(handler, arg));
         }
         groups.retain(|group| {
             let Some(object) = group.as_object() else {
@@ -244,7 +306,7 @@ fn remove_managed_handlers(root: &mut Value) -> Result<(), String> {
     Ok(())
 }
 
-fn managed_commands_for(root: &Value, event_name: &str) -> Vec<String> {
+fn managed_commands_for(root: &Value, event_name: &str, arg: &str) -> Vec<String> {
     root.get("hooks")
         .and_then(Value::as_object)
         .and_then(|hooks| hooks.get(event_name))
@@ -253,13 +315,13 @@ fn managed_commands_for(root: &Value, event_name: &str) -> Vec<String> {
         .flatten()
         .filter_map(|group| group.get("hooks").and_then(Value::as_array))
         .flatten()
-        .filter(|handler| is_managed_handler(handler))
+        .filter(|handler| is_managed_handler(handler, arg))
         .filter_map(|handler| handler.get("command").and_then(Value::as_str))
         .map(ToOwned::to_owned)
         .collect()
 }
 
-fn managed_command_count(root: &Value) -> usize {
+fn managed_command_count(root: &Value, arg: &str) -> usize {
     root.get("hooks")
         .and_then(Value::as_object)
         .into_iter()
@@ -268,36 +330,30 @@ fn managed_command_count(root: &Value) -> usize {
         .flatten()
         .filter_map(|group| group.get("hooks").and_then(Value::as_array))
         .flatten()
-        .filter(|handler| is_managed_handler(handler))
+        .filter(|handler| is_managed_handler(handler, arg))
         .count()
 }
 
-fn is_managed_handler(handler: &Value) -> bool {
+fn is_managed_handler(handler: &Value, arg: &str) -> bool {
     handler.get("type").and_then(Value::as_str) == Some("command")
         && handler
             .get("command")
             .and_then(Value::as_str)
-            .is_some_and(|command| command.split_whitespace().any(|part| part == HOOK_ARG))
+            .is_some_and(|command| command.split_whitespace().any(|part| part == arg))
 }
 
-fn expected_command() -> Result<String, String> {
+fn expected_command(arg: &str) -> Result<String, String> {
     let executable = std::env::current_exe()
         .map_err(|error| format!("unable to locate Agent Hub executable: {error}"))?;
     let path = executable.to_string_lossy();
     #[cfg(target_os = "windows")]
     {
-        return Ok(format!("\"{}\" {HOOK_ARG}", path.replace('"', "\\\"")));
+        return Ok(format!("\"{}\" {arg}", path.replace('"', "\\\"")));
     }
     #[cfg(not(target_os = "windows"))]
     {
-        Ok(format!("'{}' {HOOK_ARG}", path.replace('\'', "'\\''")))
+        Ok(format!("'{}' {arg}", path.replace('\'', "'\\''")))
     }
-}
-
-fn codex_hooks_path() -> Result<PathBuf, String> {
-    dirs::home_dir()
-        .map(|home| home.join(".codex").join("hooks.json"))
-        .ok_or_else(|| "home directory is unavailable".to_string())
 }
 
 fn read_existing(path: &Path) -> Result<String, String> {
@@ -333,7 +389,12 @@ fn content_hash(content: &str) -> String {
     format!("{hash:016x}")
 }
 
-fn atomic_write(path: &Path, content: &[u8], expected_before_hash: &str) -> Result<(), String> {
+fn atomic_write(
+    agent: AgentKind,
+    path: &Path,
+    content: &[u8],
+    expected_before_hash: &str,
+) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| format!("{} has no parent directory", path.display()))?;
@@ -360,8 +421,8 @@ fn atomic_write(path: &Path, content: &[u8], expected_before_hash: &str) -> Resu
     }
 
     // Re-check immediately before the atomic replacement. This narrows the
-    // race window when Codex or another editor updates hooks.json after the
-    // user reviewed the diff.
+    // race window when the agent or another editor updates the config after
+    // the user reviewed the diff.
     let current = match read_existing(path) {
         Ok(current) => current,
         Err(error) => {
@@ -371,7 +432,10 @@ fn atomic_write(path: &Path, content: &[u8], expected_before_hash: &str) -> Resu
     };
     if content_hash(&current) != expected_before_hash {
         let _ = fs::remove_file(&temp_path);
-        return Err("Codex Hook 配置文件已发生变化，请重新预览后再确认。".to_string());
+        return Err(format!(
+            "{}已发生变化，请重新预览后再确认。",
+            config_label(agent)
+        ));
     }
 
     if let Err(error) = crate::paths::replace_file(&temp_path, path) {
@@ -409,15 +473,17 @@ mod tests {
     fn install_preserves_unrelated_handlers_and_adds_two_managed_handlers() {
         let path = Path::new("/tmp/hooks.json");
         let after = render_after(
+            AgentKind::Codex,
             HookAction::Install,
             path,
             "'/Applications/Agent Hub' --agent-hub-codex-hook",
+            CODEX_HOOK_ARG,
             original_config(),
         )
         .unwrap();
         let root: Value = serde_json::from_str(&after).unwrap();
         assert_eq!(root["custom"], "keep-me");
-        assert_eq!(managed_command_count(&root), 2);
+        assert_eq!(managed_command_count(&root, CODEX_HOOK_ARG), 2);
         assert!(after.contains("existing-command"));
     }
 
@@ -425,31 +491,93 @@ mod tests {
     fn uninstall_only_removes_owned_handlers() {
         let path = Path::new("/tmp/hooks.json");
         let installed = render_after(
+            AgentKind::Codex,
             HookAction::Install,
             path,
             "agent-hub --agent-hub-codex-hook",
+            CODEX_HOOK_ARG,
             original_config(),
         )
         .unwrap();
         let after = render_after(
+            AgentKind::Codex,
             HookAction::Uninstall,
             path,
             "agent-hub --agent-hub-codex-hook",
+            CODEX_HOOK_ARG,
             &installed,
         )
         .unwrap();
         let root: Value = serde_json::from_str(&after).unwrap();
-        assert_eq!(managed_command_count(&root), 0);
+        assert_eq!(managed_command_count(&root, CODEX_HOOK_ARG), 0);
         assert!(after.contains("existing-command"));
         assert_eq!(root["custom"], "keep-me");
     }
 
     #[test]
+    fn claude_install_preserves_other_settings_and_does_not_touch_codex_handlers() {
+        let before = r#"{
+  "model": "claude-sonnet-5",
+  "permissions": {"allow": ["Bash(git status)"]},
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {"type": "command", "command": "agent-hub --agent-hub-codex-hook"}
+        ]
+      }
+    ]
+  }
+}
+"#;
+        let path = Path::new("/tmp/settings.json");
+        let after = render_after(
+            AgentKind::Claude,
+            HookAction::Install,
+            path,
+            "agent-hub --agent-hub-claude-hook",
+            CLAUDE_HOOK_ARG,
+            before,
+        )
+        .unwrap();
+        let root: Value = serde_json::from_str(&after).unwrap();
+        assert_eq!(root["model"], "claude-sonnet-5");
+        assert!(root.get("permissions").is_some());
+        assert_eq!(managed_command_count(&root, CLAUDE_HOOK_ARG), 2);
+        // A Codex handler in the same file is not managed by the Claude
+        // target and survives install/uninstall cycles.
+        assert!(after.contains("--agent-hub-codex-hook"));
+
+        let after_uninstall = render_after(
+            AgentKind::Claude,
+            HookAction::Uninstall,
+            path,
+            "agent-hub --agent-hub-claude-hook",
+            CLAUDE_HOOK_ARG,
+            &after,
+        )
+        .unwrap();
+        let root: Value = serde_json::from_str(&after_uninstall).unwrap();
+        assert_eq!(managed_command_count(&root, CLAUDE_HOOK_ARG), 0);
+        assert!(after_uninstall.contains("--agent-hub-codex-hook"));
+        assert_eq!(root["model"], "claude-sonnet-5");
+    }
+
+    #[test]
+    fn kiro_hook_change_is_rejected() {
+        // Kiro monitoring is file-watching only; no hook target exists.
+        assert!(config_path(AgentKind::Kiro).is_err());
+        assert!(hook_arg(AgentKind::Kiro).is_err());
+    }
+
+    #[test]
     fn malformed_hooks_shape_is_rejected_without_replacement() {
         let error = render_after(
+            AgentKind::Codex,
             HookAction::Install,
             Path::new("/tmp/hooks.json"),
             "agent-hub --agent-hub-codex-hook",
+            CODEX_HOOK_ARG,
             r#"{"hooks":"do-not-touch"}"#,
         )
         .unwrap_err();
@@ -462,7 +590,13 @@ mod tests {
         let path = directory.path().join("hooks.json");
         fs::write(&path, "changed-after-preview").unwrap();
 
-        let error = atomic_write(&path, b"replacement", &content_hash("old-preview")).unwrap_err();
+        let error = atomic_write(
+            AgentKind::Codex,
+            &path,
+            b"replacement",
+            &content_hash("old-preview"),
+        )
+        .unwrap_err();
 
         assert!(error.contains("已发生变化"));
         assert_eq!(fs::read_to_string(path).unwrap(), "changed-after-preview");
@@ -483,6 +617,6 @@ mod tests {
             resolve_write_target(&link).unwrap(),
             fs::canonicalize(target).unwrap()
         );
-        assert!(fs::symlink_metadata(link).unwrap().file_type().is_symlink());
+        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
     }
 }

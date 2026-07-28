@@ -66,6 +66,14 @@ Agent Hub solves this. One desktop app to manage them all.
 - **Batch HTML export** — Export selected conversations as one searchable, self-contained HTML file that opens in any modern browser
 - **Resume sessions** in your terminal — macOS: Warp, iTerm, Ghostty, Terminal · Windows: Windows Terminal, PowerShell, CMD
 
+### 📡 Session Monitor
+
+- Watch live sessions in real time — running/ended status, the latest user prompt, and the agent's reply
+- **Codex CLI** — two lifecycle Hooks (`UserPromptSubmit` + `Stop`) injected into `~/.codex/hooks.json`
+- **Claude Code** — the same two Hooks added to `~/.claude/settings.json`, hot-reloaded with no restart
+- **Kiro** — file watching on `~/.kiro/sessions/cli/` (append-only transcripts + lock-file pid liveness). Works out of the box on any kiro-cli version, with zero writes to Kiro configuration
+- Hook install/uninstall always shows a diff preview first and only ever touches Agent Hub's own entries
+
 ### 👤 Accounts
 
 - Save and switch authentication profiles for **Claude Code** and **Codex CLI**
@@ -110,27 +118,42 @@ Download `.exe` from [Releases](https://github.com/ssly/agent-hub/releases) and 
 
 | Platform | Skill Directory |
 |----------|----------------|
+| Shared Pool | `~/.agents/skills/` |
+| Codex CLI | `~/.agents/skills/` (Shared Pool) |
 | Claude Code | `~/.claude/skills/` |
-| Codex CLI | `~/.codex/skills/` |
-| Cursor | `~/.cursor/skills-cursor/` |
-| Gemini | `~/.gemini/skills/` |
-| OpenClaw | `~/.openclaw/skills/` |
+| Antigravity | `~/.gemini/config/skills/` |
+| Gemini CLI | `~/.gemini/skills/` |
+| Grok Build | `~/.grok/skills/` |
+| Kimi Code | `~/.kimi-code/skills/` |
+| Cursor | `~/.cursor/skills/` |
 | Hermes | `~/.hermes/skills/` |
 | Trae | `~/.trae/skills/` |
 | Kiro | `~/.kiro/skills/` |
-| Shared Pool | `~/.agents/skills/` |
+
+The Shared Pool (`~/.agents/skills/`) is read by default by Codex, Cursor, OpenCode, Gemini CLI, Kimi Code, and Grok Build; Antigravity reads `.agents/skills/` at project level.
 
 ### MCP Server Management
 
 | Platform | Config Path | Format |
 |----------|-------------|--------|
 | Claude Code | `~/.claude.json` | JSON |
+| Antigravity | `~/.gemini/config/mcp_config.json` | JSON |
 | Cursor | `~/.cursor/mcp.json` | JSON |
-| Gemini | `~/.gemini/settings.json` | JSON |
+| Gemini CLI | `~/.gemini/settings.json` | JSON |
+| Grok Build | `~/.grok/config.toml` | TOML |
+| Kimi Code | `~/.kimi-code/mcp.json` | JSON |
 | Kiro | `~/.kiro/settings/mcp.json` | JSON |
 | Codex CLI | `~/.codex/config.toml` | TOML |
 
 When a project folder is selected, Agent Hub maps each platform to its repository-local layout (for example, Claude Code uses `.claude/skills/` and `.mcp.json`). Project-scoped content is shown read-only.
+
+### Session Monitoring
+
+| Platform | Mechanism | Path |
+|----------|-----------|------|
+| Codex CLI | Lifecycle Hooks (`UserPromptSubmit` + `Stop`) | `~/.codex/hooks.json` |
+| Claude Code | Lifecycle Hooks, hot-reloaded | `~/.claude/settings.json` |
+| Kiro | Session file watching (read-only, zero config) | `~/.kiro/sessions/cli/` |
 
 ---
 

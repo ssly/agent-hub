@@ -22,22 +22,6 @@ pub fn builtin_mcp_platforms() -> Vec<McpPlatformDef> {
     let home = dirs::home_dir().expect("no home directory");
     vec![
         McpPlatformDef {
-            id: "claude-code".into(),
-            display_name: "Claude Code".into(),
-            presence_path: home.join(".claude"),
-            config_path: home.join(".claude.json"),
-            format: McpFormat::Json,
-            mcp_key: "mcpServers".into(),
-        },
-        McpPlatformDef {
-            id: "cursor".into(),
-            display_name: "Cursor".into(),
-            presence_path: home.join(".cursor"),
-            config_path: join_relative(home.clone(), ".cursor/mcp.json"),
-            format: McpFormat::Json,
-            mcp_key: "mcpServers".into(),
-        },
-        McpPlatformDef {
             id: "codex".into(),
             display_name: "Codex".into(),
             presence_path: home.join(".codex"),
@@ -46,10 +30,50 @@ pub fn builtin_mcp_platforms() -> Vec<McpPlatformDef> {
             mcp_key: "mcp_servers".into(),
         },
         McpPlatformDef {
+            id: "claude-code".into(),
+            display_name: "Claude Code".into(),
+            presence_path: home.join(".claude"),
+            config_path: home.join(".claude.json"),
+            format: McpFormat::Json,
+            mcp_key: "mcpServers".into(),
+        },
+        McpPlatformDef {
+            id: "antigravity".into(),
+            display_name: "Antigravity".into(),
+            presence_path: join_relative(home.clone(), ".gemini/config"),
+            config_path: join_relative(home.clone(), ".gemini/config/mcp_config.json"),
+            format: McpFormat::Json,
+            mcp_key: "mcpServers".into(),
+        },
+        McpPlatformDef {
             id: "gemini".into(),
-            display_name: "Gemini".into(),
+            display_name: "Gemini CLI".into(),
             presence_path: home.join(".gemini"),
             config_path: join_relative(home.clone(), ".gemini/settings.json"),
+            format: McpFormat::Json,
+            mcp_key: "mcpServers".into(),
+        },
+        McpPlatformDef {
+            id: "grok-build".into(),
+            display_name: "Grok Build".into(),
+            presence_path: home.join(".grok"),
+            config_path: join_relative(home.clone(), ".grok/config.toml"),
+            format: McpFormat::Toml,
+            mcp_key: "mcp_servers".into(),
+        },
+        McpPlatformDef {
+            id: "kimi-code".into(),
+            display_name: "Kimi Code".into(),
+            presence_path: home.join(".kimi-code"),
+            config_path: join_relative(home.clone(), ".kimi-code/mcp.json"),
+            format: McpFormat::Json,
+            mcp_key: "mcpServers".into(),
+        },
+        McpPlatformDef {
+            id: "cursor".into(),
+            display_name: "Cursor".into(),
+            presence_path: home.join(".cursor"),
+            config_path: join_relative(home.clone(), ".cursor/mcp.json"),
             format: McpFormat::Json,
             mcp_key: "mcpServers".into(),
         },
@@ -78,9 +102,12 @@ pub fn find_workspace_mcp_platform(
     def.config_path = match id {
         // Claude Code uses a repository-root .mcp.json for project scope.
         "claude-code" => workspace.join(".mcp.json"),
-        "cursor" => workspace.join(".cursor").join("mcp.json"),
         "codex" => workspace.join(".codex").join("config.toml"),
+        "antigravity" => workspace.join(".agents").join("mcp_config.json"),
         "gemini" => workspace.join(".gemini").join("settings.json"),
+        "grok-build" => workspace.join(".grok").join("config.toml"),
+        "kimi-code" => workspace.join(".kimi-code").join("mcp.json"),
+        "cursor" => workspace.join(".cursor").join("mcp.json"),
         "kiro" => workspace.join(".kiro").join("settings").join("mcp.json"),
         _ => return None,
     };
@@ -106,5 +133,31 @@ mod tests {
                 .config_path,
             root.join(".codex").join("config.toml")
         );
+        assert_eq!(
+            find_workspace_mcp_platform("antigravity", &root)
+                .unwrap()
+                .config_path,
+            root.join(".agents").join("mcp_config.json")
+        );
+        assert_eq!(
+            find_workspace_mcp_platform("grok-build", &root)
+                .unwrap()
+                .config_path,
+            root.join(".grok").join("config.toml")
+        );
+        assert_eq!(
+            find_workspace_mcp_platform("kimi-code", &root)
+                .unwrap()
+                .config_path,
+            root.join(".kimi-code").join("mcp.json")
+        );
+    }
+
+    #[test]
+    fn grok_build_reuses_the_codex_toml_layout() {
+        let grok = find_mcp_platform("grok-build").expect("grok-build MCP platform");
+        let codex = find_mcp_platform("codex").expect("codex MCP platform");
+        assert_eq!(grok.format, McpFormat::Toml);
+        assert_eq!(grok.mcp_key, codex.mcp_key);
     }
 }

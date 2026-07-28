@@ -108,6 +108,13 @@ export const listSessions = (platformId: string, pathFilter: string, offset: num
 export const listSessionTerminals = () => invoke<any[]>('list_session_terminals')
 export const resumeSession = (platformId: string, sessionId: string, projectPath: string, terminalId: string) =>
   invoke<string>('resume_session', { platformId, sessionId, projectPath, terminalId })
+export interface SessionResumePreview {
+  command: string
+  last_user_message: string | null
+  last_assistant_message: string | null
+}
+export const getSessionResumePreview = (platformId: string, sessionId: string, projectPath: string) =>
+  invoke<SessionResumePreview>('get_session_resume_preview', { platformId, sessionId, projectPath })
 export const getSessionMessages = (platformId: string, sessionId: string, offset: number, limit: number) =>
   invoke<any[]>('get_session_messages', { platformId, sessionId, offset, limit })
 export const deleteSession = (platformId: string, sessionId: string) =>
@@ -166,14 +173,34 @@ export const configureHooks = (agentType: string) => invoke<void>('configure_hoo
 export const removeHooks = (agentType: string) => invoke<void>('remove_hooks', { agentType })
 export const getHooksStatus = () => invoke<Record<string, boolean>>('get_hooks_status')
 
-// Codex session monitor
+// Session monitor
 export const getCodexSessionMonitorSnapshot = () =>
   invoke<any>('get_codex_session_monitor_snapshot')
+export const deleteCodexSessionMonitorSession = (sessionId: string) =>
+  invoke<void>('delete_codex_session_monitor_session', { sessionId })
 export const getCodexHookStatus = () => invoke<any>('get_codex_hook_status')
 export const previewCodexHookChange = (action: 'install' | 'uninstall') =>
   invoke<any>('preview_codex_hook_change', { action })
 export const applyCodexHookChange = (action: 'install' | 'uninstall', expectedBeforeHash: string) =>
   invoke<any>('apply_codex_hook_change', { action, expectedBeforeHash })
+
+export const getClaudeSessionMonitorSnapshot = () =>
+  invoke<any>('get_claude_session_monitor_snapshot')
+export const deleteClaudeSessionMonitorSession = (sessionId: string) =>
+  invoke<void>('delete_claude_session_monitor_session', { sessionId })
+export const getClaudeHookStatus = () => invoke<any>('get_claude_hook_status')
+export const previewClaudeHookChange = (action: 'install' | 'uninstall') =>
+  invoke<any>('preview_claude_hook_change', { action })
+export const applyClaudeHookChange = (action: 'install' | 'uninstall', expectedBeforeHash: string) =>
+  invoke<any>('apply_claude_hook_change', { action, expectedBeforeHash })
+
+export const getKiroSessionMonitorSnapshot = () =>
+  invoke<any>('get_kiro_session_monitor_snapshot')
+export const deleteKiroSessionMonitorSession = (sessionId: string) =>
+  invoke<void>('delete_kiro_session_monitor_session', { sessionId })
+export const getKiroMonitorStatus = () => invoke<any>('get_kiro_monitor_status')
+export const setKiroMonitorEnabled = (enabled: boolean) =>
+  invoke<any>('set_kiro_monitor_enabled', { enabled })
 
 // Switch
 export const listSwitchProfiles = (agentType: string) => invoke<any>('list_switch_profiles', { agentType })

@@ -68,12 +68,12 @@ src-tauri/src/
   trash.rs                # 回收站
   paths.rs                # 跨平台路径公共库：join_relative 分段拼接、home_dir、replace_file（屏蔽 Windows/Mac 差异）
   platform/               # 平台发现和注册
-    registry.rs           # 内置平台定义（9 个 Skill 平台）
+    registry.rs           # 内置平台定义（11 个 Skill 平台，顺序即侧边栏顺序）
     discovery.rs          # 自动发现 + 自定义平台
   skill/                  # Skill 模型、解析、扫描
   diff/                   # Myers diff 引擎
   sync/                   # Skill 同步服务
-  mcp/                    # MCP Server 管理（5 个平台）
+  mcp/                    # MCP Server 管理（8 个平台）
     parser.rs             # JSON/TOML 配置解析
     writer.rs             # 配置回写
   claude_plugin.rs        # Claude Code 原生插件读取与启停
@@ -81,6 +81,13 @@ src-tauri/src/
     claude.rs             # Claude Code 会话适配
     codex.rs              # Codex CLI 会话适配
     kiro.rs               # Kiro 会话适配
+    grok.rs               # Grok CLI 会话适配（~/.grok/sessions/<编码cwd>/<uuid>/ 下 summary.json + chat_history.jsonl）
+  session_monitor/        # 实时会话监听（Monitor 标签页）
+    capture.rs            # Hook 事件捕获：--agent-hub-{codex,claude}-hook stdin → inbox 文件
+    hooks.rs              # Codex hooks.json / Claude settings.json Hook 安装与卸载（预览 diff + hash 校验）
+    kiro.rs               # Kiro CLI 会话目录文件监听（唯一通道，覆盖所有版本）
+    service.rs            # 多 Agent 事件聚合服务（inbox watcher + Kiro watcher + Kiro 状态定时刷新）
+    types.rs              # AgentKind、HookEvent、SessionState、MonitorSnapshot
   switch/                 # 账号切换 + Codex 用量
     model.rs              # AuthProfile, ProfileMeta
     commands.rs           # Profile CRUD + 切换 + get_codex_usage
@@ -118,6 +125,15 @@ npm run version [-- <ver>] # 从 git tag 同步版本号
 
 插件工作区按 Agent 聚合 Skill、MCP Server 与 Claude Code 原生插件，支持全局用户目录和项目目录两种范围。项目范围用于查看仓库内配置，当前保持只读；Claude Code 用户范围原生插件支持启用/停用。
 
+平台顺序（registry 定义顺序即侧边栏顺序）：Shared Pool → Codex → Claude Code → Antigravity → Gemini CLI → Grok Build → Kimi Code → Cursor / Hermes / Trae / Kiro。关键约定：
+
+- **Shared Pool（`~/.agents/skills`）**：Codex、Cursor、OpenCode、Gemini CLI、Kimi Code、Grok Build 官方默认读取；Claude Code 与 Antigravity 全局层不读。
+- **Codex**：官方用户级 skills 仅共享池（`~/.codex/skills` 是社区误传），前端显示"Skills 在 Shared Pool 目录下"并提供跳转，不渲染自己的 Skills 区块。
+- **Antigravity**（agy CLI / Antigravity 2.0）：共享 `~/.gemini/config/`（skills + mcp_config.json + plugins）；项目级为 `.agents/skills`、`.agents/mcp_config.json`（`workspace_skill_dir` 有特判，不走镜像）。
+- **Gemini CLI**：独立平台（`~/.gemini/skills` + `~/.gemini/settings.json`），官方 alias 读共享池。
+- **Grok Build / Kimi Code / Antigravity / Codex 的插件体系**只在前端小字标注（`plugin.notes.*` i18n key），不管理；Claude Code 是唯一可管理的插件体系。
+- 各平台的小字标注（notes）全部在前端 i18n（`plugin.notes.<platform-id>`），后端不透传。
+
 ### Skill 系统
 
 Skill 是包含 `SKILL.md` 的目录，SKILL.md 使用 YAML frontmatter（`name`、`version`、`description`）+ Markdown body。扫描器递归遍历平台目录，用 canonical path 集合防止符号链接循环。
@@ -132,7 +148,17 @@ Skill 是包含 `SKILL.md` 的目录，SKILL.md 使用 YAML frontmatter（`name`
 
 ### 会话浏览器
 
-每个平台有独立的会话适配器（`claude.rs`、`codex.rs`、`kiro.rs`），读取各自的会话存储格式。支持分页浏览、消息查看、终端恢复，以及将批量选中的会话导出为可搜索、自包含的 HTML 文件。
+每个平台有独立的会话适配器（`claude.rs`、`codex.rs`、`kiro.rs`、`grok.rs`），读取各自的会话存储格式。支持分页浏览、消息查看、终端恢复，以及将批量选中的会话导出为可搜索、自包含的 HTML 文件。
+
+### 会话监听（session_monitor）
+
+Monitor 标签页实时展示各 Agent 的进行中/已结束会话（用户问题 + 助手回复）。Codex 与 Claude Code 走 `UserPromptSubmit` + `Stop` 两个 Hook 的最小集，Kiro 走纯文件监听：
+
+- **Codex**：向 `~/.codex/hooks.json` 注入 command Hook，调用自身二进制 `--agent-hub-codex-hook` 把 stdin JSON 原子写入 `~/.agent-hub/session-monitor/inbox/`。
+- **Claude Code**：同一机制，写入 `~/.claude/settings.json` 的 `hooks` 字段（热加载无需重启），Hook 参数为 `--agent-hub-claude-hook`。
+- **Kiro**：纯文件监听 `~/.kiro/sessions/cli/`（`.jsonl` 增量 tail 提取 Prompt/AssistantMessage；状态为 turn 级，与 Codex/Claude 对齐——提问置进行中、回复置已结束；`.lock` pid 只做单向兜底：进程死亡才把"进行中"翻转为"已结束"，10s 间隔刷新并主动推送），任意 kiro-cli 版本开箱即用、对 Kiro 配置零写入。面板提供"打开/关闭监听"开关（`~/.agent-hub/session-monitor/kiro-monitor.json` 持久化，运行时启停 watcher；关闭时状态线程仅空转休眠）。全局 Hook 方案（`~/.kiro/hooks/`）已验证在稳定版 kiro-cli 2.x 不生效（仅 IDE 1.0.182+ / v3 支持），故不采用。
+
+安装/卸载统一走预览 diff + before-hash 双重校验 + 原子写，只移除自己管理的 handler。`SessionMonitorService` 按 agent 路由事件到各自快照（`{codex,claude,kiro}-state.json`），经 `session-monitor:{agent}-changed` Tauri event 推前端。旧的 `monitor/` 模块（FSEvents + 进程扫描）已停用，不要混淆。
 
 ### 账号切换
 

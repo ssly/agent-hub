@@ -1,5 +1,41 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentKind {
+    Codex,
+    Claude,
+    Kiro,
+}
+
+impl AgentKind {
+    pub const ALL: [AgentKind; 3] = [Self::Codex, Self::Claude, Self::Kiro];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Codex => "codex",
+            Self::Claude => "claude",
+            Self::Kiro => "kiro",
+        }
+    }
+
+    pub fn state_file_name(self) -> &'static str {
+        match self {
+            Self::Codex => "codex-state.json",
+            Self::Claude => "claude-state.json",
+            Self::Kiro => "kiro-state.json",
+        }
+    }
+
+    pub fn changed_event(self) -> &'static str {
+        match self {
+            Self::Codex => "session-monitor:codex-changed",
+            Self::Claude => "session-monitor:claude-changed",
+            Self::Kiro => "session-monitor:kiro-changed",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionSource {
@@ -14,10 +50,17 @@ pub enum RuntimeStatus {
     Ended,
 }
 
+/// Events captured before the `agent` field existed are Codex events.
+fn default_agent_kind() -> AgentKind {
+    AgentKind::Codex
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CodexHookEvent {
+pub struct HookEvent {
     pub event_id: String,
+    #[serde(default = "default_agent_kind")]
+    pub agent: AgentKind,
     pub hook_event_name: String,
     pub session_id: String,
     pub turn_id: String,
@@ -30,7 +73,7 @@ pub struct CodexHookEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CodexSessionState {
+pub struct SessionState {
     pub session_id: String,
     pub turn_id: String,
     pub source: SessionSource,
@@ -43,21 +86,29 @@ pub struct CodexSessionState {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CodexMonitorSnapshot {
+pub struct MonitorSnapshot {
     #[serde(default)]
     pub revision: u64,
     #[serde(default)]
-    pub sessions: Vec<CodexSessionState>,
+    pub sessions: Vec<SessionState>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CodexHookStatus {
+pub struct HookStatus {
     pub installed: bool,
     pub config_path: String,
     pub command: String,
     pub managed_handler_count: usize,
     pub issue: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KiroMonitorStatus {
+    pub available: bool,
+    pub sessions_dir: String,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -69,7 +120,7 @@ pub struct HookDiffLine {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CodexHookChangePreview {
+pub struct HookChangePreview {
     pub action: String,
     pub config_path: String,
     pub command: String,

@@ -1,5 +1,6 @@
 use crate::platform::Platform;
 use crate::session;
+use crate::session_monitor::{AgentKind, HookAction, MonitorSnapshot};
 use crate::skill::Skill;
 use crate::state::SafeState;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -660,6 +661,16 @@ pub fn resume_session(
     terminal_id: String,
 ) -> Result<String, CommandError> {
     session::resume_session(&platform_id, &session_id, &project_path, &terminal_id)
+        .map_err(CommandError::SyncError)
+}
+
+#[tauri::command(async)]
+pub fn get_session_resume_preview(
+    platform_id: String,
+    session_id: String,
+    project_path: String,
+) -> Result<session::SessionResumePreview, CommandError> {
+    session::get_session_resume_preview(&platform_id, &session_id, &project_path)
         .map_err(CommandError::SyncError)
 }
 
@@ -1541,36 +1552,128 @@ pub fn get_hooks_status(
     monitor.hooks_status()
 }
 
-// --- Codex Session Monitor Commands ---
+// --- Session Monitor Commands ---
+
+fn parse_hook_action(action: &str) -> Result<HookAction, CommandError> {
+    HookAction::parse(action).map_err(CommandError::General)
+}
 
 #[tauri::command]
 pub fn get_codex_session_monitor_snapshot(
     monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
-) -> crate::session_monitor::CodexMonitorSnapshot {
-    monitor.snapshot()
+) -> MonitorSnapshot {
+    monitor.snapshot(AgentKind::Codex)
 }
 
 #[tauri::command]
-pub fn get_codex_hook_status() -> Result<crate::session_monitor::CodexHookStatus, CommandError> {
-    crate::session_monitor::get_hook_status().map_err(CommandError::General)
+pub fn delete_codex_session_monitor_session(
+    monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
+    session_id: String,
+) -> Result<(), CommandError> {
+    monitor
+        .remove_session(AgentKind::Codex, &session_id)
+        .map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn get_codex_hook_status() -> Result<crate::session_monitor::HookStatus, CommandError> {
+    crate::session_monitor::get_hook_status(AgentKind::Codex).map_err(CommandError::General)
 }
 
 #[tauri::command]
 pub fn preview_codex_hook_change(
     action: String,
-) -> Result<crate::session_monitor::CodexHookChangePreview, CommandError> {
-    let action =
-        crate::session_monitor::HookAction::parse(&action).map_err(CommandError::General)?;
-    crate::session_monitor::preview_hook_change(action).map_err(CommandError::General)
+) -> Result<crate::session_monitor::HookChangePreview, CommandError> {
+    crate::session_monitor::preview_hook_change(AgentKind::Codex, parse_hook_action(&action)?)
+        .map_err(CommandError::General)
 }
 
 #[tauri::command]
 pub fn apply_codex_hook_change(
     action: String,
     expected_before_hash: String,
-) -> Result<crate::session_monitor::CodexHookStatus, CommandError> {
-    let action =
-        crate::session_monitor::HookAction::parse(&action).map_err(CommandError::General)?;
-    crate::session_monitor::apply_hook_change(action, &expected_before_hash)
+) -> Result<crate::session_monitor::HookStatus, CommandError> {
+    crate::session_monitor::apply_hook_change(
+        AgentKind::Codex,
+        parse_hook_action(&action)?,
+        &expected_before_hash,
+    )
+    .map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn get_claude_session_monitor_snapshot(
+    monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
+) -> MonitorSnapshot {
+    monitor.snapshot(AgentKind::Claude)
+}
+
+#[tauri::command]
+pub fn delete_claude_session_monitor_session(
+    monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
+    session_id: String,
+) -> Result<(), CommandError> {
+    monitor
+        .remove_session(AgentKind::Claude, &session_id)
+        .map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn get_claude_hook_status() -> Result<crate::session_monitor::HookStatus, CommandError> {
+    crate::session_monitor::get_hook_status(AgentKind::Claude).map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn preview_claude_hook_change(
+    action: String,
+) -> Result<crate::session_monitor::HookChangePreview, CommandError> {
+    crate::session_monitor::preview_hook_change(AgentKind::Claude, parse_hook_action(&action)?)
+        .map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn apply_claude_hook_change(
+    action: String,
+    expected_before_hash: String,
+) -> Result<crate::session_monitor::HookStatus, CommandError> {
+    crate::session_monitor::apply_hook_change(
+        AgentKind::Claude,
+        parse_hook_action(&action)?,
+        &expected_before_hash,
+    )
+    .map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn get_kiro_session_monitor_snapshot(
+    monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
+) -> MonitorSnapshot {
+    monitor.snapshot(AgentKind::Kiro)
+}
+
+#[tauri::command]
+pub fn delete_kiro_session_monitor_session(
+    monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
+    session_id: String,
+) -> Result<(), CommandError> {
+    monitor
+        .remove_session(AgentKind::Kiro, &session_id)
+        .map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn get_kiro_monitor_status(
+    monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
+) -> crate::session_monitor::KiroMonitorStatus {
+    monitor.kiro_status()
+}
+
+#[tauri::command]
+pub fn set_kiro_monitor_enabled(
+    monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
+    enabled: bool,
+) -> Result<crate::session_monitor::KiroMonitorStatus, CommandError> {
+    monitor
+        .set_kiro_enabled(enabled)
         .map_err(CommandError::General)
 }

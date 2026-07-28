@@ -9,7 +9,7 @@ import SkillListView from '@/components/skills/SkillListView.vue'
 import McpListView from '@/components/mcp/McpListView.vue'
 import ClaudePluginList from '@/components/plugins/ClaudePluginList.vue'
 
-const { t } = useI18n()
+const { t, te } = useI18n()
 const pluginsStore = usePluginsStore()
 const skillsStore = useSkillsStore()
 const mcpStore = useMcpStore()
@@ -18,10 +18,25 @@ const claudePluginsStore = useClaudePluginsStore()
 const skillCount = computed(() => skillsStore.skills.length)
 const serverCount = computed(() => mcpStore.servers.length)
 const isClaudeCode = computed(() => pluginsStore.selectedPlatformId === 'claude-code')
-const showMcpSection = computed(() => pluginsStore.isGlobalScope || serverCount.value > 0)
+const isCodex = computed(() => pluginsStore.selectedPlatformId === 'codex')
+const showMcpSection = computed(() => Boolean(pluginsStore.selectedPlatform?.supports_mcp)
+  && (pluginsStore.isGlobalScope || serverCount.value > 0))
 const showClaudeSection = computed(() => isClaudeCode.value
   && (pluginsStore.isGlobalScope || claudePluginsStore.plugins.length > 0))
-const showSkillsSection = computed(() => pluginsStore.isGlobalScope || skillCount.value > 0)
+// Codex officially keeps user-level skills in the Shared Pool; show a jump
+// note instead of a duplicated skills section.
+const showSkillsSection = computed(() => !isCodex.value
+  && (pluginsStore.isGlobalScope || skillCount.value > 0))
+const platformNote = computed(() => {
+  const id = pluginsStore.selectedPlatformId
+  if (!id) return ''
+  const key = `plugin.notes.${id}`
+  return te(key) ? t(key) : ''
+})
+
+function jumpToSharedPool() {
+  pluginsStore.selectPlatform('shared-pool')
+}
 </script>
 
 <template>
@@ -42,16 +57,7 @@ const showSkillsSection = computed(() => pluginsStore.isGlobalScope || skillCoun
               ? t('plugin.summary_claude', { plugins: claudePluginsStore.plugins.length, skills: skillCount, servers: serverCount })
               : t('plugin.summary', { skills: skillCount, servers: serverCount }) }}
           </p>
-          <div class="ah-plugin-paths">
-            <div v-if="pluginsStore.selectedPlatform.skill_dir" class="ah-plugin-path">
-              <span>{{ t('plugin.skills_path') }}</span>
-              <code>{{ pluginsStore.selectedPlatform.skill_dir }}</code>
-            </div>
-            <div v-if="pluginsStore.selectedPlatform.config_path" class="ah-plugin-path">
-              <span>{{ t('plugin.mcp_path') }}</span>
-              <code>{{ pluginsStore.selectedPlatform.config_path }}</code>
-            </div>
-          </div>
+          <p v-if="platformNote" class="ah-plugin-note">{{ platformNote }}</p>
         </div>
       </header>
 
@@ -61,6 +67,10 @@ const showSkillsSection = computed(() => pluginsStore.isGlobalScope || skillCoun
             <div>
               <h2 id="plugin-mcp-heading">{{ t('plugin.mcp') }}</h2>
               <p>{{ t('plugin.mcp_hint') }}</p>
+              <div v-if="pluginsStore.selectedPlatform.config_path" class="ah-plugin-path">
+                <span>{{ t('plugin.mcp_path') }}</span>
+                <code>{{ pluginsStore.selectedPlatform.config_path }}</code>
+              </div>
             </div>
             <div class="flex items-center gap-2">
               <span class="ah-plugin-count">{{ serverCount }}</span>
@@ -92,11 +102,31 @@ const showSkillsSection = computed(() => pluginsStore.isGlobalScope || skillCoun
           </div>
         </section>
 
+        <section v-if="isCodex" class="ah-plugin-pane" aria-labelledby="plugin-codex-skills-heading">
+          <div class="ah-plugin-codex-skills">
+            <div>
+              <h2 id="plugin-codex-skills-heading">{{ t('plugin.skills') }}</h2>
+              <p>{{ t('plugin.codex_skills_in_pool') }}</p>
+              <div v-if="pluginsStore.selectedPlatform.skill_dir" class="ah-plugin-path">
+                <span>{{ t('plugin.skills_path') }}</span>
+                <code>{{ pluginsStore.selectedPlatform.skill_dir }}</code>
+              </div>
+            </div>
+            <button class="btn btn-secondary btn-sm" @click="jumpToSharedPool">
+              {{ t('plugin.jump_to_pool') }}
+            </button>
+          </div>
+        </section>
+
         <section v-if="showSkillsSection" class="ah-plugin-pane" aria-labelledby="plugin-skills-heading">
           <div class="ah-plugin-pane__header">
             <div>
               <h2 id="plugin-skills-heading">{{ t('plugin.skills') }}</h2>
               <p>{{ t('plugin.skills_hint') }}</p>
+              <div v-if="pluginsStore.selectedPlatform.skill_dir" class="ah-plugin-path">
+                <span>{{ t('plugin.skills_path') }}</span>
+                <code>{{ pluginsStore.selectedPlatform.skill_dir }}</code>
+              </div>
             </div>
             <span class="ah-plugin-count">{{ skillCount }}</span>
           </div>
@@ -142,17 +172,12 @@ const showSkillsSection = computed(() => pluginsStore.isGlobalScope || skillCoun
   color: var(--ink-3);
   font-size: 13px;
 }
-.ah-plugin-paths {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px 16px;
-  margin-top: 7px;
-}
 .ah-plugin-path {
   min-width: 0;
   display: flex;
   align-items: baseline;
   gap: 7px;
+  margin-top: 5px;
   color: var(--ink-4);
   font-size: 11px;
 }
@@ -200,6 +225,22 @@ const showSkillsSection = computed(() => pluginsStore.isGlobalScope || skillCoun
 .ah-plugin-pane__header p { font-size: 12px; color: var(--ink-4); margin-top: 1px; }
 .ah-plugin-count { font-family: var(--font-mono); padding: 2px 8px; }
 .ah-plugin-pane__body { min-width: 0; }
+.ah-plugin-note {
+  margin-top: 5px;
+  color: var(--ink-4);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+.ah-plugin-codex-skills {
+  min-height: 52px;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.ah-plugin-codex-skills h2 { font-size: 14px; font-weight: 600; color: var(--ink); }
+.ah-plugin-codex-skills p { font-size: 12px; color: var(--ink-4); margin-top: 1px; }
 
 :deep(.ah-embedded-view) { padding: 0; }
 :deep(.ah-embedded-view .ah-view-content) { max-width: none; }

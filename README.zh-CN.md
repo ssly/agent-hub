@@ -64,6 +64,14 @@ Agent Hub 就是为此而生。一个桌面应用，统一管理所有平台。
 - **批量导出 HTML** — 将选中的会话导出为一个可搜索、自包含的 HTML 文件，任何现代浏览器都能直接打开
 - **恢复会话** — 在终端中继续历史会话，支持 macOS：Warp、iTerm、Ghostty、Terminal · Windows：Windows Terminal、PowerShell、CMD
 
+### 📡 会话监听
+
+- 实时查看进行中的会话 — 运行/结束状态、最新的用户提问与 Agent 回复
+- **Codex CLI** — 向 `~/.codex/hooks.json` 注入两个生命周期 Hook（`UserPromptSubmit` + `Stop`）
+- **Claude Code** — 同样的两个 Hook 写入 `~/.claude/settings.json`，热加载无需重启
+- **Kiro** — 文件监听 `~/.kiro/sessions/cli/`（追加式事件流 + lock 文件 pid 活性检测），任意 kiro-cli 版本开箱即用，对 Kiro 配置零写入
+- Hook 的安装/卸载一律先展示 diff 预览，且只改动 Agent Hub 自己添加的内容
+
 ### 👤 账号管理
 
 - 保存和切换 **Claude Code**、**Codex CLI** 的认证配置
@@ -108,27 +116,42 @@ Agent Hub 就是为此而生。一个桌面应用，统一管理所有平台。
 
 | 平台 | Skill 目录 |
 |------|-----------|
+| Shared Pool | `~/.agents/skills/` |
+| Codex CLI | `~/.agents/skills/`（共享池） |
 | Claude Code | `~/.claude/skills/` |
-| Codex CLI | `~/.codex/skills/` |
-| Cursor | `~/.cursor/skills-cursor/` |
-| Gemini | `~/.gemini/skills/` |
-| OpenClaw | `~/.openclaw/skills/` |
+| Antigravity | `~/.gemini/config/skills/` |
+| Gemini CLI | `~/.gemini/skills/` |
+| Grok Build | `~/.grok/skills/` |
+| Kimi Code | `~/.kimi-code/skills/` |
+| Cursor | `~/.cursor/skills/` |
 | Hermes | `~/.hermes/skills/` |
 | Trae | `~/.trae/skills/` |
 | Kiro | `~/.kiro/skills/` |
-| Shared Pool | `~/.agents/skills/` |
+
+共享池（`~/.agents/skills/`）默认被 Codex、Cursor、OpenCode、Gemini CLI、Kimi Code、Grok Build 读取；Antigravity 在项目级读取 `.agents/skills/`。
 
 ### MCP Server 管理
 
 | 平台 | 配置路径 | 格式 |
 |------|---------|------|
 | Claude Code | `~/.claude.json` | JSON |
+| Antigravity | `~/.gemini/config/mcp_config.json` | JSON |
 | Cursor | `~/.cursor/mcp.json` | JSON |
-| Gemini | `~/.gemini/settings.json` | JSON |
+| Gemini CLI | `~/.gemini/settings.json` | JSON |
+| Grok Build | `~/.grok/config.toml` | TOML |
+| Kimi Code | `~/.kimi-code/mcp.json` | JSON |
 | Kiro | `~/.kiro/settings/mcp.json` | JSON |
 | Codex CLI | `~/.codex/config.toml` | TOML |
 
 选择项目文件夹后，Agent Hub 会映射到各平台的仓库内目录（例如 Claude Code 使用 `.claude/skills/` 与 `.mcp.json`）。项目范围内容当前只读展示。
+
+### 会话监听
+
+| 平台 | 机制 | 路径 |
+|------|------|------|
+| Codex CLI | 生命周期 Hook（`UserPromptSubmit` + `Stop`） | `~/.codex/hooks.json` |
+| Claude Code | 生命周期 Hook，热加载 | `~/.claude/settings.json` |
+| Kiro | 会话文件监听（只读、零配置） | `~/.kiro/sessions/cli/` |
 
 ---
 
