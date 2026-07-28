@@ -222,22 +222,14 @@ function formatDate(value: number | string, withSeconds = false) {
   }).format(date)
 }
 
-// Reset-credit chips show the expiry split into two lines: date on top, exact
-// time underneath ("有效期 2026/08/01" / "03:14:48").
+// Reset-credit chips show the expiry date by default (YYYY-MM-DD); hovering
+// floats the full validity above the chip ("重置卡有效期:" / date / hh:mm:ss).
 function splitExpiry(value?: string | null) {
   if (!value) return { date: t('tray.expiry_unknown'), time: '' }
   const date = new Date(value)
-  const datePart = new Intl.DateTimeFormat(locale.value, {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(date)
-  const timePart = new Intl.DateTimeFormat(locale.value, {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  }).format(date)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const datePart = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+  const timePart = `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
   return { date: datePart, time: timePart }
 }
 
@@ -440,14 +432,12 @@ onBeforeUnmount(() => {
           <div v-if="snapshot && !error" class="credit-section">
             <div v-if="resetCards.length" class="credit-chips">
               <div v-for="(card, index) in resetCards" :key="`${card.expires_at ?? 'unknown'}-${index}`" class="credit-chip">
-                <span class="credit-chip__date">
-                  {{ splitExpiry(card.expires_at).time
-                    ? `${t('tray.valid_until')} ${splitExpiry(card.expires_at).date}`
-                    : splitExpiry(card.expires_at).date }}
+                <span class="credit-chip__tooltip">
+                  <span>{{ t('tray.reset_credit_expiry') }}</span>
+                  <span>{{ splitExpiry(card.expires_at).date }}</span>
+                  <span v-if="splitExpiry(card.expires_at).time">{{ splitExpiry(card.expires_at).time }}</span>
                 </span>
-                <span v-if="splitExpiry(card.expires_at).time" class="credit-chip__time">
-                  {{ splitExpiry(card.expires_at).time }}
-                </span>
+                <span class="credit-chip__date">{{ splitExpiry(card.expires_at).date }}</span>
               </div>
             </div>
             <p v-else class="credit-empty">{{ t('tray.no_reset_credit') }}</p>
@@ -789,25 +779,30 @@ onBeforeUnmount(() => {
   border-radius: 9px;
   background: var(--tray-inset);
 }
-/* Full expiry date floats above the chip on hover; the chip itself stays a
-   compact one-line HH:mm:ss tag and never reflows. */
-.credit-chip__date {
+/* Full validity floats above the chip on hover; the chip itself stays a
+   compact one-line YYYY-MM-DD tag and never reflows. */
+.credit-chip__tooltip {
   position: absolute;
   bottom: calc(100% + 6px);
   left: 50%;
   transform: translateX(-50%);
-  padding: 3px 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 5px 9px;
   border-radius: 6px;
   color: var(--tray-on-accent);
   background: var(--tray-ink);
   font-size: 10px;
+  line-height: 1.5;
   white-space: nowrap;
   opacity: 0;
   pointer-events: none;
   transition: opacity .15s ease;
 }
-.credit-chip:hover .credit-chip__date { opacity: 1; }
-.credit-chip__time {
+.credit-chip:hover .credit-chip__tooltip { opacity: 1; }
+.credit-chip__date {
   color: var(--tray-ink);
   font-size: 13px;
   font-weight: 650;
