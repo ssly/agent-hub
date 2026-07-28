@@ -105,6 +105,48 @@ pub fn delete_codex_session(session_id: &str) -> Result<(), String> {
     delete_codex_session_in_db(&db_path, session_id)
 }
 
+/// Streaming scan that keeps only the latest user/assistant message, for the
+/// resume preview. Never collects the full transcript into memory.
+pub fn last_codex_messages(
+    session_id: &str,
+) -> Result<(Option<SessionMessage>, Option<SessionMessage>), String> {
+    let db_path = codex_db_path()?;
+    let conn = open_codex_db_readonly(&db_path)?;
+    let rollout_path: String = conn
+        .query_row(
+            "SELECT rollout_path FROM threads WHERE id = ?1 LIMIT 1",
+            [session_id],
+            |row| row.get(0),
+        )
+        .map_err(|err| err.to_string())?;
+
+    let file = fs::File::open(&rollout_path).map_err(|err| err.to_string())?;
+    let reader = BufReader::new(file);
+    let mut last_user = None;
+    let mut last_assistant = None;
+
+    for line in reader.lines() {
+        let line = match line {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let data: Value = match serde_json::from_str(&line) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let Some(message) = parse_codex_rollout_message(&data) else {
+            continue;
+        };
+        if message.role == "user" {
+            last_user = Some(message);
+        } else {
+            last_assistant = Some(message);
+        }
+    }
+
+    Ok((last_user, last_assistant))
+}
+
 pub fn delete_codex_sessions(session_ids: &[String]) -> Result<usize, String> {
     let db_path = codex_db_path()?;
     delete_codex_sessions_in_db(&db_path, session_ids)
@@ -129,7 +171,7 @@ fn delete_codex_sessions_in_db(path: &Path, session_ids: &[String]) -> Result<us
     use rusqlite::params_from_iter;
     let placeholders = vec!["?"; session_ids.len()];
     let sql = format!(
-        "UPDATE threads SET archived = 1 WHERE archived = 0 AND id IN ({})",
+        "UPDATE threads SET archived = 1, archived_at = strftime('%s','now') WHERE archived = 0 AND id IN ({})",
         placeholders.join(", ")
     );
     let changed = conn
@@ -264,7 +306,7 @@ fn delete_codex_session_in_db(path: &Path, session_id: &str) -> Result<(), Strin
     let conn = open_codex_db_readwrite(path)?;
     let changed = conn
         .execute(
-            "UPDATE threads SET archived = 1 WHERE id = ?1 AND archived = 0",
+            "UPDATE threads SET archived = 1, archived_at = strftime('%s','now') WHERE id = ?1 AND archived = 0",
             [session_id],
         )
         .map_err(|err| err.to_string())?;
@@ -448,7 +490,8 @@ mod tests {
                 updated_at INTEGER NOT NULL DEFAULT 0,
                 first_user_message TEXT NOT NULL DEFAULT '',
                 rollout_path TEXT NOT NULL DEFAULT '',
-                archived INTEGER NOT NULL DEFAULT 0
+                archived INTEGER NOT NULL DEFAULT 0,
+                archived_at INTEGER
             );",
         )
         .expect("threads table should create");
@@ -478,6 +521,15 @@ mod tests {
             )
             .expect("archived should load");
         assert_eq!(archived, 1);
+        // Match the official archive behavior: archived_at is stamped too.
+        let archived_at: Option<i64> = conn
+            .query_row(
+                "SELECT archived_at FROM threads WHERE id = ?1",
+                ["thread-1"],
+                |row| row.get(0),
+            )
+            .expect("archived_at should load");
+        assert!(archived_at.unwrap_or(0) > 0);
     }
 
     #[test]

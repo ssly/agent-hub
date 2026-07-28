@@ -163,7 +163,7 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocumentMousedown)
   padding: 0 8px 0 10px;
   background: var(--sunken);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-xs);
   color: var(--ink);
   font-size: 12px;
   text-align: left;

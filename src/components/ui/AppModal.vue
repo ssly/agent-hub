@@ -58,9 +58,9 @@ onUnmounted(() => {
           class="ah-modal__header flex items-center justify-between border-b pb-4"
           style="border-color: var(--hairline)"
         >
-          <h3 class="ah-modal__title">{{ title }}</h3>
+          <h3 class="ah-modal__title truncate min-w-0">{{ title }}</h3>
           <button
-            class="text-xl cursor-pointer transition-colors"
+            class="text-xl leading-none cursor-pointer transition-colors shrink-0"
             style="color: var(--ink-3)"
             @click="emit('close')"
           >

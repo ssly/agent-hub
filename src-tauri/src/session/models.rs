@@ -43,6 +43,13 @@ pub struct SessionTerminalOption {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+pub struct SessionResumePreview {
+    pub command: String,
+    pub last_user_message: Option<String>,
+    pub last_assistant_message: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SessionSearchResult {
     pub session_id: String,
     pub session_title: String,

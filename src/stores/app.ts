@@ -73,7 +73,7 @@ export const useAppStore = defineStore('app', () => {
       const sessionsStore = useSessionsStore()
       sessionsStore.isLoading = true
       try {
-        await Promise.all([sessionsStore.refreshPlatforms(), sessionsStore.refreshTerminals()])
+        await sessionsStore.refreshPlatforms()
       } finally {
         sessionsStore.isLoading = false
       }

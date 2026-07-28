@@ -12,7 +12,6 @@ import AppSelect from '@/components/ui/AppSelect.vue'
 const { t, locale } = useI18n()
 const store = useSessionsStore()
 const { showToast } = useToast()
-const resumingId = ref<string | null>(null)
 const { armedId: confirmDeleteId, arm: armDelete, reset: resetDelete } = useHoverResetId()
 
 // Batch delete uses the same two-step confirm pattern as single delete: first
@@ -73,31 +72,19 @@ const pathSelectOptions = computed(() =>
     label: p === 'all' ? t('session.path_filter_all') : p === 'unknown' ? t('session.path_filter_unknown') : p,
   }))
 )
-const terminalSelectOptions = computed(() => {
-  const list = store.terminals.length > 0
-    ? store.terminals
-    : [{ id: 'terminal-default', display_name: 'Terminal (Default)', available: true }]
-  return list.map((term: any) => ({
-    value: term.id,
-    label: `${term.display_name}${term.available ? '' : ` (${t('session.unavailable')})`}`,
-    disabled: !term.available,
-  }))
-})
 
-async function handleResume(session: any) {
-  resumingId.value = session.id
+const resumeCommandCopied = ref(false)
+
+async function copyResumeCommand() {
+  const command = store.resumePreview?.command
+  if (!command) return
   try {
-    const cmd = await api.resumeSession(
-      session.platform_id || store.selectedPlatformId!,
-      session.id,
-      session.project_path || '',
-      store.selectedTerminal
-    )
-    showToast(t('session.resume_started', { command: cmd }), 'success', 5000)
+    await navigator.clipboard.writeText(command)
+    resumeCommandCopied.value = true
+    showToast(t('action.copied'), 'success')
+    setTimeout(() => { resumeCommandCopied.value = false }, 2000)
   } catch (e: any) {
-    showToast(t('session.resume_failed', { error: e?.SyncError || e?.message || e }), 'error')
-  } finally {
-    resumingId.value = null
+    showToast(t('session.copy_failed', { error: e?.message || e }), 'error')
   }
 }
 
@@ -205,7 +192,7 @@ function clearSessionSearch() {
                   </span>
                 </div>
                 <pre
-                  class="text-xs font-mono whitespace-pre-wrap break-words m-0 leading-relaxed"
+                  class="text-xs font-mono whitespace-pre-wrap break-words m-0 leading-relaxed select-text"
                   style="color: var(--ink)"
                   v-html="highlightText(result.message.content, store.searchQuery)"
                 ></pre>
@@ -220,10 +207,9 @@ function clearSessionSearch() {
                 </button>
                 <button
                   class="btn btn-primary btn-sm"
-                  :disabled="resumingId === result.session_id"
-                  @click="handleResume({ id: result.session_id, project_path: result.project_path, platform_id: result.platform_id })"
+                  @click="store.openResume({ id: result.session_id, title: result.session_title, project_path: result.project_path, platform_id: result.platform_id })"
                 >
-                  {{ resumingId === result.session_id ? t('session.resuming') : t('session.resume') }}
+                  {{ t('session.resume') }}
                 </button>
               </div>
             </div>
@@ -245,21 +231,11 @@ function clearSessionSearch() {
               <div class="flex items-center gap-3 flex-wrap">
                 <div class="flex items-center gap-1.5">
                   <span class="ah-filter-bar__label">{{ t('session.path_filter_label') }}</span>
-                  <div class="w-48">
+                  <div class="w-72">
                     <AppSelect
                       :model-value="store.selectedPathFilter"
                       :options="pathSelectOptions"
                       @update:model-value="store.changePathFilter($event)"
-                    />
-                  </div>
-                </div>
-                <div class="flex items-center gap-1.5">
-                  <span class="ah-filter-bar__label">{{ t('session.resume_terminal') }}</span>
-                  <div class="w-40">
-                    <AppSelect
-                      :model-value="store.selectedTerminal"
-                      :options="terminalSelectOptions"
-                      @update:model-value="store.selectedTerminal = $event"
                     />
                   </div>
                 </div>
@@ -354,10 +330,9 @@ function clearSessionSearch() {
                 <button class="btn btn-secondary btn-sm" @click="store.openMessages(session)">{{ t('session.view_messages') }}</button>
                 <button
                   class="btn btn-primary btn-sm"
-                  :disabled="resumingId === session.id"
-                  @click="handleResume(session)"
+                  @click="store.openResume(session)"
                 >
-                  {{ resumingId === session.id ? t('session.resuming') : t('session.resume') }}
+                  {{ t('session.resume') }}
                 </button>
                 <button
                   class="session-card__delete"
@@ -432,7 +407,7 @@ function clearSessionSearch() {
                         {{ msg.timestamp ? formatSessionTime(msg.timestamp, locale) : '' }}
                       </span>
                     </div>
-                    <pre class="ah-msg__content">{{ msg.content || '' }}</pre>
+                    <pre class="ah-msg__content select-text">{{ msg.content || '' }}</pre>
                   </div>
                 </div>
               </template>
@@ -451,6 +426,56 @@ function clearSessionSearch() {
           </div>
           <template #footer>
             <button class="btn btn-secondary" @click="store.messagesModalOpen = false">{{ t('action.close') }}</button>
+          </template>
+        </AppModal>
+
+        <!-- Resume Modal: copy-command flow (terminal launcher removed) -->
+        <AppModal
+          :show="store.resumeModalOpen"
+          :title="t('session.resume')"
+          @close="store.resumeModalOpen = false"
+          width-class="w-[36rem]"
+        >
+          <div v-if="store.resumeLoading" class="loading-pulse text-center py-8" style="color: var(--ink-3)">
+            {{ t('session.loading_messages') }}
+          </div>
+          <div v-else-if="store.resumeError" class="py-8 text-center" style="color: var(--danger)">
+            {{ t('session.resume_failed', { error: store.resumeError }) }}
+          </div>
+          <div v-else-if="store.resumePreview" class="flex flex-col gap-2.5">
+            <div class="ah-resume-row">
+              <span class="ah-resume-row__label">{{ t('session.resume_field_title') }}</span>
+              <span class="ah-resume-row__value select-text">
+                {{ store.resumeTarget?.title || t('session.untitled') }}
+              </span>
+            </div>
+            <div class="ah-resume-row">
+              <span class="ah-resume-row__label">{{ t('session.resume_last_question') }}</span>
+              <span class="ah-resume-row__value select-text">
+                {{ store.resumePreview.last_user_message || t('session.resume_empty') }}
+              </span>
+            </div>
+            <div class="ah-resume-row">
+              <span class="ah-resume-row__label">{{ t('session.resume_last_answer') }}</span>
+              <span class="ah-resume-row__value select-text">
+                {{ store.resumePreview.last_assistant_message || t('session.resume_empty') }}
+              </span>
+            </div>
+            <div class="ah-resume-row ah-resume-row--command">
+              <div class="flex items-center justify-between gap-2">
+                <span class="ah-resume-row__label">{{ t('session.resume_command_label') }}</span>
+                <span class="ah-resume-row__hint">{{ t('session.resume_command_hint') }}</span>
+              </div>
+              <div class="ah-resume-command">
+                <code class="ah-resume-command__text select-text">{{ store.resumePreview.command }}</code>
+                <button class="btn btn-secondary btn-sm shrink-0" @click="copyResumeCommand">
+                  {{ resumeCommandCopied ? t('action.copied') : t('action.copy') }}
+                </button>
+              </div>
+            </div>
+          </div>
+          <template #footer>
+            <button class="btn btn-secondary" @click="store.resumeModalOpen = false">{{ t('action.close') }}</button>
           </template>
         </AppModal>
       </template>
@@ -472,6 +497,58 @@ function clearSessionSearch() {
   justify-content: flex-end;
   gap: 6px;
   margin-top: 10px;
+}
+/* Resume modal rows: fixed-width label + single-line truncated value */
+.ah-resume-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+.ah-resume-row--command {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  margin-top: 4px;
+}
+.ah-resume-row__label {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.ah-resume-row__hint {
+  font-size: 11px;
+  color: var(--ink-4);
+  white-space: nowrap;
+}
+.ah-resume-row__value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  color: var(--ink);
+}
+.ah-resume-command {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--sunken);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+}
+.ah-resume-command__text {
+  min-width: 0;
+  flex: 1;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 /* Delete: quiet icon by default, turns into a red confirm chip on first click.
    Kept self-contained (not using .btn) so the confirming state is fully controlled. */

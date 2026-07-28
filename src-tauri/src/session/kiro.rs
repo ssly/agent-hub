@@ -33,6 +33,39 @@ pub fn delete_kiro_session(session_id: &str) -> Result<(), String> {
     delete_kiro_session_in_dir(&root, session_id)
 }
 
+/// Streaming scan that keeps only the latest user/assistant message, for the
+/// resume preview. Never collects the full transcript into memory.
+pub fn last_kiro_messages(
+    session_id: &str,
+) -> Result<(Option<SessionMessage>, Option<SessionMessage>), String> {
+    let path = find_kiro_session_jsonl(session_id)?;
+    let file = fs::File::open(path).map_err(|err| err.to_string())?;
+    let reader = BufReader::new(file);
+    let mut last_user = None;
+    let mut last_assistant = None;
+
+    for line in reader.lines() {
+        let line = match line {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let value: Value = match serde_json::from_str(&line) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let Some(message) = parse_kiro_message_line(&value) else {
+            continue;
+        };
+        if message.role == "user" {
+            last_user = Some(message);
+        } else {
+            last_assistant = Some(message);
+        }
+    }
+
+    Ok((last_user, last_assistant))
+}
+
 fn collect_kiro_sessions() -> Result<Vec<SessionSummary>, String> {
     let root = kiro_sessions_dir()?;
     if !root.exists() {
@@ -197,12 +230,14 @@ fn delete_kiro_session_in_dir(root: &Path, session_id: &str) -> Result<(), Strin
         return Err("Kiro session directory not found: ~/.kiro/sessions/cli".to_string());
     }
 
-    let artifacts = collect_kiro_session_artifacts(root, session_id)?;
-    if artifacts.is_empty() {
-        return Err(format!("Kiro session not found: {}", session_id));
-    }
+    let stem = find_kiro_session_stem(root, session_id)?
+        .ok_or_else(|| format!("Kiro session not found: {}", session_id))?;
 
-    for path in artifacts {
+    // Remove every artifact of the session: metadata + transcript plus the
+    // side files Kiro creates (.lock pid file, .history) and the per-session
+    // directory, so nothing orphaned is left behind.
+    for ext in ["json", "jsonl", "lock", "history"] {
+        let path = root.join(format!("{}.{}", stem, ext));
         if !path.exists() {
             continue;
         }
@@ -214,18 +249,27 @@ fn delete_kiro_session_in_dir(root: &Path, session_id: &str) -> Result<(), Strin
             )
         })?;
     }
+    let session_dir = root.join(&stem);
+    if session_dir.is_dir() {
+        fs::remove_dir_all(&session_dir).map_err(|err| {
+            format!(
+                "Failed to delete Kiro session directory {}: {}",
+                session_dir.display(),
+                err
+            )
+        })?;
+    }
     Ok(())
 }
 
-fn collect_kiro_session_artifacts(root: &Path, session_id: &str) -> Result<Vec<PathBuf>, String> {
-    let mut artifacts = Vec::new();
-    let direct_json = root.join(format!("{}.json", session_id));
-    if direct_json.exists() {
-        artifacts.push(direct_json);
-    }
-    let direct_jsonl = root.join(format!("{}.jsonl", session_id));
-    if direct_jsonl.exists() {
-        artifacts.push(direct_jsonl);
+/// Resolve the on-disk file stem for a session id. Usually identical to the
+/// id; falls back to matching `session_id` inside the metadata JSON for
+/// possible future naming differences.
+fn find_kiro_session_stem(root: &Path, session_id: &str) -> Result<Option<String>, String> {
+    if root.join(format!("{}.json", session_id)).exists()
+        || root.join(format!("{}.jsonl", session_id)).exists()
+    {
+        return Ok(Some(session_id.to_string()));
     }
 
     let entries = fs::read_dir(root).map_err(|err| err.to_string())?;
@@ -260,17 +304,11 @@ fn collect_kiro_session_artifacts(root: &Path, session_id: &str) -> Result<Vec<P
         let Some(summary) = parse_kiro_summary(&value, &fallback_id, 0) else {
             continue;
         };
-        if summary.id != session_id {
-            continue;
+        if summary.id == session_id {
+            return Ok(Some(fallback_id));
         }
-        artifacts.push(path.clone());
-        artifacts.push(root.join(format!("{}.jsonl", fallback_id)));
-        artifacts.push(root.join(format!("{}.jsonl", summary.id)));
     }
-
-    artifacts.sort();
-    artifacts.dedup();
-    Ok(artifacts)
+    Ok(None)
 }
 
 fn read_kiro_messages_from_jsonl(
@@ -549,6 +587,29 @@ mod tests {
 
         assert!(!metadata_path.exists());
         assert!(!transcript_path.exists());
+    }
+
+    #[test]
+    fn delete_kiro_session_removes_side_artifacts() {
+        let dir = tempfile::tempdir().expect("temp dir should create");
+        fs::write(
+            dir.path().join("session-1.json"),
+            json!({"session_id": "session-1", "title": "t"}).to_string(),
+        )
+        .expect("metadata should write");
+        fs::write(dir.path().join("session-1.jsonl"), "{}\n").expect("transcript should write");
+        fs::write(dir.path().join("session-1.lock"), "1234").expect("lock should write");
+        fs::write(dir.path().join("session-1.history"), "[]").expect("history should write");
+        let session_dir = dir.path().join("session-1");
+        fs::create_dir_all(&session_dir).expect("session dir should create");
+        fs::write(session_dir.join("checkpoint.json"), "{}").expect("artifact should write");
+
+        delete_kiro_session_in_dir(dir.path(), "session-1").expect("delete should succeed");
+
+        for ext in ["json", "jsonl", "lock", "history"] {
+            assert!(!dir.path().join(format!("session-1.{}", ext)).exists());
+        }
+        assert!(!session_dir.exists());
     }
 
     #[test]

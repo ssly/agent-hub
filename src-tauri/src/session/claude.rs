@@ -176,31 +176,12 @@ fn read_claude_messages_from_file(
             Ok(value) => value,
             Err(_) => continue,
         };
-        let Some(record_type) = data.get("type").and_then(|value| value.as_str()) else {
-            continue;
-        };
-        if record_type != "user" && record_type != "assistant" {
-            continue;
-        }
-        let Some(content) = data
-            .get("message")
-            .and_then(|message| message.get("content"))
-            .and_then(extract_text_content)
-        else {
+        let Some(message) = parse_claude_message_line(&data) else {
             continue;
         };
 
         if matched >= offset {
-            let timestamp = data
-                .get("timestamp")
-                .and_then(|value| value.as_str())
-                .and_then(parse_rfc3339_to_ms)
-                .unwrap_or(0);
-            messages.push(SessionMessage {
-                role: record_type.to_string(),
-                content,
-                timestamp,
-            });
+            messages.push(message);
             if messages.len() >= page_limit {
                 break;
             }
@@ -209,6 +190,61 @@ fn read_claude_messages_from_file(
     }
 
     Ok(messages)
+}
+
+fn parse_claude_message_line(data: &Value) -> Option<SessionMessage> {
+    let record_type = data.get("type").and_then(|value| value.as_str())?;
+    if record_type != "user" && record_type != "assistant" {
+        return None;
+    }
+    let content = data
+        .get("message")
+        .and_then(|message| message.get("content"))
+        .and_then(extract_text_content)?;
+    let timestamp = data
+        .get("timestamp")
+        .and_then(|value| value.as_str())
+        .and_then(parse_rfc3339_to_ms)
+        .unwrap_or(0);
+    Some(SessionMessage {
+        role: record_type.to_string(),
+        content,
+        timestamp,
+    })
+}
+
+/// Streaming scan that keeps only the latest user/assistant message, for the
+/// resume preview. Never collects the full transcript into memory.
+pub fn last_claude_messages(
+    session_id: &str,
+) -> Result<(Option<SessionMessage>, Option<SessionMessage>), String> {
+    let path = find_session_file(session_id)
+        .ok_or_else(|| format!("Claude session not found: {}", session_id))?;
+    let file = fs::File::open(path).map_err(|err| err.to_string())?;
+    let reader = BufReader::new(file);
+    let mut last_user = None;
+    let mut last_assistant = None;
+
+    for line in reader.lines() {
+        let line = match line {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let data: Value = match serde_json::from_str(&line) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let Some(message) = parse_claude_message_line(&data) else {
+            continue;
+        };
+        if message.role == "user" {
+            last_user = Some(message);
+        } else {
+            last_assistant = Some(message);
+        }
+    }
+
+    Ok((last_user, last_assistant))
 }
 
 fn find_session_file(session_id: &str) -> Option<PathBuf> {
@@ -333,6 +369,19 @@ fn delete_claude_session_in_projects_dir(
             .ok_or_else(|| format!("Claude session not found: {}", session_id))?;
     fs::remove_file(&session_path)
         .map_err(|err| format!("Failed to delete Claude session {}: {}", session_id, err))?;
+    // Claude Code keeps per-session artifacts (e.g. subagent transcripts) in a
+    // sibling directory named after the session id; remove it too so nothing
+    // orphaned is left behind.
+    let session_dir = session_path.with_extension("");
+    if session_dir.is_dir() {
+        fs::remove_dir_all(&session_dir).map_err(|err| {
+            format!(
+                "Failed to delete Claude session directory {}: {}",
+                session_dir.display(),
+                err
+            )
+        })?;
+    }
     Ok(())
 }
 
@@ -493,6 +542,24 @@ mod tests {
             .expect("delete should succeed");
 
         assert!(!session_path.exists());
+    }
+
+    #[test]
+    fn delete_claude_session_removes_session_directory() {
+        let dir = tempdir().expect("temp dir should create");
+        let project_dir = dir.path().join("project-a");
+        fs::create_dir_all(&project_dir).expect("project dir should create");
+        let session_path = project_dir.join("session-1.jsonl");
+        fs::write(&session_path, "{\"type\":\"user\"}\n").expect("session file should write");
+        let session_dir = project_dir.join("session-1");
+        fs::create_dir_all(session_dir.join("subagents")).expect("subagents dir should create");
+        fs::write(session_dir.join("subagents/agent.jsonl"), "{}\n").expect("agent should write");
+
+        delete_claude_session_in_projects_dir(dir.path(), "session-1", &[])
+            .expect("delete should succeed");
+
+        assert!(!session_path.exists());
+        assert!(!session_dir.exists());
     }
 
     #[test]

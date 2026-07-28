@@ -8,8 +8,6 @@ export const useSessionsStore = defineStore('sessions', () => {
   const selectedPlatformId = ref<string | null>(null)
   const selectedPathFilter = ref('all')
   const pathOptions = ref<string[]>(['all', 'unknown'])
-  const terminals = ref<any[]>([])
-  const selectedTerminal = ref('terminal-default')
   const sessionTotal = ref(0)
   const sessionOffset = ref(0)
   const hasMore = ref(false)
@@ -51,19 +49,26 @@ export const useSessionsStore = defineStore('sessions', () => {
     await loadSessions(false)
   }
 
-  async function refreshTerminals() {
+  // Resume modal states (copy-command flow; terminal launcher was removed).
+  const resumeModalOpen = ref(false)
+  const resumeTarget = ref<any | null>(null)
+  const resumePreview = ref<api.SessionResumePreview | null>(null)
+  const resumeLoading = ref(false)
+  const resumeError = ref('')
+
+  async function openResume(session: any) {
+    resumeTarget.value = session
+    resumeModalOpen.value = true
+    resumePreview.value = null
+    resumeError.value = ''
+    resumeLoading.value = true
     try {
-      const list = await api.listSessionTerminals()
-      terminals.value = Array.isArray(list) ? list : []
-    } catch {
-      terminals.value = []
-    }
-    if (terminals.value.length > 0) {
-      const active = terminals.value.find((t: any) => t.id === selectedTerminal.value && t.available)
-      if (!active) {
-        const first = terminals.value.find((t: any) => t.available)
-        selectedTerminal.value = first ? first.id : terminals.value[0].id
-      }
+      const platformId = session.platform_id || selectedPlatformId.value!
+      resumePreview.value = await api.getSessionResumePreview(platformId, session.id, session.project_path || '')
+    } catch (e: any) {
+      resumeError.value = e?.SyncError || e?.message || String(e)
+    } finally {
+      resumeLoading.value = false
     }
   }
 
@@ -243,13 +248,14 @@ export const useSessionsStore = defineStore('sessions', () => {
 
   return {
     platforms, sessions, selectedPlatformId, selectedPathFilter, pathOptions,
-    terminals, selectedTerminal, sessionTotal, sessionOffset, hasMore,
+    sessionTotal, sessionOffset, hasMore,
     isLoading, loadingMore, loadError,
     messagesModalOpen, messages, activeSession, messagesLoading, messagesLoadingMore,
     messagesOffset, messagesHasMore, messagesError,
+    resumeModalOpen, resumeTarget, resumePreview, resumeLoading, resumeError,
     searchQuery, searchResults, isSearching, searchError,
     selectionMode, selectedIds, selectedCount, isBulkDeleting, isBulkExporting,
-    refreshPlatforms, refreshTerminals, loadSessions, selectPlatform,
+    refreshPlatforms, loadSessions, selectPlatform, openResume,
     changePathFilter, loadMore, openMessages, loadMessages, doSearch,
     enterSelection, exitSelection, toggleSelected, selectAllLoaded, clearSelection, bulkDelete, bulkExport,
   }
