@@ -549,19 +549,10 @@ async function handleConfirmClear() {
                     <span class="font-semibold" style="color: var(--accent)">{{ t('switch.usage_remaining', { n: kimiWindowWeekly.remaining_percent }) }}</span>
                   </div>
                   <div class="text-xs mt-1" style="color: var(--ink-3)">
-                    <template v-if="store.kimiUsage.weekly_limit != null">
-                      {{ t('switch.kimi_used_limit_reset', {
-                        used: store.kimiUsage.weekly_used ?? 0,
-                        limit: store.kimiUsage.weekly_limit ?? 0,
-                        reset: fmtReset(kimiWindowWeekly.reset_after_seconds, kimiWindowWeekly.reset_at),
-                      }) }}
-                    </template>
-                    <template v-else>
-                      {{ t('switch.kimi_used_reset', {
-                        used: kimiWindowWeekly.used_percent,
-                        reset: fmtReset(kimiWindowWeekly.reset_after_seconds, kimiWindowWeekly.reset_at),
-                      }) }}
-                    </template>
+                    {{ t('switch.kimi_used_reset', {
+                      used: kimiWindowWeekly.used_percent,
+                      reset: fmtReset(kimiWindowWeekly.reset_after_seconds, kimiWindowWeekly.reset_at),
+                    }) }}
                   </div>
                 </div>
 
