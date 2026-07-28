@@ -38,6 +38,16 @@ jobs:
         if: matrix.platform == 'windows-latest'
         run: cargo test --manifest-path src-tauri/Cargo.toml claude_plugin::tests
 
+      - name: Read release notes from tag annotation
+        shell: bash
+        run: |
+          git fetch --tags --force --quiet
+          {
+            echo "RELEASE_BODY<<__EOF__"
+            git tag -l --format='%(contents)' "${{ github.ref_name }}"
+            echo "__EOF__"
+          } >> "$GITHUB_ENV"
+
       - uses: tauri-apps/tauri-action@v0
         id: tauri
         env:
@@ -47,7 +57,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Agent Hub ${{ github.ref_name }}"
-          releaseBody: "See the assets to download and install this version."
+          releaseBody: ${{ env.RELEASE_BODY }}
           args: ${{ matrix.args }}
 
       - name: Verify updater manifests
