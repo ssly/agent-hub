@@ -6,7 +6,7 @@ import { useAppStore } from '@/stores/app'
 import { useSkillsStore } from '@/stores/skills'
 import { usePluginsStore } from '@/stores/plugins'
 import { useSessionsStore } from '@/stores/sessions'
-import { useSessionMonitorStore, type MonitorAgent } from '@/stores/session-monitor'
+import { useSessionMonitorStore, type MonitorTab } from '@/stores/session-monitor'
 import { useSwitchStore } from '@/stores/switch'
 import { useToast } from '@/composables/useToast'
 import { pickPluginDirectory } from '@/lib/api'
@@ -89,9 +89,10 @@ async function handleRefresh() {
 function getSidebarItems() {
   if (appStore.currentTab === 'sessions') return sessionsStore.platforms
   if (appStore.currentTab === 'monitor') return [
+    { id: 'all', display_name: t('session_monitor.agent_all') },
     { id: 'codex', display_name: 'Codex' },
     { id: 'claude', display_name: 'Claude Code' },
-    { id: 'kiro', display_name: 'Kiro' },
+    { id: 'kiro', display_name: 'Kiro CLI' },
   ]
   if (appStore.currentTab === 'accounts') return [
     { id: 'codex', display_name: 'Codex' },
@@ -111,7 +112,7 @@ function getSelectedId() {
 
 async function handleItemClick(id: string) {
   if (appStore.currentTab === 'sessions') sessionsStore.selectPlatform(id)
-  else if (appStore.currentTab === 'monitor') sessionMonitorStore.activeAgent = id as MonitorAgent
+  else if (appStore.currentTab === 'monitor') sessionMonitorStore.activeAgent = id as MonitorTab
   else if (appStore.currentTab === 'accounts') await switchStore.selectAgent(id)
   else {
     pluginsStore.selectPlatform(id)

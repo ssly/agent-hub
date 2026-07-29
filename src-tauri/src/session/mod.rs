@@ -471,7 +471,11 @@ fn launch_terminal_with_command(terminal_id: &str, command: &str) -> Result<(), 
             .as_nanos()
     ));
     let escaped = command.replace('%', "%%").replace('"', "\"\"");
-    let bat_content = format!("@echo off\n{}\npause\n", escaped);
+    // chcp 65001: project paths with non-ASCII characters (e.g. Chinese) are
+    // written here as UTF-8, but cmd parses .bat files in the OEM/ANSI
+    // codepage — switching to UTF-8 first keeps `cd "D:\代码\proj"` working.
+    // CRLF line endings because cmd is picky about bare LF in batch files.
+    let bat_content = format!("@echo off\r\nchcp 65001 >nul\r\n{}\r\npause\r\n", escaped);
     std::fs::write(&bat_path, &bat_content).map_err(|e| e.to_string())?;
 
     match terminal_id {

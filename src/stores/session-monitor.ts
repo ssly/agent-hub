@@ -7,6 +7,8 @@ export type SessionSource = 'terminal' | 'chatgpt'
 export type RuntimeStatus = 'running' | 'ended'
 export type MonitorAgent = 'codex' | 'claude' | 'kiro'
 export const MONITOR_AGENTS: MonitorAgent[] = ['codex', 'claude', 'kiro']
+/** Sidebar tab: one of the agents, or the merged "all" view. */
+export type MonitorTab = MonitorAgent | 'all'
 
 export interface SessionState {
   sessionId: string
@@ -17,6 +19,11 @@ export interface SessionState {
   userPrompt?: string | null
   assistantReply?: string | null
   updatedAt: number
+}
+
+/** A session row tagged with the agent it came from, for the merged view. */
+export interface AgentSessionState extends SessionState {
+  agent: MonitorAgent
 }
 
 export interface MonitorSnapshot {
@@ -89,10 +96,6 @@ const hookApi: Record<'codex' | 'claude', {
   },
 }
 
-function supportsHooks(agent: MonitorAgent): agent is 'codex' | 'claude' {
-  return agent !== 'kiro'
-}
-
 function emptySnapshot(): MonitorSnapshot {
   return { revision: 0, sessions: [] }
 }
@@ -102,7 +105,7 @@ function errorMessage(error: any): string {
 }
 
 export const useSessionMonitorStore = defineStore('session-monitor', () => {
-  const activeAgent = ref<MonitorAgent>('codex')
+  const activeAgent = ref<MonitorTab>('codex')
   const snapshots = ref<Record<MonitorAgent, MonitorSnapshot>>({
     codex: emptySnapshot(),
     claude: emptySnapshot(),
@@ -124,10 +127,28 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
   let initialized = false
   let unlisten: (() => void)[] = []
 
-  const snapshot = computed(() => snapshots.value[activeAgent.value])
-  const hookStatus = computed(() =>
-    supportsHooks(activeAgent.value) ? hookStatuses.value[activeAgent.value] : null,
+  const snapshot = computed(() =>
+    activeAgent.value === 'all' ? emptySnapshot() : snapshots.value[activeAgent.value],
   )
+  const hookStatus = computed(() =>
+    activeAgent.value === 'codex' || activeAgent.value === 'claude'
+      ? hookStatuses.value[activeAgent.value]
+      : null,
+  )
+  /** Rows for the current tab. "all" merges every agent: running sessions
+   *  first, then newest activity first within each status group. */
+  const displaySessions = computed<AgentSessionState[]>(() => {
+    if (activeAgent.value === 'all') {
+      return MONITOR_AGENTS.flatMap(agent =>
+        snapshots.value[agent].sessions.map(session => ({ ...session, agent })),
+      ).sort((a, b) => {
+        if (a.status !== b.status) return a.status === 'running' ? -1 : 1
+        return b.updatedAt - a.updatedAt
+      })
+    }
+    const agent = activeAgent.value
+    return snapshots.value[agent].sessions.map(session => ({ ...session, agent }))
+  })
 
   async function refresh() {
     loading.value = true
@@ -233,12 +254,15 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
   }
 
   // Manual delete: no confirmation by design — the row is low-value history.
-  async function deleteSession(sessionId: string) {
-    const agent = activeAgent.value
+  // The merged "all" view passes the row's agent explicitly since the active
+  // tab no longer identifies it.
+  async function deleteSession(sessionId: string, agent?: MonitorAgent) {
+    const target = agent ?? (activeAgent.value === 'all' ? undefined : activeAgent.value)
+    if (!target) return
     try {
-      await deleteSessionApi[agent](sessionId)
-      const current = snapshots.value[agent]
-      snapshots.value[agent] = {
+      await deleteSessionApi[target](sessionId)
+      const current = snapshots.value[target]
+      snapshots.value[target] = {
         ...current,
         sessions: current.sessions.filter(session => session.sessionId !== sessionId),
       }
@@ -259,6 +283,7 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     activeAgent,
     snapshots,
     snapshot,
+    displaySessions,
     hookStatuses,
     hookStatus,
     kiroStatus,

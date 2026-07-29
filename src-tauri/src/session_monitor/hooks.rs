@@ -104,6 +104,10 @@ pub fn get_hook_status(agent: AgentKind) -> Result<HookStatus, String> {
                 .unwrap_or(false)
         {
             Some("Claude Code 已设置 disableAllHooks，所有 Hook 都不会执行，请先关闭该选项。".to_string())
+        } else if agent == AgentKind::Codex && installed {
+            // hooks.json written is not enough: Codex only runs handlers it
+            // trusts. An installed-but-untrusted hook silently never fires.
+            codex_trust_issue(&path, &root)
         } else {
             None
         }
@@ -354,6 +358,78 @@ fn expected_command(arg: &str) -> Result<String, String> {
     {
         Ok(format!("'{}' {arg}", path.replace('\'', "'\\''")))
     }
+}
+
+/// Codex runs user-level hooks.json handlers only after they are trusted.
+/// The trust state lives in `~/.codex/config.toml` under
+/// `hooks.state."<hooks.json path>:<event>:<group>:<handler>"` with a
+/// `trusted_hash`; a handler our installer just wrote starts untrusted and
+/// silently never fires (Codex TUI shows a startup review, ChatGPT desktop
+/// has 设置 → 钩子). We cannot recompute Codex's trust hash, so this is a
+/// presence check on the state entry, not a hash verification.
+fn codex_trust_issue(config_path: &Path, root: &Value) -> Option<String> {
+    let config_toml = dirs::home_dir()
+        .and_then(|home| fs::read_to_string(home.join(".codex").join("config.toml")).ok());
+    let missing = codex_untrusted_events(config_toml.as_deref(), config_path, root);
+    if missing.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "Codex 尚未信任 {} Hook（已写入 hooks.json，但未信任的 Hook 不会执行）。请启动一次 Codex，在启动时的 Hook 审查中选择 Trust all and continue；ChatGPT 桌面端则在 设置 → 钩子 中手动信任。",
+            missing.join(" 与 ")
+        ))
+    }
+}
+
+fn codex_untrusted_events(
+    config_toml: Option<&str>,
+    config_path: &Path,
+    root: &Value,
+) -> Vec<&'static str> {
+    let doc = config_toml.and_then(|content| toml::from_str::<toml::Value>(content).ok());
+    let states = doc
+        .as_ref()
+        .and_then(|doc| doc.get("hooks"))
+        .and_then(|hooks| hooks.get("state"))
+        .and_then(toml::Value::as_table);
+    let base = config_path.display().to_string();
+    let mut missing = Vec::new();
+    for (event, label) in [(USER_PROMPT_SUBMIT, "user_prompt_submit"), (STOP, "stop")] {
+        let Some((group, handler)) = managed_handler_position(root, event) else {
+            continue;
+        };
+        let key = format!("{base}:{label}:{group}:{handler}");
+        let state = states.and_then(|table| table.get(&key));
+        let trusted = state
+            .and_then(|state| state.get("trusted_hash"))
+            .and_then(toml::Value::as_str)
+            .is_some_and(|hash| !hash.trim().is_empty());
+        let enabled = state
+            .and_then(|state| state.get("enabled"))
+            .and_then(toml::Value::as_bool)
+            .unwrap_or(true);
+        if !trusted || !enabled {
+            missing.push(event);
+        }
+    }
+    missing
+}
+
+/// Position of our managed handler inside hooks.json: Codex keys hook state
+/// by the handler's group/handler index, so the trust lookup needs them.
+fn managed_handler_position(root: &Value, event_name: &str) -> Option<(usize, usize)> {
+    let groups = root.get("hooks")?.get(event_name)?.as_array()?;
+    for (group_index, group) in groups.iter().enumerate() {
+        let Some(handlers) = group.get("hooks").and_then(Value::as_array) else {
+            continue;
+        };
+        for (handler_index, handler) in handlers.iter().enumerate() {
+            if is_managed_handler(handler, CODEX_HOOK_ARG) {
+                return Some((group_index, handler_index));
+            }
+        }
+    }
+    None
 }
 
 fn read_existing(path: &Path) -> Result<String, String> {
@@ -618,5 +694,81 @@ mod tests {
             fs::canonicalize(target).unwrap()
         );
         assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+    }
+
+    fn codex_root_with_managed_handlers() -> Value {
+        let installed = render_after(
+            AgentKind::Codex,
+            HookAction::Install,
+            Path::new("/tmp/hooks.json"),
+            "agent-hub --agent-hub-codex-hook",
+            CODEX_HOOK_ARG,
+            "{}",
+        )
+        .unwrap();
+        serde_json::from_str(&installed).unwrap()
+    }
+
+    #[test]
+    fn untrusted_codex_hooks_are_reported() {
+        let root = codex_root_with_managed_handlers();
+        let config_path = Path::new("/home/u/.codex/hooks.json");
+        // No config.toml at all → both events untrusted.
+        assert_eq!(
+            codex_untrusted_events(None, config_path, &root),
+            vec![USER_PROMPT_SUBMIT, STOP]
+        );
+        // Only UserPromptSubmit trusted → Stop still reported.
+        let config = r#"
+[hooks.state."/home/u/.codex/hooks.json:user_prompt_submit:0:0"]
+trusted_hash = "sha256:abc"
+"#;
+        assert_eq!(
+            codex_untrusted_events(Some(config), config_path, &root),
+            vec![STOP]
+        );
+        // Both trusted → clean.
+        let config = r#"
+[hooks.state."/home/u/.codex/hooks.json:user_prompt_submit:0:0"]
+trusted_hash = "sha256:abc"
+
+[hooks.state."/home/u/.codex/hooks.json:stop:0:0"]
+trusted_hash = "sha256:def"
+"#;
+        assert!(codex_untrusted_events(Some(config), config_path, &root).is_empty());
+        // Trusted but explicitly disabled → reported again.
+        let config = r#"
+[hooks.state."/home/u/.codex/hooks.json:user_prompt_submit:0:0"]
+trusted_hash = "sha256:abc"
+
+[hooks.state."/home/u/.codex/hooks.json:stop:0:0"]
+trusted_hash = "sha256:def"
+enabled = false
+"#;
+        assert_eq!(
+            codex_untrusted_events(Some(config), config_path, &root),
+            vec![STOP]
+        );
+    }
+
+    #[test]
+    fn managed_handler_position_tracks_existing_groups() {
+        // A pre-existing hook group pushes our handler to index 1.
+        let installed = render_after(
+            AgentKind::Codex,
+            HookAction::Install,
+            Path::new("/tmp/hooks.json"),
+            "agent-hub --agent-hub-codex-hook",
+            CODEX_HOOK_ARG,
+            original_config(),
+        )
+        .unwrap();
+        let root: Value = serde_json::from_str(&installed).unwrap();
+        assert_eq!(
+            managed_handler_position(&root, USER_PROMPT_SUBMIT),
+            Some((1, 0))
+        );
+        assert_eq!(managed_handler_position(&root, STOP), Some((0, 0)));
+        assert_eq!(managed_handler_position(&root, "SessionStart"), None);
     }
 }

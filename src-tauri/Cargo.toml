@@ -1,6 +1,6 @@
 [package]
 name = "agent-hub"
-version = "0.19.5"
+version = "0.19.6"
 edition = "2021"
 description = "A desktop hub for managing AI agent skills across platforms"
 
@@ -25,7 +25,10 @@ base64 = "0.22"
 futures-util = "0.3"
 http = "1"
 minisign-verify = "0.2"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+# system-proxy: desktop GUI apps have no shell env (HTTP_PROXY etc.), so
+# without this feature usage queries bypass the OS proxy and hang until
+# timeout on networks that require one (notably grok.com / chatgpt.com in CN).
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "system-proxy"] }
 notify = { version = "7", features = ["macos_fsevent"] }
 sysinfo = "0.34"
 uuid = { version = "1", features = ["v4"] }

@@ -154,9 +154,9 @@ Skill 是包含 `SKILL.md` 的目录，SKILL.md 使用 YAML frontmatter（`name`
 
 Monitor 标签页实时展示各 Agent 的进行中/已结束会话（用户问题 + 助手回复）。Codex 与 Claude Code 走 `UserPromptSubmit` + `Stop` 两个 Hook 的最小集，Kiro 走纯文件监听：
 
-- **Codex**：向 `~/.codex/hooks.json` 注入 command Hook，调用自身二进制 `--agent-hub-codex-hook` 把 stdin JSON 原子写入 `~/.agent-hub/session-monitor/inbox/`。
+- **Codex**：向 `~/.codex/hooks.json` 注入 command Hook，调用自身二进制 `--agent-hub-codex-hook` 把 stdin JSON 原子写入 `~/.agent-hub/session-monitor/inbox/`。注意 Codex 有 Hook 信任门：用户级 hooks.json 的 handler 只有在 `~/.codex/config.toml` 的 `hooks.state."<hooks.json路径>:<event>:<组>:<序号>"` 里留下 `trusted_hash` 才会执行（TUI 启动审查 / 桌面端设置 → 钩子 里确认）；安装后未信任时 Hook 静默不触发，`get_hook_status` 会检测这种状态并在 `issue` 中提示（无法复算 Codex 的信任哈希，只查条目存在性）。
 - **Claude Code**：同一机制，写入 `~/.claude/settings.json` 的 `hooks` 字段（热加载无需重启），Hook 参数为 `--agent-hub-claude-hook`。
-- **Kiro**：纯文件监听 `~/.kiro/sessions/cli/`（`.jsonl` 增量 tail 提取 Prompt/AssistantMessage；状态为 turn 级，与 Codex/Claude 对齐——提问置进行中、回复置已结束；`.lock` pid 只做单向兜底：进程死亡才把"进行中"翻转为"已结束"，10s 间隔刷新并主动推送），任意 kiro-cli 版本开箱即用、对 Kiro 配置零写入。面板提供"打开/关闭监听"开关（`~/.agent-hub/session-monitor/kiro-monitor.json` 持久化，运行时启停 watcher；关闭时状态线程仅空转休眠）。全局 Hook 方案（`~/.kiro/hooks/`）已验证在稳定版 kiro-cli 2.x 不生效（仅 IDE 1.0.182+ / v3 支持），故不采用。
+- **Kiro**：纯文件监听 `~/.kiro/sessions/cli/`（`.jsonl` 增量 tail 提取 Prompt/AssistantMessage；状态为 turn 级，与 Codex/Claude 对齐——提问置进行中、回复置已结束；`.lock` pid 只做单向兜底：进程死亡才把"进行中"翻转为"已结束"，10s 间隔刷新并主动推送；注意 kiro-cli 运行期间对 `.lock` 持有 OS 级独占锁，Windows 上 LockFileEx 是强制锁导致读不到内容——存在但不可读的 lock 必须判"进行中"，只有 lock 文件消失才判"已结束"），任意 kiro-cli 版本开箱即用、对 Kiro 配置零写入。面板提供"打开/关闭监听"开关（`~/.agent-hub/session-monitor/kiro-monitor.json` 持久化，运行时启停 watcher；关闭时状态线程仅空转休眠）。全局 Hook 方案（`~/.kiro/hooks/`）已验证在稳定版 kiro-cli 2.x 不生效（仅 IDE 1.0.182+ / v3 支持），故不采用。
 
 安装/卸载统一走预览 diff + before-hash 双重校验 + 原子写，只移除自己管理的 handler。`SessionMonitorService` 按 agent 路由事件到各自快照（`{codex,claude,kiro}-state.json`），经 `session-monitor:{agent}-changed` Tauri event 推前端。旧的 `monitor/` 模块（FSEvents + 进程扫描）已停用，不要混淆。
 

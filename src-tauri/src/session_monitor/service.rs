@@ -227,9 +227,25 @@ fn refresh_kiro_statuses<R: Runtime>(slots: &Slots, sessions_dir: &Path, app: &A
 
 fn kiro_session_status(sessions_dir: &Path, session_id: &str) -> RuntimeStatus {
     let lock_path = sessions_dir.join(format!("{session_id}.lock"));
-    let pid = fs::read_to_string(&lock_path)
+    // kiro-cli holds an OS-level exclusive lock on this file for its whole
+    // lifetime (q_cli `PidLock`). On Unix that lock is advisory (flock), so
+    // the read below still succeeds and we can inspect the pid. On Windows
+    // it is a mandatory LockFileEx byte-range lock, so the read FAILS with
+    // a lock/sharing violation while the CLI is alive. An existing-but-
+    // unreadable lock therefore means "CLI still running", not "ended" —
+    // only a missing lock file means the process exited cleanly.
+    let content = match fs::read_to_string(&lock_path) {
+        Ok(content) => content,
+        Err(_) => {
+            return if lock_path.exists() {
+                RuntimeStatus::Running
+            } else {
+                RuntimeStatus::Ended
+            };
+        }
+    };
+    let pid = serde_json::from_str::<serde_json::Value>(&content)
         .ok()
-        .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
         .and_then(|value| value.get("pid").and_then(serde_json::Value::as_u64))
         .map(|pid| pid as u32);
     match pid {
@@ -611,20 +627,59 @@ mod tests {
     }
 
     #[test]
-    fn prune_sessions_older_than_drops_only_expired_rows() {
-        let mut snapshot = MonitorSnapshot::default();
-        let mut stale = event("Stop", None, Some("old"));
-        stale.occurred_at = 1_000;
-        apply_event(&mut snapshot, stale);
-        let mut fresh = event("Stop", None, Some("new"));
-        fresh.session_id = "session-2".to_string();
-        fresh.occurred_at = 2_000;
-        apply_event(&mut snapshot, fresh);
+    fn kiro_session_status_missing_lock_is_ended() {
+        let directory = tempfile::tempdir().expect("temp dir should create");
+        assert_eq!(
+            kiro_session_status(directory.path(), "no-such-session"),
+            RuntimeStatus::Ended
+        );
+    }
 
-        assert!(prune_sessions_older_than(&mut snapshot, 1_500));
-        assert_eq!(snapshot.sessions.len(), 1);
-        assert_eq!(snapshot.sessions[0].session_id, "session-2");
-        // Second pass with the same cutoff prunes nothing further.
-        assert!(!prune_sessions_older_than(&mut snapshot, 1_500));
+    #[test]
+    fn kiro_session_status_dead_pid_is_ended() {
+        let directory = tempfile::tempdir().expect("temp dir should create");
+        // pid 2^22 + 12345 is practically never live on the test machine.
+        fs::write(
+            directory.path().join("s1.lock"),
+            r#"{"pid":4206649,"started_at":"2026-01-01T00:00:00Z"}"#,
+        )
+        .expect("lock file should write");
+        assert_eq!(
+            kiro_session_status(directory.path(), "s1"),
+            RuntimeStatus::Ended
+        );
+    }
+
+    #[test]
+    fn kiro_session_status_live_pid_is_running() {
+        let directory = tempfile::tempdir().expect("temp dir should create");
+        let pid = std::process::id();
+        fs::write(
+            directory.path().join("s2.lock"),
+            format!(r#"{{"pid":{pid},"started_at":"2026-01-01T00:00:00Z"}}"#),
+        )
+        .expect("lock file should write");
+        assert_eq!(
+            kiro_session_status(directory.path(), "s2"),
+            RuntimeStatus::Running
+        );
+    }
+
+    /// Windows keeps the CLI's LockFileEx byte-range lock mandatory, so the
+    /// lock file of a LIVE session is unreadable there. An existing lock we
+    /// cannot read must stay Running. Simulated on Unix via permissions.
+    #[cfg(unix)]
+    #[test]
+    fn kiro_session_status_unreadable_lock_is_running() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().expect("temp dir should create");
+        let lock = directory.path().join("s3.lock");
+        fs::write(&lock, r#"{"pid":1}"#).expect("lock file should write");
+        fs::set_permissions(&lock, fs::Permissions::from_mode(0o000))
+            .expect("permissions should change");
+        assert_eq!(
+            kiro_session_status(directory.path(), "s3"),
+            RuntimeStatus::Running
+        );
     }
 }

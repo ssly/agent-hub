@@ -64,9 +64,13 @@ const breadcrumb = computed(() => {
     return t('plugin.title')
   }
   if (skillsStore.selectedSkillName) {
-    return skillsStore.selectedFolder
-      ? `${skillsStore.selectedFolder}/${skillsStore.selectedSkillName}`
-      : skillsStore.selectedSkillName
+    // Display-only join: match the native separator of the folder path so
+    // Windows never shows a mixed `D:\Coding\skills/my-skill` title.
+    if (skillsStore.selectedFolder) {
+      const sep = skillsStore.selectedFolder.includes('\\') ? '\\' : '/'
+      return `${skillsStore.selectedFolder}${sep}${skillsStore.selectedSkillName}`
+    }
+    return skillsStore.selectedSkillName
   }
   return ''
 })

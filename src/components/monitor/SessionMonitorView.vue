@@ -10,17 +10,26 @@ const { t, locale } = useI18n()
 const store = useSessionMonitorStore()
 const { showToast } = useToast()
 
-const supportsHooks = computed(() => store.activeAgent !== 'kiro')
+const supportsHooks = computed(() => store.activeAgent === 'codex' || store.activeAgent === 'claude')
+const isKiro = computed(() => store.activeAgent === 'kiro')
+const isAll = computed(() => store.activeAgent === 'all')
 const hookAction = computed(() => store.hookStatus?.installed ? 'uninstall' : 'install')
 const defaultConfigPath = computed(() =>
   store.activeAgent === 'claude' ? '~/.claude/settings.json' : '~/.codex/hooks.json',
 )
 const runningCount = computed(
-  () => store.snapshot.sessions.filter(session => session.status === 'running').length,
+  () => store.displaySessions.filter(session => session.status === 'running').length,
 )
 
-function agentLabel(agent: MonitorAgent = store.activeAgent): string {
+function agentLabel(agent: MonitorAgent): string {
   return t(`session_monitor.agent_${agent}`)
+}
+
+/** Title of the sessions section: the merged tab has no single agent name. */
+function sessionsTitle(): string {
+  return isAll.value
+    ? t('session_monitor.agent_all')
+    : t('session_monitor.sessions_title', { agent: agentLabel(store.activeAgent as MonitorAgent) })
 }
 
 function formatTime(timestamp: number): string {
@@ -42,13 +51,16 @@ function sourceLabel(session: SessionState): string {
 }
 
 function emptyHint(): string {
-  if (store.activeAgent === 'kiro') {
+  if (isAll.value) {
+    return t('session_monitor.empty_all_hint')
+  }
+  if (isKiro.value) {
     return store.kiroStatus?.enabled
-      ? t('session_monitor.empty_installed_hint', { agent: agentLabel() })
+      ? t('session_monitor.empty_installed_hint', { agent: agentLabel('kiro') })
       : t('session_monitor.empty_monitor_hint')
   }
   return store.hookStatus?.installed
-    ? t('session_monitor.empty_installed_hint', { agent: agentLabel() })
+    ? t('session_monitor.empty_installed_hint', { agent: agentLabel(store.activeAgent as 'codex' | 'claude') })
     : t('session_monitor.empty_hook_hint')
 }
 
@@ -107,7 +119,7 @@ onUnmounted(() => store.dispose())
         {{ hookAction === 'uninstall' ? t('session_monitor.uninstall_hook') : t('session_monitor.install_hook') }}
       </button>
       <button
-        v-else
+        v-else-if="isKiro"
         class="btn"
         :class="store.kiroStatus?.enabled ? 'btn-danger' : 'btn-primary'"
         @click="handleToggleKiroMonitor"
@@ -123,8 +135,8 @@ onUnmounted(() => store.dispose())
         <div class="min-w-0">
           <div class="hook-card__title">
             {{ store.hookStatus?.installed
-              ? t('session_monitor.hook_installed', { agent: agentLabel() })
-              : t('session_monitor.hook_missing', { agent: agentLabel() }) }}
+              ? t('session_monitor.hook_installed', { agent: agentLabel(store.activeAgent as 'codex' | 'claude') })
+              : t('session_monitor.hook_missing', { agent: agentLabel(store.activeAgent as 'codex' | 'claude') }) }}
           </div>
           <div class="hook-card__path">
             {{ store.hookStatus?.configPath || defaultConfigPath }}
@@ -137,7 +149,7 @@ onUnmounted(() => store.dispose())
       </div>
     </section>
 
-    <section v-else class="hook-card ah-card">
+    <section v-else-if="isKiro" class="hook-card ah-card">
       <div class="hook-card__status">
         <Radar v-if="store.kiroStatus?.enabled && store.kiroStatus?.available" :size="18" class="hook-card__ok" />
         <CircleStop v-else :size="18" class="hook-card__missing" />
@@ -158,7 +170,7 @@ onUnmounted(() => store.dispose())
       </div>
     </section>
 
-    <p v-if="!supportsHooks" class="monitor-notice">
+    <p v-if="isKiro" class="monitor-notice">
       {{ t('session_monitor.kiro_thread_note') }}
     </p>
     <p v-if="store.activeAgent === 'codex' && store.hookStatus?.installed" class="monitor-notice monitor-notice--warning">
@@ -172,28 +184,29 @@ onUnmounted(() => store.dispose())
     </p>
 
     <div class="session-list-header">
-      <h2>{{ t('session_monitor.sessions_title', { agent: agentLabel() }) }}</h2>
+      <h2>{{ sessionsTitle() }}</h2>
       <button class="btn btn-secondary btn-sm" :disabled="store.loading" @click="store.refresh">
         {{ t('session_monitor.refresh') }}
       </button>
     </div>
 
-    <div v-if="store.loading && store.snapshot.sessions.length === 0" class="monitor-empty">
+    <div v-if="store.loading && store.displaySessions.length === 0" class="monitor-empty">
       {{ t('session_monitor.loading') }}
     </div>
-    <div v-else-if="store.snapshot.sessions.length === 0" class="monitor-empty">
+    <div v-else-if="store.displaySessions.length === 0" class="monitor-empty">
       <Activity :size="30" />
       <strong>{{ t('session_monitor.empty') }}</strong>
       <span>{{ emptyHint() }}</span>
     </div>
     <div v-else class="session-monitor-list">
       <article
-        v-for="session in store.snapshot.sessions"
-        :key="`${store.activeAgent}-${session.sessionId}`"
+        v-for="session in store.displaySessions"
+        :key="`${session.agent}-${session.sessionId}`"
         class="session-row ah-card"
         :class="{ 'session-row--running': session.status === 'running' }"
       >
         <div class="session-row__top">
+          <span v-if="isAll" class="session-agent-badge">{{ agentLabel(session.agent) }}</span>
           <div class="session-source">
             <Monitor v-if="session.source === 'chatgpt'" :size="15" />
             <Terminal v-else :size="15" />
@@ -208,7 +221,7 @@ onUnmounted(() => store.dispose())
             v-if="session.status === 'ended'"
             v-tooltip="t('session_monitor.delete_session')"
             class="session-delete"
-            @click="store.deleteSession(session.sessionId)"
+            @click="store.deleteSession(session.sessionId, session.agent)"
           >
             <Trash2 :size="13" />
           </button>
@@ -220,7 +233,7 @@ onUnmounted(() => store.dispose())
         </div>
         <div class="session-row__line">
           <span>{{ t('session_monitor.assistant_reply') }}</span>
-          <p>{{ session.assistantReply || (session.status === 'running' ? t('session_monitor.waiting_reply', { agent: agentLabel() }) : t('session_monitor.no_reply')) }}</p>
+          <p>{{ session.assistantReply || (session.status === 'running' ? t('session_monitor.waiting_reply', { agent: agentLabel(session.agent) }) : t('session_monitor.no_reply')) }}</p>
         </div>
       </article>
     </div>
@@ -309,6 +322,7 @@ onUnmounted(() => store.dispose())
 .session-row--running { border-color: color-mix(in srgb, var(--success) 45%, var(--hairline)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--success) 7%, transparent); }
 .session-row__top { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 .session-source { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); font-size: 12px; font-weight: 600; }
+.session-agent-badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px; background: var(--sunken); color: var(--ink-2); font-size: 11px; font-weight: 600; }
 .session-status { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
 .session-status__dot { width: 7px; height: 7px; border-radius: 999px; background: currentColor; }
 .session-status--running { color: var(--success); }

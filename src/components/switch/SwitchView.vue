@@ -5,7 +5,7 @@ import { useSwitchStore } from '@/stores/switch'
 import { useToast } from '@/composables/useToast'
 import * as api from '@/lib/api'
 import AppModal from '@/components/ui/AppModal.vue'
-import { RefreshCw, Gauge, Trash2 } from 'lucide-vue-next'
+import { RefreshCw, Gauge, Trash2, Info } from 'lucide-vue-next'
 
 const { t, locale } = useI18n()
 const store = useSwitchStore()
@@ -512,6 +512,14 @@ async function handleConfirmClear() {
                   <RefreshCw :size="14" :class="{ 'animate-spin': store.kimiUsageLoading }" />
                   {{ t('switch.usage_refresh') }}
                 </button>
+              </div>
+
+              <!-- Only API-key login can query usage; OAuth sign-in has no
+                   officially supported usage endpoint. Always visible so the
+                   credential error below reads as expected, not as a bug. -->
+              <div class="text-xs mb-3 flex items-center gap-1.5" style="color: var(--ink-4)">
+                <Info :size="13" class="flex-shrink-0" />
+                {{ t('switch.kimi_usage_api_only_hint') }}
               </div>
 
               <div v-if="store.kimiUsageLoading" class="text-sm py-4" style="color: var(--ink-3)">
