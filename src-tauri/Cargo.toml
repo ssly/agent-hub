@@ -1,6 +1,6 @@
 [package]
 name = "agent-hub"
-version = "0.19.6"
+version = "0.19.7"
 edition = "2021"
 description = "A desktop hub for managing AI agent skills across platforms"
 

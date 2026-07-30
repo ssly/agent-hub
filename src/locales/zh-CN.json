@@ -479,6 +479,7 @@
     "hook_command": "执行命令",
     "trust_hint": "ChatGPT 桌面端需要在 设置 → 钩子 中手动信任 UserPromptSubmit 和 Stop 两个钩子；每次安装或更新 Hook 后都需重新确认，否则监控收不到任何事件。",
     "delete_session": "删除该会话记录",
+    "delete_note": "不会删除真实会话",
     "preview_stats": "文件变更：新增 {added} 行，删除 {removed} 行",
     "preview_loading": "正在生成配置文件 Diff…",
     "no_changes": "配置文件无需变更。",

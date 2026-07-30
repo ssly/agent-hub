@@ -49,27 +49,15 @@ export const useSessionsStore = defineStore('sessions', () => {
     await loadSessions(false)
   }
 
-  // Resume modal states (copy-command flow; terminal launcher was removed).
-  const resumeModalOpen = ref(false)
-  const resumeTarget = ref<any | null>(null)
-  const resumePreview = ref<api.SessionResumePreview | null>(null)
-  const resumeLoading = ref(false)
-  const resumeError = ref('')
+  // Modal open state only — fetching lives in the shared SessionMessagesModal /
+  // SessionResumeModal components, which load through the sessions backend by
+  // platform/session identity. The Monitor view reuses the same components.
+  const messagesModalOpen = ref(false)
+  const activeSession = ref<any | null>(null)
 
-  async function openResume(session: any) {
-    resumeTarget.value = session
-    resumeModalOpen.value = true
-    resumePreview.value = null
-    resumeError.value = ''
-    resumeLoading.value = true
-    try {
-      const platformId = session.platform_id || selectedPlatformId.value!
-      resumePreview.value = await api.getSessionResumePreview(platformId, session.id, session.project_path || '')
-    } catch (e: any) {
-      resumeError.value = e?.SyncError || e?.message || String(e)
-    } finally {
-      resumeLoading.value = false
-    }
+  function openMessages(session: any) {
+    activeSession.value = session
+    messagesModalOpen.value = true
   }
 
   async function loadSessions(append: boolean) {
@@ -108,16 +96,14 @@ export const useSessionsStore = defineStore('sessions', () => {
     }
   }
 
-  // Messages Modal States
-  const messagesModalOpen = ref(false)
-  const messages = ref<any[]>([])
-  const activeSession = ref<any | null>(null)
-  const messagesLoading = ref(false)
-  const messagesLoadingMore = ref(false)
-  const messagesOffset = ref(0)
-  const messagesHasMore = ref(true)
-  const messagesError = ref('')
-  const messagesPageSize = 50
+  // Resume modal open state (SessionResumeModal fetches the preview itself).
+  const resumeModalOpen = ref(false)
+  const resumeTarget = ref<any | null>(null)
+
+  function openResume(session: any) {
+    resumeTarget.value = session
+    resumeModalOpen.value = true
+  }
 
   async function changePathFilter(filter: string) {
     selectedPathFilter.value = filter || 'all'
@@ -157,36 +143,6 @@ export const useSessionsStore = defineStore('sessions', () => {
       await loadSessions(true)
     } finally {
       loadingMore.value = false
-    }
-  }
-
-  async function openMessages(session: any) {
-    activeSession.value = session
-    messagesModalOpen.value = true
-    messages.value = []
-    messagesOffset.value = 0
-    messagesHasMore.value = true
-    messagesError.value = ''
-    await loadMessages(false)
-  }
-
-  async function loadMessages(append: boolean) {
-    if (!activeSession.value) return
-    if (append) messagesLoadingMore.value = true
-    else messagesLoading.value = true
-
-    try {
-      const platformId = activeSession.value.platform_id || selectedPlatformId.value!
-      const list = await api.getSessionMessages(platformId, activeSession.value.id, messagesOffset.value, messagesPageSize)
-      messages.value = append ? [...messages.value, ...list] : list
-      messagesOffset.value += list.length
-      messagesHasMore.value = list.length === messagesPageSize
-      messagesError.value = ''
-    } catch (e: any) {
-      messagesError.value = e?.SyncError || e?.message || String(e)
-    } finally {
-      messagesLoading.value = false
-      messagesLoadingMore.value = false
     }
   }
 
@@ -250,13 +206,12 @@ export const useSessionsStore = defineStore('sessions', () => {
     platforms, sessions, selectedPlatformId, selectedPathFilter, pathOptions,
     sessionTotal, sessionOffset, hasMore,
     isLoading, loadingMore, loadError,
-    messagesModalOpen, messages, activeSession, messagesLoading, messagesLoadingMore,
-    messagesOffset, messagesHasMore, messagesError,
-    resumeModalOpen, resumeTarget, resumePreview, resumeLoading, resumeError,
+    messagesModalOpen, activeSession,
+    resumeModalOpen, resumeTarget,
     searchQuery, searchResults, isSearching, searchError,
     selectionMode, selectedIds, selectedCount, isBulkDeleting, isBulkExporting,
     refreshPlatforms, loadSessions, selectPlatform, openResume,
-    changePathFilter, loadMore, openMessages, loadMessages, doSearch,
+    changePathFilter, loadMore, openMessages, doSearch,
     enterSelection, exitSelection, toggleSelected, selectAllLoaded, clearSelection, bulkDelete, bulkExport,
   }
 })

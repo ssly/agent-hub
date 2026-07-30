@@ -3,16 +3,17 @@ import { useI18n } from 'vue-i18n'
 import { useSessionsStore } from '@/stores/sessions'
 import { formatInt, formatSessionTime } from '@/lib/utils'
 import { useToast } from '@/composables/useToast'
-import { useHoverResetId, useHoverResetBool } from '@/composables/useHoverReset'
+import { useHoverResetBool } from '@/composables/useHoverReset'
 import * as api from '@/lib/api'
-import { ref, computed } from 'vue'
-import AppModal from '@/components/ui/AppModal.vue'
+import { computed } from 'vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
+import SessionCard from '@/components/sessions/SessionCard.vue'
+import SessionMessagesModal from '@/components/sessions/SessionMessagesModal.vue'
+import SessionResumeModal from '@/components/sessions/SessionResumeModal.vue'
 
 const { t, locale } = useI18n()
 const store = useSessionsStore()
 const { showToast } = useToast()
-const { armedId: confirmDeleteId, arm: armDelete, reset: resetDelete } = useHoverResetId()
 
 // Batch delete uses the same two-step confirm pattern as single delete: first
 // click arms the chip, a second click fires bulkDelete. The chip disarms as
@@ -73,27 +74,15 @@ const pathSelectOptions = computed(() =>
   }))
 )
 
-const resumeCommandCopied = ref(false)
-
-async function copyResumeCommand() {
-  const command = store.resumePreview?.command
-  if (!command) return
-  try {
-    await navigator.clipboard.writeText(command)
-    resumeCommandCopied.value = true
-    showToast(t('action.copied'), 'success')
-    setTimeout(() => { resumeCommandCopied.value = false }, 2000)
-  } catch (e: any) {
-    showToast(t('session.copy_failed', { error: e?.message || e }), 'error')
-  }
+/** Display name for the card's agent badge, resolved from the platforms list. */
+function platformName(platformId: string | undefined): string {
+  const id = platformId || store.selectedPlatformId || ''
+  return store.platforms.find(p => p.id === id)?.display_name || id
 }
 
+// Single delete: the card already ran its two-step confirm, so this fires the
+// real delete straight away (removes the on-disk session record).
 async function handleDelete(session: any) {
-  if (confirmDeleteId.value !== session.id) {
-    armDelete(session.id)
-    return
-  }
-  resetDelete()
   try {
     await api.deleteSession(session.platform_id || store.selectedPlatformId!, session.id)
     await store.refreshPlatforms(true)
@@ -293,66 +282,22 @@ function clearSessionSearch() {
           </div>
 
           <div class="space-y-2">
-            <div
+            <SessionCard
               v-for="session in store.sessions"
               :key="session.id"
-              class="ah-session-card session-card"
-              :class="{
-                'session-card--selecting': store.selectionMode,
-                'session-card--selected': store.selectionMode && store.selectedIds.has(session.id),
-              }"
-              @click="store.selectionMode && store.toggleSelected(session.id)"
-            >
-              <!-- Selected marker: accent triangle ribbon in the top-left corner -->
-              <div
-                v-if="store.selectionMode && store.selectedIds.has(session.id)"
-                class="session-card__corner"
-              >
-                <svg
-                  width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                  stroke-width="4" stroke-linecap="round" stroke-linejoin="round"
-                >
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
-              </div>
-              <div class="session-card__head">
-                <h3 class="ah-session-card__title truncate">{{ session.title || t('session.untitled') }}</h3>
-                <span class="text-xs whitespace-nowrap" style="color: var(--ink-3)">
-                  {{ formatSessionTime(session.updated_at, locale) }}
-                </span>
-              </div>
-              <div class="ah-session-card__path">{{ session.project_path || t('session.no_project') }}</div>
-              <div v-if="session.model || session.tokens_used != null" class="ah-session-card__meta">
-                <span v-if="session.model" class="ah-session-card__model">{{ session.model }}</span>
-                <span v-if="session.tokens_used != null" class="ah-session-card__tokens">{{ t('session.tokens_value', { count: formatInt(session.tokens_used) }) }}</span>
-              </div>
-              <div v-if="!store.selectionMode" class="session-card__actions">
-                <button class="btn btn-secondary btn-sm" @click="store.openMessages(session)">{{ t('session.view_messages') }}</button>
-                <button
-                  class="btn btn-primary btn-sm"
-                  @click="store.openResume(session)"
-                >
-                  {{ t('session.resume') }}
-                </button>
-                <button
-                  class="session-card__delete"
-                  :class="{ 'is-confirming': confirmDeleteId === session.id }"
-                  :title="confirmDeleteId === session.id ? t('session.confirm_delete') : t('session.delete')"
-                  @click="handleDelete(session)"
-                  @mouseleave="resetDelete()"
-                >
-                  <svg
-                    v-if="confirmDeleteId !== session.id"
-                    width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-                  >
-                    <polyline points="3 6 5 6 21 6" />
-                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                  </svg>
-                  <span v-else>{{ t('session.confirm_delete') }}</span>
-                </button>
-              </div>
-            </div>
+              :badge="platformName(session.platform_id)"
+              :time="formatSessionTime(session.updated_at, locale)"
+              :title="session.title || t('session.untitled')"
+              :subtitle="session.project_path || t('session.no_project')"
+              :model="session.model"
+              :tokens="session.tokens_used"
+              :selecting="store.selectionMode"
+              :selected="store.selectedIds.has(session.id)"
+              @open="store.openMessages(session)"
+              @resume="store.openResume(session)"
+              @delete="handleDelete(session)"
+              @toggle-select="store.toggleSelected(session.id)"
+            />
           </div>
 
           <!-- Load more -->
@@ -367,191 +312,34 @@ function clearSessionSearch() {
           </div>
         </template>
 
-        <!-- Messages Modal -->
-        <AppModal
+        <SessionMessagesModal
           :show="store.messagesModalOpen"
-          :title="store.activeSession?.title || t('session.untitled')"
+          :platform-id="store.activeSession?.platform_id || store.selectedPlatformId"
+          :session-id="store.activeSession?.id"
+          :title="store.activeSession?.title"
+          :project-path="store.activeSession?.project_path"
+          :model="store.activeSession?.model"
+          :tokens="store.activeSession?.tokens_used"
+          :started-at="store.activeSession?.started_at"
           @close="store.messagesModalOpen = false"
-          width-class="w-[48rem]"
-        >
-          <div v-if="store.activeSession" class="space-y-4">
-            <div class="text-xs pb-3 border-b flex gap-3 flex-wrap" style="color: var(--ink-3); border-color: var(--hairline)">
-              <span v-if="store.activeSession.project_path">{{ store.activeSession.project_path }}</span>
-              <span v-if="store.activeSession.model" style="color: var(--accent)">{{ store.activeSession.model }}</span>
-              <span v-if="store.activeSession.tokens_used != null" style="color: var(--warning)">
-                {{ t('session.tokens_value', { count: formatInt(store.activeSession.tokens_used) }) }}
-              </span>
-              <span>{{ t('session.started_at', { time: formatSessionTime(store.activeSession.started_at, locale) }) }}</span>
-            </div>
+        />
 
-            <div class="ah-msg-list">
-              <div v-if="store.messagesLoading" class="loading-pulse text-center py-8" style="color: var(--ink-3)">
-                {{ t('session.loading_messages') }}
-              </div>
-              <div v-else-if="store.messages.length === 0" class="text-center py-8" style="color: var(--ink-3)">
-                {{ t('session.no_messages') }}
-              </div>
-              <template v-else>
-                <div
-                  v-for="(msg, idx) in store.messages"
-                  :key="idx"
-                  class="ah-msg"
-                  :class="msg.role === 'user' ? 'ah-msg--user' : 'ah-msg--assistant'"
-                >
-                  <div class="ah-msg__bubble">
-                    <div class="ah-msg__meta">
-                      <span class="ah-msg__role">
-                        {{ msg.role === 'user' ? t('session.role_user') : t('session.role_assistant') }}
-                      </span>
-                      <span class="ah-msg__time">
-                        {{ msg.timestamp ? formatSessionTime(msg.timestamp, locale) : '' }}
-                      </span>
-                    </div>
-                    <pre class="ah-msg__content select-text">{{ msg.content || '' }}</pre>
-                  </div>
-                </div>
-              </template>
-
-              <!-- Load more messages button -->
-              <div v-if="store.messagesHasMore && store.messages.length > 0" class="flex justify-center pt-2">
-                <button
-                  class="btn btn-secondary btn-sm"
-                  :disabled="store.messagesLoadingMore"
-                  @click="store.loadMessages(true)"
-                >
-                  {{ store.messagesLoadingMore ? t('session.loading_more') : t('session.load_more') }}
-                </button>
-              </div>
-            </div>
-          </div>
-          <template #footer>
-            <button class="btn btn-secondary" @click="store.messagesModalOpen = false">{{ t('action.close') }}</button>
-          </template>
-        </AppModal>
-
-        <!-- Resume Modal: copy-command flow (terminal launcher removed) -->
-        <AppModal
+        <SessionResumeModal
           :show="store.resumeModalOpen"
-          :title="t('session.resume')"
+          :platform-id="store.resumeTarget?.platform_id || store.selectedPlatformId"
+          :session-id="store.resumeTarget?.id"
+          :project-path="store.resumeTarget?.project_path"
+          :title="store.resumeTarget?.title"
           @close="store.resumeModalOpen = false"
-          width-class="w-[36rem]"
-        >
-          <div v-if="store.resumeLoading" class="loading-pulse text-center py-8" style="color: var(--ink-3)">
-            {{ t('session.loading_messages') }}
-          </div>
-          <div v-else-if="store.resumeError" class="py-8 text-center" style="color: var(--danger)">
-            {{ t('session.resume_failed', { error: store.resumeError }) }}
-          </div>
-          <div v-else-if="store.resumePreview" class="flex flex-col gap-2.5">
-            <div class="ah-resume-row">
-              <span class="ah-resume-row__label">{{ t('session.resume_field_title') }}</span>
-              <span class="ah-resume-row__value select-text">
-                {{ store.resumeTarget?.title || t('session.untitled') }}
-              </span>
-            </div>
-            <div class="ah-resume-row">
-              <span class="ah-resume-row__label">{{ t('session.resume_last_question') }}</span>
-              <span class="ah-resume-row__value select-text">
-                {{ store.resumePreview.last_user_message || t('session.resume_empty') }}
-              </span>
-            </div>
-            <div class="ah-resume-row">
-              <span class="ah-resume-row__label">{{ t('session.resume_last_answer') }}</span>
-              <span class="ah-resume-row__value select-text">
-                {{ store.resumePreview.last_assistant_message || t('session.resume_empty') }}
-              </span>
-            </div>
-            <div class="ah-resume-row ah-resume-row--command">
-              <div class="flex items-center justify-between gap-2">
-                <span class="ah-resume-row__label">{{ t('session.resume_command_label') }}</span>
-                <span class="ah-resume-row__hint">{{ t('session.resume_command_hint') }}</span>
-              </div>
-              <div class="ah-resume-command">
-                <code class="ah-resume-command__text select-text">{{ store.resumePreview.command }}</code>
-                <button class="btn btn-secondary btn-sm shrink-0" @click="copyResumeCommand">
-                  {{ resumeCommandCopied ? t('action.copied') : t('action.copy') }}
-                </button>
-              </div>
-            </div>
-          </div>
-          <template #footer>
-            <button class="btn btn-secondary" @click="store.resumeModalOpen = false">{{ t('action.close') }}</button>
-          </template>
-        </AppModal>
+        />
       </template>
     </div>
   </div>
 </template>
 
 <style scoped>
-.session-card__head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 4px;
-}
-.session-card__actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
-  margin-top: 10px;
-}
-/* Resume modal rows: fixed-width label + single-line truncated value */
-.ah-resume-row {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  min-width: 0;
-}
-.ah-resume-row--command {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 6px;
-  margin-top: 4px;
-}
-.ah-resume-row__label {
-  flex-shrink: 0;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--ink-2);
-  white-space: nowrap;
-}
-.ah-resume-row__hint {
-  font-size: 11px;
-  color: var(--ink-4);
-  white-space: nowrap;
-}
-.ah-resume-row__value {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12.5px;
-  color: var(--ink);
-}
-.ah-resume-command {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 8px 10px;
-  background: var(--sunken);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-sm);
-}
-.ah-resume-command__text {
-  min-width: 0;
-  flex: 1;
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--ink);
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-/* Delete: quiet icon by default, turns into a red confirm chip on first click.
-   Kept self-contained (not using .btn) so the confirming state is fully controlled. */
+/* Batch-mode confirm chip reuses the card delete styling; it lives outside
+   SessionCard so the classes are duplicated here. */
 .session-card__delete {
   display: inline-flex;
   align-items: center;
@@ -565,13 +353,6 @@ function clearSessionSearch() {
   border-radius: var(--radius-sm);
   cursor: pointer;
   white-space: nowrap;
-  transition: color var(--dur-fast) var(--ease-soft), background var(--dur-fast) var(--ease-soft),
-    border-color var(--dur-fast) var(--ease-soft), width var(--dur-fast) var(--ease-soft),
-    padding var(--dur-fast) var(--ease-soft);
-}
-.session-card__delete:hover {
-  color: var(--danger);
-  background: var(--danger-soft);
 }
 .session-card__delete.is-confirming {
   width: auto;
@@ -579,36 +360,5 @@ function clearSessionSearch() {
   color: var(--on-accent);
   background: var(--danger);
   border-color: var(--danger);
-}
-/* Selection mode: the whole card is the toggle, so it gets pointer cursor and
-   relative+hidden to host the corner ribbon without leaking past the radius. */
-.session-card--selecting {
-  position: relative;
-  overflow: hidden;
-  cursor: pointer;
-  user-select: none;
-}
-.session-card--selected {
-  background: var(--accent-soft);
-  border-color: var(--accent-mid);
-}
-/* Top-left accent triangle marking a selected card, with a small check glyph.
-   Drawn with clip-path on a real box (not border triangles) so the glyph's
-   containing block is the corner square itself. */
-.session-card__corner {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 26px;
-  height: 26px;
-  background: var(--accent);
-  clip-path: polygon(0 0, 100% 0, 0 100%);
-  pointer-events: none;
-}
-.session-card__corner svg {
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  color: var(--on-accent);
 }
 </style>

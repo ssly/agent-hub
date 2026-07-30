@@ -33,7 +33,7 @@ src/
     plugins/              # PluginView, ClaudePluginList
     skills/               # SkillListView, SkillDetailView
     mcp/                  # McpListView
-    sessions/             # SessionListView
+    sessions/             # SessionListView + 会话/监听共用组件（SessionCard、SessionMessagesModal、SessionResumeModal，仅组件共用、数据不共用）
     switch/               # SwitchView（含 Codex 用量面板）
     tray/                 # 托盘用量弹窗：CodexTrayView + UsageOrb（泡泡水 + 圆环可视化）
     diff/                 # DiffView
@@ -175,3 +175,7 @@ cd src-tauri && cargo test
 ## CI/CD
 
 `.github/workflows/release.yml` — 推送 `v*` tag 触发，构建 macOS（aarch64 + x86_64）和 Windows 产物，使用 minisign 签名，生成 updater manifest。
+
+## macOS 应用名本地化
+
+Dock/菜单栏显示名走系统语言：`src-tauri/Info.plist` 覆盖 `CFBundleDisplayName`/`CFBundleName` 为 "Agent Hub"（Tauri 会合并该文件，不覆盖 productName），`src-tauri/macos/{en,zh-Hans}.lproj/InfoPlist.strings` 提供英文 "Agent Hub" / 中文 "智能体中枢"，经 `bundle.resources` 映射进 app bundle 的 Resources 根目录。跟随 macOS 系统语言，与应用内语言切换无关。

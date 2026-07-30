@@ -9,6 +9,13 @@ export type MonitorAgent = 'codex' | 'claude' | 'kiro'
 export const MONITOR_AGENTS: MonitorAgent[] = ['codex', 'claude', 'kiro']
 /** Sidebar tab: one of the agents, or the merged "all" view. */
 export type MonitorTab = MonitorAgent | 'all'
+/** Monitor agent → sessions-browser platform id, so the shared messages /
+ *  resume modals can load full history through the sessions adapters. */
+export const MONITOR_AGENT_PLATFORM: Record<MonitorAgent, string> = {
+  codex: 'codex',
+  claude: 'claude-code',
+  kiro: 'kiro',
+}
 
 export interface SessionState {
   sessionId: string
@@ -253,9 +260,9 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     }
   }
 
-  // Manual delete: no confirmation by design — the row is low-value history.
-  // The merged "all" view passes the row's agent explicitly since the active
-  // tab no longer identifies it.
+  // Deleting from the monitor only drops the row from the local snapshot —
+  // the on-disk session record is untouched (that is the Sessions browser's
+  // delete). The card's two-step confirm mirrors the Sessions UX.
   async function deleteSession(sessionId: string, agent?: MonitorAgent) {
     const target = agent ?? (activeAgent.value === 'all' ? undefined : activeAgent.value)
     if (!target) return
@@ -277,6 +284,24 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     } catch (cause) {
       error.value = errorMessage(cause)
     }
+  }
+
+  // Shared-modal open state. The modals fetch full history / resume commands
+  // through the sessions adapters (MONITOR_AGENT_PLATFORM), so the monitor
+  // itself still keeps only its lightweight snapshot data.
+  const messagesModalOpen = ref(false)
+  const resumeModalOpen = ref(false)
+  const modalSession = ref<AgentSessionState | null>(null)
+  const resumeSession = ref<AgentSessionState | null>(null)
+
+  function openMessages(session: AgentSessionState) {
+    modalSession.value = session
+    messagesModalOpen.value = true
+  }
+
+  function openResume(session: AgentSessionState) {
+    resumeSession.value = session
+    resumeModalOpen.value = true
   }
 
   return {
@@ -303,5 +328,11 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     applyHookPreview,
     deleteSession,
     setKiroEnabled,
+    messagesModalOpen,
+    resumeModalOpen,
+    modalSession,
+    resumeSession,
+    openMessages,
+    openResume,
   }
 })

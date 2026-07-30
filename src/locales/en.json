@@ -479,6 +479,7 @@
     "hook_command": "Command",
     "trust_hint": "ChatGPT desktop requires manually trusting the UserPromptSubmit and Stop hooks in Settings → Hooks; this must be re-confirmed after every hook install or update, otherwise the monitor receives no events.",
     "delete_session": "Delete this session record",
+    "delete_note": "Won't delete the real session",
     "preview_stats": "File change: {added} lines added, {removed} lines removed",
     "preview_loading": "Generating the config file diff…",
     "no_changes": "No config file changes are needed.",

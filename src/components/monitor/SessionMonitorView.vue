@@ -1,10 +1,18 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Activity, CheckCircle2, CircleStop, Monitor, Radar, Terminal, Trash2 } from 'lucide-vue-next'
+import { Activity, CheckCircle2, CircleStop, Radar } from 'lucide-vue-next'
 import AppModal from '@/components/ui/AppModal.vue'
+import SessionCard from '@/components/sessions/SessionCard.vue'
+import SessionMessagesModal from '@/components/sessions/SessionMessagesModal.vue'
+import SessionResumeModal from '@/components/sessions/SessionResumeModal.vue'
 import { useToast } from '@/composables/useToast'
-import { useSessionMonitorStore, type MonitorAgent, type SessionState } from '@/stores/session-monitor'
+import {
+  useSessionMonitorStore,
+  MONITOR_AGENT_PLATFORM,
+  type MonitorAgent,
+  type SessionState,
+} from '@/stores/session-monitor'
 
 const { t, locale } = useI18n()
 const store = useSessionMonitorStore()
@@ -48,6 +56,11 @@ function sourceLabel(session: SessionState): string {
   return session.source === 'chatgpt'
     ? t('session_monitor.source_chatgpt')
     : t('session_monitor.source_terminal')
+}
+
+/** Platform id of the sessions adapter backing a monitor row's full history. */
+function sessionPlatform(session: { agent: MonitorAgent } | null): string | null {
+  return session ? MONITOR_AGENT_PLATFORM[session.agent] : null
 }
 
 function emptyHint(): string {
@@ -199,44 +212,47 @@ onUnmounted(() => store.dispose())
       <span>{{ emptyHint() }}</span>
     </div>
     <div v-else class="session-monitor-list">
-      <article
+      <SessionCard
         v-for="session in store.displaySessions"
         :key="`${session.agent}-${session.sessionId}`"
-        class="session-row ah-card"
-        :class="{ 'session-row--running': session.status === 'running' }"
+        :badge="agentLabel(session.agent)"
+        :source="session.source"
+        :source-label="sourceLabel(session)"
+        :status="session.status"
+        :time="formatTime(session.updatedAt)"
+        :delete-note="t('session_monitor.delete_note')"
+        :title="session.userPrompt || t('session_monitor.no_prompt')"
+        :subtitle="session.cwd || undefined"
+        :deletable="session.status === 'ended'"
+        @open="store.openMessages(session)"
+        @resume="store.openResume(session)"
+        @delete="store.deleteSession(session.sessionId, session.agent)"
       >
-        <div class="session-row__top">
-          <span v-if="isAll" class="session-agent-badge">{{ agentLabel(session.agent) }}</span>
-          <div class="session-source">
-            <Monitor v-if="session.source === 'chatgpt'" :size="15" />
-            <Terminal v-else :size="15" />
-            <span>{{ sourceLabel(session) }}</span>
-          </div>
-          <div class="session-status" :class="`session-status--${session.status}`">
-            <span class="session-status__dot" />
-            {{ session.status === 'running' ? t('session_monitor.status_running') : t('session_monitor.status_ended') }}
-          </div>
-          <time class="session-time">{{ formatTime(session.updatedAt) }}</time>
-          <button
-            v-if="session.status === 'ended'"
-            v-tooltip="t('session_monitor.delete_session')"
-            class="session-delete"
-            @click="store.deleteSession(session.sessionId, session.agent)"
-          >
-            <Trash2 :size="13" />
-          </button>
-        </div>
-
-        <div class="session-row__line">
-          <span>{{ t('session_monitor.user_question') }}</span>
-          <p>{{ session.userPrompt || t('session_monitor.no_prompt') }}</p>
-        </div>
         <div class="session-row__line">
           <span>{{ t('session_monitor.assistant_reply') }}</span>
           <p>{{ session.assistantReply || (session.status === 'running' ? t('session_monitor.waiting_reply', { agent: agentLabel(session.agent) }) : t('session_monitor.no_reply')) }}</p>
         </div>
-      </article>
+      </SessionCard>
     </div>
+
+    <SessionMessagesModal
+      :show="store.messagesModalOpen"
+      :platform-id="sessionPlatform(store.modalSession)"
+      :session-id="store.modalSession?.sessionId"
+      :title="store.modalSession?.userPrompt || undefined"
+      :project-path="store.modalSession?.cwd"
+      :started-at="store.modalSession?.updatedAt ? store.modalSession.updatedAt / 1000 : null"
+      @close="store.messagesModalOpen = false"
+    />
+
+    <SessionResumeModal
+      :show="store.resumeModalOpen"
+      :platform-id="sessionPlatform(store.resumeSession)"
+      :session-id="store.resumeSession?.sessionId"
+      :project-path="store.resumeSession?.cwd"
+      :title="store.resumeSession?.userPrompt || undefined"
+      @close="store.resumeModalOpen = false"
+    />
 
     <AppModal
       :show="store.previewOpen"
@@ -318,19 +334,8 @@ onUnmounted(() => store.dispose())
 .session-list-header { display: flex; align-items: center; justify-content: space-between; margin: 24px 0 10px; }
 .session-list-header h2 { color: var(--ink); font: 600 15px/1.2 var(--font-serif); }
 .session-monitor-list { display: flex; flex-direction: column; gap: 9px; }
-.session-row { padding: 13px 15px; }
-.session-row--running { border-color: color-mix(in srgb, var(--success) 45%, var(--hairline)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--success) 7%, transparent); }
-.session-row__top { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
-.session-source { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); font-size: 12px; font-weight: 600; }
-.session-agent-badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px; background: var(--sunken); color: var(--ink-2); font-size: 11px; font-weight: 600; }
-.session-status { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
-.session-status__dot { width: 7px; height: 7px; border-radius: 999px; background: currentColor; }
-.session-status--running { color: var(--success); }
-.session-status--ended { color: var(--ink-4); }
-.session-time { margin-left: auto; color: var(--ink-4); font: 11px/1 var(--font-mono); }
-.session-delete { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: none; border-radius: var(--radius-sm); background: transparent; color: var(--ink-4); cursor: pointer; transition: color .15s, background .15s; }
-.session-delete:hover { color: var(--danger); background: var(--danger-soft); }
-.session-row__line { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px; min-width: 0; font-size: 12.5px; line-height: 1.8; }
+/* Q&A line inside the shared card's default slot (monitor-specific body). */
+.session-row__line { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px; min-width: 0; margin-top: 4px; font-size: 12.5px; line-height: 1.8; }
 .session-row__line > span { color: var(--ink-4); }
 .session-row__line > p { min-width: 0; overflow: hidden; color: var(--ink-2); text-overflow: ellipsis; white-space: nowrap; }
 .monitor-empty { min-height: 230px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--ink-4); text-align: center; }
