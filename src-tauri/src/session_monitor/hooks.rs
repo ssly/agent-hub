@@ -9,6 +9,23 @@ use uuid::Uuid;
 
 const USER_PROMPT_SUBMIT: &str = "UserPromptSubmit";
 const STOP: &str = "Stop";
+// Claude/Grok fire StopFailure when a turn dies on an API error; Kimi fires
+// Interrupt instead of Stop when the user aborts a turn (Esc / Ctrl+C).
+// Without these the monitor row would stay "running" forever. Codex has no
+// such events — its Stop covers every turn end.
+const STOP_FAILURE: &str = "StopFailure";
+const INTERRUPT: &str = "Interrupt";
+
+/// The managed hook events each agent gets on install. Codex stays at two:
+/// its hook system has no StopFailure/Interrupt events at all.
+fn managed_events(agent: AgentKind) -> &'static [&'static str] {
+    match agent {
+        AgentKind::Codex => &[USER_PROMPT_SUBMIT, STOP],
+        AgentKind::Claude | AgentKind::Grok => &[USER_PROMPT_SUBMIT, STOP, STOP_FAILURE],
+        AgentKind::Kimi => &[USER_PROMPT_SUBMIT, STOP, INTERRUPT, STOP_FAILURE],
+        AgentKind::Kiro => &[],
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookAction {
@@ -100,14 +117,13 @@ pub fn get_hook_status(agent: AgentKind) -> Result<HookStatus, String> {
     let content = fs::read_to_string(&path)
         .map_err(|error| format!("unable to read {}: {error}", path.display()))?;
     let root = parse_root(&content, &path)?;
-    let prompt_commands = managed_commands_for(&root, USER_PROMPT_SUBMIT, arg);
-    let stop_commands = managed_commands_for(&root, STOP, arg);
     let managed_handler_count = managed_command_count(&root, arg);
-    let installed = managed_handler_count == 2
-        && prompt_commands.len() == 1
-        && stop_commands.len() == 1
-        && prompt_commands[0] == command
-        && stop_commands[0] == command;
+    let events = managed_events(agent);
+    let installed = managed_handler_count == events.len()
+        && events.iter().all(|event| {
+            let commands = managed_commands_for(&root, event, arg);
+            commands.len() == 1 && commands[0] == command
+        });
     let issue = if installed || managed_handler_count == 0 {
         // Claude Code lets users disable every hook with one switch; an
         // installed-but-disabled hook looks broken, so surface it.
@@ -249,8 +265,9 @@ fn render_after(
     };
     remove_managed_handlers(agent, &mut root, arg)?;
     if action == HookAction::Install {
-        append_managed_handler(&mut root, USER_PROMPT_SUBMIT, command)?;
-        append_managed_handler(&mut root, STOP, command)?;
+        for event in managed_events(agent) {
+            append_managed_handler(&mut root, event, command)?;
+        }
     }
     let mut rendered = serde_json::to_string_pretty(&root)
         .map_err(|error| format!("unable to serialize {}: {error}", config_label(agent)))?;
@@ -484,21 +501,12 @@ fn kimi_hook_status() -> Result<HookStatus, String> {
     let content = fs::read_to_string(&path)
         .map_err(|error| format!("unable to read {}: {error}", path.display()))?;
     let managed = kimi_managed_entries(&content)?;
-    let prompt_commands: Vec<&str> = managed
-        .iter()
-        .filter(|(event, _)| event == USER_PROMPT_SUBMIT)
-        .map(|(_, command)| command.as_str())
-        .collect();
-    let stop_commands: Vec<&str> = managed
-        .iter()
-        .filter(|(event, _)| event == STOP)
-        .map(|(_, command)| command.as_str())
-        .collect();
-    let installed = managed.len() == 2
-        && prompt_commands.len() == 1
-        && stop_commands.len() == 1
-        && prompt_commands[0] == command
-        && stop_commands[0] == command;
+    let events = managed_events(AgentKind::Kimi);
+    let installed = managed.len() == events.len()
+        && events
+            .iter()
+            .all(|event| managed.iter().filter(|(name, _)| name == event).count() == 1)
+        && managed.iter().all(|(_, cmd)| cmd == &command);
     let issue = if installed || managed.is_empty() {
         None
     } else {
@@ -549,7 +557,9 @@ fn kimi_render_after(action: HookAction, command: &str, before: &str) -> String 
         cleaned.push('\n');
     }
     cleaned.push_str(&format!(
-        "[[hooks]]\nevent = \"{USER_PROMPT_SUBMIT}\"\ncommand = \"{}\"\ntimeout = 10\n\n[[hooks]]\nevent = \"{STOP}\"\ncommand = \"{}\"\ntimeout = 10\n",
+        "[[hooks]]\nevent = \"{USER_PROMPT_SUBMIT}\"\ncommand = \"{}\"\ntimeout = 10\n\n[[hooks]]\nevent = \"{STOP}\"\ncommand = \"{}\"\ntimeout = 10\n\n[[hooks]]\nevent = \"{INTERRUPT}\"\ncommand = \"{}\"\ntimeout = 10\n\n[[hooks]]\nevent = \"{STOP_FAILURE}\"\ncommand = \"{}\"\ntimeout = 10\n",
+        kimi_toml_escape(command),
+        kimi_toml_escape(command),
         kimi_toml_escape(command),
         kimi_toml_escape(command),
     ));
@@ -775,7 +785,8 @@ mod tests {
         let root: Value = serde_json::from_str(&after).unwrap();
         assert_eq!(root["model"], "claude-sonnet-5");
         assert!(root.get("permissions").is_some());
-        assert_eq!(managed_command_count(&root, CLAUDE_HOOK_ARG), 2);
+        assert_eq!(managed_command_count(&root, CLAUDE_HOOK_ARG), 3);
+        assert!(after.contains("StopFailure"));
         // A Codex handler in the same file is not managed by the Claude
         // target and survives install/uninstall cycles.
         assert!(after.contains("--agent-hub-codex-hook"));
@@ -803,7 +814,7 @@ mod tests {
     }
 
     #[test]
-    fn kimi_install_appends_two_managed_blocks_and_preserves_config() {
+    fn kimi_install_appends_four_managed_blocks_and_preserves_config() {
         let before = "model = \"k2\"\n\n[[hooks]]\nevent = \"Notification\"\ncommand = \"terminal-notifier -message done\"\n";
         let after = kimi_render_after(
             HookAction::Install,
@@ -813,9 +824,11 @@ mod tests {
         assert!(after.contains("model = \"k2\""));
         assert!(after.contains("terminal-notifier"));
         let entries = kimi_managed_entries(&after).unwrap();
-        assert_eq!(entries.len(), 2);
+        assert_eq!(entries.len(), 4);
         assert!(entries.iter().any(|(event, _)| event == USER_PROMPT_SUBMIT));
         assert!(entries.iter().any(|(event, _)| event == STOP));
+        assert!(entries.iter().any(|(event, _)| event == INTERRUPT));
+        assert!(entries.iter().any(|(event, _)| event == STOP_FAILURE));
     }
 
     #[test]

@@ -46,14 +46,6 @@ pub fn builtin_mcp_platforms() -> Vec<McpPlatformDef> {
             mcp_key: "mcpServers".into(),
         },
         McpPlatformDef {
-            id: "gemini".into(),
-            display_name: "Gemini CLI".into(),
-            presence_path: home.join(".gemini"),
-            config_path: join_relative(home.clone(), ".gemini/settings.json"),
-            format: McpFormat::Json,
-            mcp_key: "mcpServers".into(),
-        },
-        McpPlatformDef {
             id: "grok-build".into(),
             display_name: "Grok Build".into(),
             presence_path: home.join(".grok"),
@@ -104,7 +96,6 @@ pub fn find_workspace_mcp_platform(
         "claude-code" => workspace.join(".mcp.json"),
         "codex" => workspace.join(".codex").join("config.toml"),
         "antigravity" => workspace.join(".agents").join("mcp_config.json"),
-        "gemini" => workspace.join(".gemini").join("settings.json"),
         "grok-build" => workspace.join(".grok").join("config.toml"),
         "kimi-code" => workspace.join(".kimi-code").join("mcp.json"),
         "cursor" => workspace.join(".cursor").join("mcp.json"),

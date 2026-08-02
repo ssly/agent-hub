@@ -48,13 +48,6 @@ pub fn builtin_platforms() -> Vec<PlatformDef> {
             skill_dir: join_relative(home.clone(), ".gemini/config/skills"),
         },
         PlatformDef {
-            id: "gemini".into(),
-            display_name: "Gemini CLI".into(),
-            description: "Google Gemini CLI agent skills".into(),
-            presence_path: home.join(".gemini"),
-            skill_dir: join_relative(home.clone(), ".gemini/skills"),
-        },
-        PlatformDef {
             id: "grok-build".into(),
             display_name: "Grok Build".into(),
             description: "xAI Grok Build agent skills".into(),
@@ -177,13 +170,12 @@ mod tests {
             .map(|platform| platform.id.as_str())
             .collect();
         assert_eq!(
-            &ids[..7],
+            &ids[..6],
             [
                 "shared-pool",
                 "codex",
                 "claude-code",
                 "antigravity",
-                "gemini",
                 "grok-build",
                 "kimi-code"
             ]

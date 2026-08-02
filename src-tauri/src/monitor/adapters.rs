@@ -1,7 +1,6 @@
 use super::types::*;
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OpenFlags};
-use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -21,7 +20,7 @@ fn truncate_preview(s: &str) -> String {
 
 /// FNV-1a 64-bit hash of cwd. Stable across process restarts and platforms,
 /// so an agent restarted in the same cwd keeps the same session_id.
-/// Used by Tier-2 adapters (Codex, Gemini) where no internal session id is exposed.
+/// Used by Tier-2 adapters (Codex) where no internal session id is exposed.
 fn cwd_hash(cwd: &str) -> String {
     let mut hash: u64 = 0xcbf29ce484222325;
     for byte in cwd.as_bytes() {
@@ -1150,114 +1149,6 @@ impl AgentMonitor for CodexAdapter {
     }
 }
 
-#[allow(dead_code)]
-pub struct GeminiAdapter {
-    home: PathBuf,
-}
-
-#[allow(dead_code)]
-impl GeminiAdapter {
-    pub fn new() -> Self {
-        let home = crate::paths::home_dir();
-        Self { home }
-    }
-
-    fn gemini_tmp_dir(&self) -> PathBuf {
-        join_relative(self.home.clone(), ".gemini/tmp")
-    }
-
-    fn detect_from_processes(&self, sys: &sysinfo::System) -> Vec<AgentSession> {
-        let mut seen_cwd: HashMap<String, u32> = HashMap::new();
-        let mut all: Vec<(u32, AgentSession)> = Vec::new();
-        for (_, proc) in sys.processes() {
-            let name = proc.name().to_string_lossy().to_string();
-            if name != "node" {
-                continue;
-            }
-            let cmd: Vec<String> = proc
-                .cmd()
-                .iter()
-                .map(|s| s.to_string_lossy().to_string())
-                .collect();
-            let is_gemini = cmd.iter().any(|a| a.contains("/bin/gemini"));
-            if !is_gemini {
-                continue;
-            }
-
-            let cwd = proc
-                .cwd()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default();
-
-            let project_name = Path::new(&cwd)
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
-
-            let pid = proc.pid().as_u32();
-            let session_id = if cwd.is_empty() {
-                format!("gemini-pid{pid}")
-            } else {
-                format!("gemini-{}", cwd_hash(&cwd))
-            };
-            let title = if project_name.is_empty() {
-                "Gemini CLI".to_string()
-            } else {
-                format!("Gemini – {project_name}")
-            };
-
-            let started_at =
-                DateTime::from_timestamp(proc.start_time() as i64, 0).unwrap_or_default();
-
-            all.push((
-                pid,
-                AgentSession {
-                    agent_type: "gemini".to_string(),
-                    source_tag: "CLI".to_string(),
-                    session_id: session_id.clone(),
-                    title,
-                    model: "gemini".to_string(),
-                    cwd: cwd.clone(),
-                    status: SessionStatus::Active,
-                    started_at,
-                    last_activity: Utc::now(),
-                    data_limited: true,
-                    data_limited_reason: Some("monitor.data_limited_gemini".to_string()),
-                    pid: Some(pid),
-                    last_message_preview: None,
-                    last_reply_at: None,
-                    last_user_prompt: None,
-                    working_state: WorkingState::Idle,
-                },
-            ));
-
-            seen_cwd
-                .entry(cwd)
-                .and_modify(|e| {
-                    if pid < *e {
-                        *e = pid;
-                    }
-                })
-                .or_insert(pid);
-        }
-        let parent_pids: std::collections::HashSet<u32> = seen_cwd.values().copied().collect();
-        all.into_iter()
-            .filter(|(pid, _)| parent_pids.contains(pid))
-            .map(|(_, s)| s)
-            .collect()
-    }
-}
-
-impl AgentMonitor for GeminiAdapter {
-    fn detect_sessions(&self, sys: &sysinfo::System) -> Vec<AgentSession> {
-        self.detect_from_processes(sys)
-    }
-
-    fn on_fs_event(&mut self, _event: &notify::Event) -> Vec<(StateChange, AgentSession)> {
-        vec![]
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1289,21 +1180,12 @@ mod tests {
     }
 
     /// Regression: Codex restart in the same cwd must keep the same session_id
-    /// (PID changes, cwd does not). Defends against Issue #5 — Codex/Gemini ghost-row.
+    /// (PID changes, cwd does not). Defends against Issue #5 — Codex ghost-row.
     #[test]
     fn codex_session_id_only_depends_on_cwd_not_pid() {
         let cwd = "/Users/foo/code/myapp";
         let id_pid_1234 = format!("codex-{}", cwd_hash(cwd));
         let id_pid_5678 = format!("codex-{}", cwd_hash(cwd));
-        assert_eq!(id_pid_1234, id_pid_5678);
-    }
-
-    /// Regression: same as above for Gemini.
-    #[test]
-    fn gemini_session_id_only_depends_on_cwd_not_pid() {
-        let cwd = "/Users/foo/code/myapp";
-        let id_pid_1234 = format!("gemini-{}", cwd_hash(cwd));
-        let id_pid_5678 = format!("gemini-{}", cwd_hash(cwd));
         assert_eq!(id_pid_1234, id_pid_5678);
     }
 

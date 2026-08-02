@@ -7,7 +7,7 @@
 **统一管理本地多个 AI Agent 平台的桌面应用**
 
 在一个应用里管理各平台的插件（Skill、MCP Server、Claude Code 原生插件）、会话历史、实时监听与账号体系，
-覆盖 Claude Code · Codex CLI · Gemini · Kiro · Kimi Code · Grok Build 等平台。
+覆盖 Claude Code · Codex CLI · Kiro · Kimi Code · Grok Build 等平台。
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Tauri 2.x](https://img.shields.io/badge/Tauri-2.x-blue?logo=tauri&logoColor=white)](https://v2.tauri.app/)
@@ -24,7 +24,7 @@
 
 如果你同时使用多个 AI 编程 Agent，大概率遇到过这些麻烦：
 
-- 给 Claude Code 写的 Skill，要手动复制到 Cursor、Gemini 才能用
+- 给 Claude Code 写的 Skill，要手动复制到 Cursor 才能用
 - MCP Server 配置散落在全局和项目目录里，格式还各不相同（JSON、TOML）
 - Claude Code 插件、Skill、MCP Server 要在不同工具里分别管理
 - 翻历史会话不方便，多个账号之间切换更麻烦
@@ -72,10 +72,11 @@ Agent Hub 用一个桌面应用解决这些问题。
 实时展示各 Agent 进行中 / 已结束的会话（状态、最新提问、助手回复）：
 
 - **Codex** — 向 `~/.codex/hooks.json` 注入 `UserPromptSubmit` + `Stop` 两个生命周期 Hook
-- **Claude Code** — 同样的两个 Hook 写入 `~/.claude/settings.json`，热加载无需重启
-- **Grok Build** — 独立受管 Hook 文件 `~/.grok/hooks/agent-hub.json`，不改动共享配置
-- **Kimi Code** — `~/.kimi-code/config.toml` 的 `[[hooks]]` 表，纯文本块增删，注释格式原样保留
+- **Claude Code** — 同样的 Hook 写入 `~/.claude/settings.json`（热加载无需重启），并追加 `StopFailure` 捕获 API 出错终止
+- **Grok Build** — 独立受管 Hook 文件 `~/.grok/hooks/agent-hub.json`（含 `StopFailure`），不改动共享配置
+- **Kimi Code** — `~/.kimi-code/config.toml` 的 `[[hooks]]` 表（含 `Interrupt` 中断与 `StopFailure`），纯文本块增删，注释格式原样保留
 - **Kiro** — 纯文件监听 `~/.kiro/sessions/cli/`（增量 tail + 锁文件进程探测），任意 kiro-cli 版本开箱即用，对 Kiro 配置零写入
+- 「全部」视图顶部有各 Agent 监听状态 Tag，一眼看清哪些已开启；旧版 Hook 会提示卸载重装
 - Hook 安装 / 卸载一律先展示 Diff 预览，且只触碰 Agent Hub 自己管理的条目
 
 ### 📊 监控面板
@@ -138,7 +139,6 @@ Agent Hub 用一个桌面应用解决这些问题。
 | Codex CLI | `~/.agents/skills/`（共享池） |
 | Claude Code | `~/.claude/skills/` |
 | Antigravity | `~/.gemini/config/skills/` |
-| Gemini CLI | `~/.gemini/skills/` |
 | Grok Build | `~/.grok/skills/` |
 | Kimi Code | `~/.kimi-code/skills/` |
 | Cursor | `~/.cursor/skills/` |
@@ -146,7 +146,7 @@ Agent Hub 用一个桌面应用解决这些问题。
 | Trae | `~/.trae/skills/` |
 | Kiro | `~/.kiro/skills/` |
 
-共享池（`~/.agents/skills/`）默认被 Codex、Cursor、OpenCode、Gemini CLI、Kimi Code、Grok Build 读取；Antigravity 在项目级读取 `.agents/skills/`。
+共享池（`~/.agents/skills/`）默认被 Codex、Cursor、OpenCode、Kimi Code、Grok Build 读取；Antigravity 在项目级读取 `.agents/skills/`。
 
 ### MCP Server 管理
 
@@ -155,7 +155,6 @@ Agent Hub 用一个桌面应用解决这些问题。
 | Claude Code | `~/.claude.json` | JSON |
 | Antigravity | `~/.gemini/config/mcp_config.json` | JSON |
 | Cursor | `~/.cursor/mcp.json` | JSON |
-| Gemini CLI | `~/.gemini/settings.json` | JSON |
 | Grok Build | `~/.grok/config.toml` | TOML |
 | Kimi Code | `~/.kimi-code/mcp.json` | JSON |
 | Kiro | `~/.kiro/settings/mcp.json` | JSON |

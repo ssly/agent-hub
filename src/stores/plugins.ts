@@ -20,7 +20,6 @@ export const usePluginsStore = defineStore('plugins', () => {
       codex: '.agents/skills',
       antigravity: '.agents/skills',
       cursor: '.cursor/skills',
-      gemini: '.gemini/skills',
       'grok-build': '.grok/skills',
       'kimi-code': '.kimi-code/skills',
       hermes: '.hermes/skills',

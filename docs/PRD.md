@@ -2,7 +2,7 @@
 
 ## 1. 背景与动机
 
-本地运行着多个 AI Agent 平台（Claude Code、Codex CLI、Cursor、OpenClaw、Hermes、Trae、Gemini 等），每个平台各有自己的 skill/plugin/MCP 生态。当前痛点：
+本地运行着多个 AI Agent 平台（Claude Code、Codex CLI、Cursor、OpenClaw、Hermes、Trae 等），每个平台各有自己的 skill/plugin/MCP 生态。当前痛点：
 
 1. **碎片化**：skill 散落在各平台目录中，无法一目了然地看到「我有哪些 agent，每个 agent 有哪些 skill」
 2. **重复劳动**：写好一个 skill 想在多个平台用，只能手动复制或用软链接，但软链接不灵活（无法选择性地同步部分 skill）
@@ -17,7 +17,7 @@ Agent Hub 是一个 **终端工具（TUI）**，作为本地多 Agent 平台的�
 ┌─────────────────────────────────────────────────┐
 │                  Agent Hub                       │
 │  统一管理 Claude / Codex / Cursor / OpenClaw /   │
-│  Hermes / Trae / Gemini 的 Skill 生态            │
+│  Hermes / Trae 的 Skill 生态                     │
 └─────────────────────────────────────────────────┘
 ```
 

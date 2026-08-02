@@ -7,7 +7,7 @@
 **Unified management for local AI Agent platforms**
 
 Manage plugins (Skills, MCP Servers, and Claude Code extensions), session history, live session monitoring,
-and account profiles across Claude Code · Codex CLI · Gemini · Kiro · Kimi Code · Grok Build and more — in one desktop app.
+and account profiles across Claude Code · Codex CLI · Kiro · Kimi Code · Grok Build and more — in one desktop app.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Tauri 2.x](https://img.shields.io/badge/Tauri-2.x-blue?logo=tauri&logoColor=white)](https://v2.tauri.app/)
@@ -24,7 +24,7 @@ and account profiles across Claude Code · Codex CLI · Gemini · Kiro · Kimi C
 
 If you work with multiple AI coding agents, you've probably felt the pain:
 
-- Skills written for Claude Code need to be manually copied to Cursor and Gemini
+- Skills written for Claude Code need to be manually copied to Cursor
 - MCP Server configs are scattered across global and project files in different formats (JSON, TOML)
 - Claude Code plugins, Skills, and MCP Servers have to be managed in separate tools
 - No easy way to browse past conversations or switch between accounts
@@ -72,10 +72,11 @@ Agent Hub solves this. One desktop app to manage them all.
 Watch live sessions in real time — running/ended status, the latest user prompt, and the agent's reply:
 
 - **Codex** — two lifecycle Hooks (`UserPromptSubmit` + `Stop`) injected into `~/.codex/hooks.json`
-- **Claude Code** — the same two Hooks added to `~/.claude/settings.json`, hot-reloaded with no restart
-- **Grok Build** — a standalone managed Hook file `~/.grok/hooks/agent-hub.json`; shared configs are never touched
-- **Kimi Code** — `[[hooks]]` tables in `~/.kimi-code/config.toml`, edited as plain text blocks so comments and formatting survive
+- **Claude Code** — the same Hooks added to `~/.claude/settings.json` (hot-reloaded, no restart), plus `StopFailure` for turns killed by API errors
+- **Grok Build** — a standalone managed Hook file `~/.grok/hooks/agent-hub.json` (including `StopFailure`); shared configs are never touched
+- **Kimi Code** — `[[hooks]]` tables in `~/.kimi-code/config.toml` (including `Interrupt` and `StopFailure`), edited as plain text blocks so comments and formatting survive
 - **Kiro** — pure file watching on `~/.kiro/sessions/cli/` (incremental tail + lock-file pid liveness). Works out of the box on any kiro-cli version, with zero writes to Kiro configuration
+- The "All" view shows per-agent status tags at a glance, and outdated hook installs get an upgrade prompt
 - Hook install/uninstall always shows a diff preview first and only ever touches Agent Hub's own entries
 
 ### 📊 Monitor Panel
@@ -138,7 +139,6 @@ Download `.exe` from [Releases](https://github.com/ssly/agent-hub/releases) and 
 | Codex CLI | `~/.agents/skills/` (Shared Pool) |
 | Claude Code | `~/.claude/skills/` |
 | Antigravity | `~/.gemini/config/skills/` |
-| Gemini CLI | `~/.gemini/skills/` |
 | Grok Build | `~/.grok/skills/` |
 | Kimi Code | `~/.kimi-code/skills/` |
 | Cursor | `~/.cursor/skills/` |
@@ -146,7 +146,7 @@ Download `.exe` from [Releases](https://github.com/ssly/agent-hub/releases) and 
 | Trae | `~/.trae/skills/` |
 | Kiro | `~/.kiro/skills/` |
 
-The Shared Pool (`~/.agents/skills/`) is read by default by Codex, Cursor, OpenCode, Gemini CLI, Kimi Code, and Grok Build; Antigravity reads `.agents/skills/` at project level.
+The Shared Pool (`~/.agents/skills/`) is read by default by Codex, Cursor, OpenCode, Kimi Code, and Grok Build; Antigravity reads `.agents/skills/` at project level.
 
 ### MCP Server Management
 
@@ -155,7 +155,6 @@ The Shared Pool (`~/.agents/skills/`) is read by default by Codex, Cursor, OpenC
 | Claude Code | `~/.claude.json` | JSON |
 | Antigravity | `~/.gemini/config/mcp_config.json` | JSON |
 | Cursor | `~/.cursor/mcp.json` | JSON |
-| Gemini CLI | `~/.gemini/settings.json` | JSON |
 | Grok Build | `~/.grok/config.toml` | TOML |
 | Kimi Code | `~/.kimi-code/mcp.json` | JSON |
 | Kiro | `~/.kiro/settings/mcp.json` | JSON |

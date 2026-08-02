@@ -1504,8 +1504,8 @@ name = "keep"
     }
 
     #[test]
-    fn test_extract_sync_core_strips_gemini_specific_fields() {
-        let gemini = serde_json::json!({
+    fn test_extract_sync_core_strips_unknown_fields() {
+        let config = serde_json::json!({
             "command": "npx",
             "args": ["-y", "my-mcp"],
             "timeout": 30000,
@@ -1513,7 +1513,7 @@ name = "keep"
             "description": "My server",
             "includeTools": ["tool_a"]
         });
-        let core = extract_sync_core(&gemini);
+        let core = extract_sync_core(&config);
         let obj = core.as_object().unwrap();
         assert!(!obj.contains_key("timeout"));
         assert!(!obj.contains_key("trust"));

@@ -68,12 +68,12 @@ src-tauri/src/
   trash.rs                # 回收站
   paths.rs                # 跨平台路径公共库：join_relative 分段拼接、home_dir、replace_file（屏蔽 Windows/Mac 差异）
   platform/               # 平台发现和注册
-    registry.rs           # 内置平台定义（11 个 Skill 平台，顺序即侧边栏顺序）
+    registry.rs           # 内置平台定义（10 个 Skill 平台，顺序即侧边栏顺序）
     discovery.rs          # 自动发现 + 自定义平台
   skill/                  # Skill 模型、解析、扫描
   diff/                   # Myers diff 引擎
   sync/                   # Skill 同步服务
-  mcp/                    # MCP Server 管理（8 个平台）
+  mcp/                    # MCP Server 管理（7 个平台）
     parser.rs             # JSON/TOML 配置解析
     writer.rs             # 配置回写
   claude_plugin.rs        # Claude Code 原生插件读取与启停
@@ -126,12 +126,11 @@ npm run version [-- <ver>] # 从 git tag 同步版本号
 
 插件工作区按 Agent 聚合 Skill、MCP Server 与 Claude Code 原生插件，支持全局用户目录和项目目录两种范围。项目范围用于查看仓库内配置，当前保持只读；Claude Code 用户范围原生插件支持启用/停用。
 
-平台顺序（registry 定义顺序即侧边栏顺序）：Shared Pool → Codex → Claude Code → Antigravity → Gemini CLI → Grok Build → Kimi Code → Cursor / Hermes / Trae / Kiro。关键约定：
+平台顺序（registry 定义顺序即侧边栏顺序）：Shared Pool → Codex → Claude Code → Antigravity → Grok Build → Kimi Code → Cursor / Hermes / Trae / Kiro。关键约定：
 
-- **Shared Pool（`~/.agents/skills`）**：Codex、Cursor、OpenCode、Gemini CLI、Kimi Code、Grok Build 官方默认读取；Claude Code 与 Antigravity 全局层不读。
+- **Shared Pool（`~/.agents/skills`）**：Codex、Cursor、OpenCode、Kimi Code、Grok Build 官方默认读取；Claude Code 与 Antigravity 全局层不读。
 - **Codex**：官方用户级 skills 仅共享池（`~/.codex/skills` 是社区误传），前端显示"Skills 在 Shared Pool 目录下"并提供跳转，不渲染自己的 Skills 区块。
 - **Antigravity**（agy CLI / Antigravity 2.0）：共享 `~/.gemini/config/`（skills + mcp_config.json + plugins）；项目级为 `.agents/skills`、`.agents/mcp_config.json`（`workspace_skill_dir` 有特判，不走镜像）。
-- **Gemini CLI**：独立平台（`~/.gemini/skills` + `~/.gemini/settings.json`），官方 alias 读共享池。
 - **Grok Build / Kimi Code / Antigravity / Codex 的插件体系**只在前端小字标注（`plugin.notes.*` i18n key），不管理；Claude Code 是唯一可管理的插件体系。
 - 各平台的小字标注（notes）全部在前端 i18n（`plugin.notes.<platform-id>`），后端不透传。
 
@@ -153,12 +152,12 @@ Skill 是包含 `SKILL.md` 的目录，SKILL.md 使用 YAML frontmatter（`name`
 
 ### 会话监听（session_monitor）
 
-Monitor 标签页实时展示各 Agent 的进行中/已结束会话（用户问题 + 助手回复）。Codex、Claude Code、Grok Build、Kimi Code 走 `UserPromptSubmit` + `Stop` 两个 Hook 的最小集，Kiro 走纯文件监听：
+Monitor 标签页实时展示各 Agent 的进行中/已结束会话（用户问题 + 助手回复）。各平台注册的 Hook 事件按官方事件集裁剪（`hooks.rs` 的 `managed_events`）：Codex 为 `UserPromptSubmit` + `Stop`（其 Hook 系统没有中断/失败事件，Stop 覆盖所有轮次结束），Claude Code 与 Grok Build 追加 `StopFailure`（API 错误导致轮次终止，capture 归一化为 Stop），Kimi Code 追加 `Interrupt` + `StopFailure`，Kiro 走纯文件监听。旧版本安装（受管 handler 数与当前期望不符）会在监听页顶部显示升级提示条，引导卸载重装：
 
 - **Codex**：向 `~/.codex/hooks.json` 注入 command Hook，调用自身二进制 `--agent-hub-codex-hook` 把 stdin JSON 原子写入 `~/.agent-hub/session-monitor/inbox/`。注意 Codex 有 Hook 信任门：用户级 hooks.json 的 handler 只有在 `~/.codex/config.toml` 的 `hooks.state."<hooks.json路径>:<event>:<组>:<序号>"` 里留下 `trusted_hash` 才会执行（TUI 启动审查 / 桌面端设置 → 钩子 里确认）；安装后未信任时 Hook 静默不触发，`get_hook_status` 会检测这种状态并在 `issue` 中提示（无法复算 Codex 的信任哈希，只查条目存在性）。
 - **Claude Code**：同一机制，写入 `~/.claude/settings.json` 的 `hooks` 字段（热加载无需重启），Hook 参数为 `--agent-hub-claude-hook`。
-- **Grok Build**：官方支持 hooks（`~/.grok/hooks/*.json` 全局免信任门，新会话生效），Agent Hub 使用独立受管文件 `~/.grok/hooks/agent-hub.json`（不编辑共享配置），Hook 参数 `--agent-hub-grok-hook`。注意 Grok 的 stdin 载荷是 camelCase（`hookEventName`/`sessionId`/`lastAssistantMessage`，事件值为 `user_prompt_submit`/`stop`），capture 统一归一化为 PascalCase。
-- **Kimi Code**：官方支持 hooks（`~/.kimi-code/config.toml` 的 `[[hooks]]` 表，新会话生效），Hook 参数 `--agent-hub-kimi-hook`。因 config.toml 是用户主配置，安装/卸载走纯文本块增删（按 `--agent-hub-kimi-hook` 标记识别受管 `[[hooks]]` 块），不做 TOML 全量序列化，注释和格式原样保留。注意 Kimi 的 `prompt` 字段是 content-part 数组（`[{type:"text",text:…}]`），capture 的 `prompt_field` 负责拼接文本部分；`Stop` 载荷只有 `stop_hook_active`，不带助手回复文本。监听捕获的 sessionId 即 `session_<uuid>` 目录名，与会话浏览适配器互通，监听卡片可查看消息/恢复。
+- **Grok Build**：官方支持 hooks（`~/.grok/hooks/*.json` 全局免信任门，新会话生效），Agent Hub 使用独立受管文件 `~/.grok/hooks/agent-hub.json`（不编辑共享配置），Hook 参数 `--agent-hub-grok-hook`。注意 Grok 的 stdin 载荷是 camelCase（`hookEventName`/`sessionId`/`lastAssistantMessage`，事件值为 `user_prompt_submit`/`stop`/`stop_failure`），capture 统一归一化为 PascalCase。
+- **Kimi Code**：官方支持 hooks（`~/.kimi-code/config.toml` 的 `[[hooks]]` 表，新会话生效），Hook 参数 `--agent-hub-kimi-hook`。注册四个事件：`UserPromptSubmit`、`Stop`、`Interrupt`（Kimi 在用户 Esc/Ctrl+C 中断时不发 Stop 只发 Interrupt，capture 归一化为 Stop；进程被直接杀死则无事件，"进行中"状态会残留——hook 方案固有限制）、`StopFailure`。因 config.toml 是用户主配置，安装/卸载走纯文本块增删（按 `--agent-hub-kimi-hook` 标记识别受管 `[[hooks]]` 块），不做 TOML 全量序列化，注释和格式原样保留。注意 Kimi 的 `prompt` 字段是 content-part 数组（`[{type:"text",text:…}]`），capture 的 `prompt_field` 负责拼接文本部分；`Stop` 载荷只有 `stop_hook_active`，不带助手回复文本。监听捕获的 sessionId 即 `session_<uuid>` 目录名，与会话浏览适配器互通，监听卡片可查看消息/恢复。
 - **Kiro**：纯文件监听 `~/.kiro/sessions/cli/`（`.jsonl` 增量 tail 提取 Prompt/AssistantMessage；状态为 turn 级，与 Codex/Claude 对齐——提问置进行中、回复置已结束；`.lock` pid 只做单向兜底：进程死亡才把"进行中"翻转为"已结束"，10s 间隔刷新并主动推送；注意 kiro-cli 运行期间对 `.lock` 持有 OS 级独占锁，Windows 上 LockFileEx 是强制锁导致读不到内容——存在但不可读的 lock 必须判"进行中"，只有 lock 文件消失才判"已结束"），任意 kiro-cli 版本开箱即用、对 Kiro 配置零写入。面板提供"打开/关闭监听"开关（`~/.agent-hub/session-monitor/kiro-monitor.json` 持久化，运行时启停 watcher；关闭时状态线程仅空转休眠）。全局 Hook 方案（`~/.kiro/hooks/`）已验证在稳定版 kiro-cli 2.x 不生效（仅 IDE 1.0.182+ / v3 支持），故不采用。来源标记约定：监听到的 Kiro 会话全部来自 `~/.kiro/sessions/cli/`（kiro-cli 专属目录，IDE 客户端不写这里），因此卡片/托盘行按 `source === 'terminal'` 标记为 "Kiro CLI"（i18n `session_monitor.agent_kiro_cli`），左侧 Agent 列表与无法确认来源的场景统一用 "Kiro"；会话浏览平台名固定为 "Kiro CLI"。Codex 同理：监听行按 Hook originator（`CODEX_INTERNAL_ORIGINATOR_OVERRIDE` 含 desktop/chatgpt）标记为 "ChatGPT 客户端"；会话浏览按 `threads.source` 列映射（`vscode`→chatgpt、`cli`/`codex_cli`→terminal，其余 None 回退 "Codex"），`SessionSummary.source` 透传给前端 badge。
 
 安装/卸载统一走预览 diff + before-hash 双重校验 + 原子写，只移除自己管理的 handler。`SessionMonitorService` 按 agent 路由事件到各自快照（`{codex,claude,kiro,grok,kimi}-state.json`），经 `session-monitor:{agent}-changed` Tauri event 推前端。旧的 `monitor/` 模块（FSEvents + 进程扫描）已停用，不要混淆。

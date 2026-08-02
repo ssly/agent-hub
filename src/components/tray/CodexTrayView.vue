@@ -142,26 +142,38 @@ async function loadMonitorSnapshots() {
 interface MonitorPulse { id: number; key: string; status: 'running' | 'ended' }
 const pulses = ref<MonitorPulse[]>([])
 const knownMonitorStatus = new Map<string, string>()
+// The first watcher pass only seeds statuses — everything already on screen
+// at panel (re)open must not animate.
+let monitorStatusSeeded = false
 const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
 let pulseSeq = 0
 
+// Row identity for transition detection and DOM targeting. Deliberately
+// session-scoped, NOT turn-scoped: the backend keeps one record per session
+// and mutates its turn_id on every new turn (for Kimi the fallback turn_id
+// even changes per event), so including turn_id would make every flip look
+// like a brand-new row and the pulse would never fire.
 function monitorRowKey(row: AgentSessionState) {
-  return `${row.agent}:${row.sessionId}:${row.turnId}`
+  return `${row.agent}:${row.sessionId}`
 }
 
 watch(monitorRows, rows => {
+  const firstSeeding = !monitorStatusSeeded
+  monitorStatusSeeded = true
   const visible = new Set<string>()
   for (const row of rows) {
     const key = monitorRowKey(row)
     visible.add(key)
     const previous = knownMonitorStatus.get(key)
-    if (
-      previous
-      && previous !== row.status
-      && !reduceMotion
-      && !hiddenMonitors.value.includes(row.agent)
-    ) {
-      void spawnPulse(key, row.status as MonitorPulse['status'])
+    if (!firstSeeding && !reduceMotion && !hiddenMonitors.value.includes(row.agent)) {
+      // Two cases animate: an existing row flipping status, and a brand-new
+      // session appearing already-running (e.g. a fresh ChatGPT desktop
+      // thread — it has no prior "ended" row to flip from).
+      const flipped = previous !== undefined && previous !== row.status
+      const appearedRunning = previous === undefined && row.status === 'running'
+      if (flipped || appearedRunning) {
+        void spawnPulse(key, row.status as MonitorPulse['status'])
+      }
     }
     knownMonitorStatus.set(key, row.status)
   }
@@ -232,6 +244,10 @@ const storedOpacity = Number(localStorage.getItem(OPACITY_STORAGE_KEY))
 const panelOpacity = ref(OPACITY_OPTIONS.includes(storedOpacity) ? storedOpacity : 100)
 const opacityMenu = ref<{ x: number; y: number } | null>(null)
 const openSubmenu = ref<'opacity' | 'usage' | 'monitor' | null>(null)
+// Which side the submenus open on, recomputed per right-click: right when it
+// fits fully inside the window, left otherwise (the window clips overflow,
+// so the wrong side makes the submenu invisible).
+const submenuSide = ref<'left' | 'right'>('right')
 
 const HIDDEN_USAGE_KEY = 'ah-tray-hidden-usage'
 const HIDDEN_MONITOR_KEY = 'ah-tray-hidden-monitor'
@@ -306,9 +322,14 @@ watch(visibleProviders, list => {
 
 function openOpacityMenu(event: MouseEvent) {
   openSubmenu.value = null
-  // Keep the menu inside the 400px-wide window.
+  const MENU_W = 118
+  const SUBMENU_W = 120
+  const fitsRight = event.clientX + MENU_W + 4 + SUBMENU_W + 8 <= window.innerWidth
+  submenuSide.value = fitsRight ? 'right' : 'left'
+  // Keep the menu (and its submenu) inside the 400px-wide window.
+  const minX = fitsRight ? 8 : SUBMENU_W + 8
   opacityMenu.value = {
-    x: Math.min(event.clientX, window.innerWidth - 130),
+    x: Math.max(minX, Math.min(event.clientX, window.innerWidth - MENU_W - 12)),
     y: Math.min(event.clientY, window.innerHeight - 190),
   }
 }
@@ -920,9 +941,9 @@ onBeforeUnmount(() => {
       @mouseleave="openSubmenu = null"
     >
       <div class="tray-menu__parent" @mouseenter="openSubmenu = 'opacity'">
-        <span class="tray-menu__caret">‹</span>
         <span>{{ t('tray.opacity') }}</span>
-        <div v-if="openSubmenu === 'opacity'" class="tray-submenu">
+        <span class="tray-menu__caret">{{ submenuSide === 'right' ? '›' : '‹' }}</span>
+        <div v-if="openSubmenu === 'opacity'" class="tray-submenu" :class="`tray-submenu--${submenuSide}`">
           <button
             v-for="option in OPACITY_OPTIONS"
             :key="option"
@@ -937,9 +958,9 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="tray-menu__parent" @mouseenter="openSubmenu = 'usage'">
-        <span class="tray-menu__caret">‹</span>
         <span>{{ t('tray.hide_usage') }}</span>
-        <div v-if="openSubmenu === 'usage'" class="tray-submenu">
+        <span class="tray-menu__caret">{{ submenuSide === 'right' ? '›' : '‹' }}</span>
+        <div v-if="openSubmenu === 'usage'" class="tray-submenu" :class="`tray-submenu--${submenuSide}`">
           <button
             class="tray-submenu__option"
             :class="{ 'is-checked': allUsageHidden }"
@@ -962,9 +983,9 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="tray-menu__parent" @mouseenter="openSubmenu = 'monitor'">
-        <span class="tray-menu__caret">‹</span>
         <span>{{ t('tray.hide_monitor') }}</span>
-        <div v-if="openSubmenu === 'monitor'" class="tray-submenu">
+        <span class="tray-menu__caret">{{ submenuSide === 'right' ? '›' : '‹' }}</span>
+        <div v-if="openSubmenu === 'monitor'" class="tray-submenu" :class="`tray-submenu--${submenuSide}`">
           <button
             class="tray-submenu__option"
             :class="{ 'is-checked': allMonitorsHidden }"
@@ -1423,10 +1444,11 @@ onBeforeUnmount(() => {
   user-select: none;
 }
 .tray-menu__parent:hover { background: var(--tray-inset); color: var(--tray-ink); }
-.tray-menu__caret { color: var(--tray-ink-3); font-size: 11px; }
+.tray-menu__caret { margin-left: auto; color: var(--tray-ink-3); font-size: 11px; }
 .tray-submenu {
   position: absolute;
-  right: calc(100% + 4px);
+  /* Default: open to the right of the parent menu. */
+  left: calc(100% + 4px);
   top: -6px;
   display: flex;
   flex-direction: column;
@@ -1437,6 +1459,11 @@ onBeforeUnmount(() => {
   border-radius: 10px;
   background: var(--tray-surface);
   box-shadow: var(--tray-panel-shadow);
+}
+/* Flipped when the right side would overflow the window. */
+.tray-submenu--left {
+  left: auto;
+  right: calc(100% + 4px);
 }
 .tray-submenu__option {
   display: flex;
@@ -1460,8 +1487,10 @@ onBeforeUnmount(() => {
 .tray-submenu__check { width: 12px; flex: 0 0 auto; }
 
 /* Dark tray palette: explicit night choice wins; with no explicit choice the
-   OS preference decides (same rule as theme.css). */
-:global(html[data-theme="night"]) .tray-shell {
+   OS preference decides (same rule as theme.css). The entire selector must
+   live inside :global() — a trailing .tray-shell outside the parens gets
+   dropped by the scoped-CSS compiler, which silently breaks dark mode. */
+:global(html[data-theme="night"] .tray-shell) {
   --tray-canvas: #171B25;
   --tray-surface: #1E2431;
   --tray-sunken: #131722;
@@ -1493,7 +1522,7 @@ onBeforeUnmount(() => {
 }
 
 @media (prefers-color-scheme: dark) {
-  :global(html:not([data-theme])) .tray-shell {
+  :global(html:not([data-theme]) .tray-shell) {
     --tray-canvas: #171B25;
     --tray-surface: #1E2431;
     --tray-sunken: #131722;

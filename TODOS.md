@@ -2,11 +2,11 @@
 
 跨 sprint 的 follow-up 列表。每条 follow `What / Why / Pros / Cons / Context / Depends on` 格式。
 
-## T1: Codex / Gemini Tier-1 升级 (sqlite WAL + logs.json 反向工程)
+## T1: Codex Tier-1 升级 (sqlite WAL 反向工程)
 
-**What**: 把 Codex / Gemini 从 Tier-2 (只 "running · 12m") 升级为完整状态机 (工具调用 / turn-end 检测)。
+**What**: 把 Codex 从 Tier-2 (只 "running · 12m") 升级为完整状态机 (工具调用 / turn-end 检测)。
 
-**Why**: 设计中明说 "Tier-2 是能力局限子集,不是产品选择"。用户看到 Codex/Gemini 永远只 "running",会质疑「为什么不如 Kiro/Claude」。Success Criteria 明说「4 种 agent UX 一致」,Sprint 1 暂时未达。
+**Why**: 设计中明说 "Tier-2 是能力局限子集,不是产品选择"。用户看到 Codex 永远只 "running",会质疑「为什么不如 Kiro/Claude」。Success Criteria 明说「4 种 agent UX 一致」,Sprint 1 暂时未达。
 
 **Pros**:
 - 服设计意图 (Tier-2 是临时局限)
@@ -15,10 +15,9 @@
 
 **Cons**:
 - Codex 可能改 sqlite schema → 反向工程要重做
-- Gemini logs.json 实时性未验证 (openspec design.md open question #1) — 有可能写时机晚到无法表达 working 状态
-- 两个生态都不公开协议,版本强升风险
+- Codex 生态不公开协议,版本强升风险
 
-**Context**: 检查文件: `~/.codex/logs_2.sqlite` (history table) + `~/.codex/history.jsonl` + `~/.gemini/tmp/{project}/chats/session-*.jsonl` + `logs.json`。
+**Context**: 检查文件: `~/.codex/logs_2.sqlite` (history table) + `~/.codex/history.jsonl`。
 
 **Depends on / blocked by**: Sprint 1 (Tier-1/Tier-2 架构 + 状态机) 落地。仅是 adapter 实现工作,架构不变。
 
@@ -73,12 +72,12 @@
 - **What**: 在 Windows 上验证 sysinfo 进程访问 (cwd/exe/cmd 字段) / notify file watcher 行为 / 路径处理 / 通知 plugin 是否一致
 - **Why**: 设计假设 macOS 行为,Windows 上可能 sysinfo 拿不到 cwd / FSEvents 等价物的事件粒度不同 / Windows 通知 toast 和 macOS 行为差异
 - **Pros**: agent-hub 自称 desktop app 跨平台。如果 Windows 实际不工作要么修要么明示「Windows 仅 partial 支持」
-- **Cons**: 需要 Windows 测试环境 + 实际跑 4 个 agent 在 Windows 上 (其中 Kiro/Codex/Gemini 在 Windows 上是否常见?)
+- **Cons**: 需要 Windows 测试环境 + 实际跑 4 个 agent 在 Windows 上 (其中 Kiro/Codex 在 Windows 上是否常见?)
 - **Estimate**: 1-2 天 (含修复)
 
 **T4: `refresh_processes_specifics` 字段验证**
 - **What**: 验证 `ProcessRefreshKind::new()` 是否包含 cwd/cmd/exe 字段,如不包含改用 `ProcessRefreshKind::everything()` 或显式 enable 所需字段
-- **Why**: Perf #1 改为 refresh-based 后,如果 RefreshKind 配置错,Codex/Gemini 检测会因为字段缺失静默失效
+- **Why**: Perf #1 改为 refresh-based 后,如果 RefreshKind 配置错,Codex 检测会因为字段缺失静默失效
 - **Estimate**: 30 分钟 (Sprint 1 实施 Perf #1 时如果发现就 inline 修)
 
 **T5: Frontend attention semantics**
@@ -143,9 +142,9 @@
 
 ### TD3: Agent type icon 资源决定
 
-**What**: Sprint 1 Pass 4 决定保留 agent icon (Kiro 波浪 / Claude 书 / Codex 双箭头 / Gemini 星),实施时需要 4 个 SVG line icon 资源。
+**What**: Sprint 1 Pass 4 决定保留 agent icon (Kiro 波浪 / Claude 书 / Codex 双箭头),实施时需要 3 个 SVG line icon 资源。
 
-**Why**: 单色线 icon 一致性是「serious dev tool 不是 SaaS slop」的关键。如果 4 个 icon 风格不统一 (来源不同 icon set) 视觉会破。
+**Why**: 单色线 icon 一致性是「serious dev tool 不是 SaaS slop」的关键。如果 3 个 icon 风格不统一 (来源不同 icon set) 视觉会破。
 
 **Pros**: 提前定 (Lucide / Phosphor / Heroicons / 自己画) 避免 Sprint 1 实施时 ad-hoc 选导致风格不统一。
 

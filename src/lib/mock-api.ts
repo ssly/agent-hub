@@ -32,12 +32,6 @@ const PLATFORMS = [
     skill_count: 4,
   },
   {
-    id: 'gemini',
-    display_name: 'Gemini CLI',
-    skill_dir: '~/.gemini/skills',
-    skill_count: 3,
-  },
-  {
     id: 'grok-build',
     display_name: 'Grok Build',
     skill_dir: '~/.grok/skills',
@@ -89,7 +83,6 @@ const MCP_PLATFORMS = [
   { id: 'codex', display_name: 'Codex', server_count: 3, config_path: '~/.codex/config.toml', format: 'toml' },
   { id: 'claude-code', display_name: 'Claude Code', server_count: 4, config_path: '~/.claude.json', format: 'json' },
   { id: 'antigravity', display_name: 'Antigravity', server_count: 2, config_path: '~/.gemini/config/mcp_config.json', format: 'json' },
-  { id: 'gemini', display_name: 'Gemini CLI', server_count: 1, config_path: '~/.gemini/settings.json', format: 'json' },
   { id: 'grok-build', display_name: 'Grok Build', server_count: 1, config_path: '~/.grok/config.toml', format: 'toml' },
   { id: 'kimi-code', display_name: 'Kimi Code', server_count: 2, config_path: '~/.kimi-code/mcp.json', format: 'json' },
   { id: 'cursor', display_name: 'Cursor', server_count: 2, config_path: '~/.cursor/mcp.json', format: 'json' },

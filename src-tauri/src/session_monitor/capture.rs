@@ -146,10 +146,13 @@ fn capture_stdin_event(agent: AgentKind) -> Result<(), String> {
 
 /// Normalize the hook event value across agents: Codex/Claude/Kimi use
 /// PascalCase, Grok uses snake_case. Returns None for events we ignore.
+/// Kimi Code fires Interrupt (never Stop) when the user aborts a turn, and
+/// Claude/Grok/Kimi fire StopFailure when a turn dies on an API error — both
+/// are normalized to Stop because the turn is over either way.
 fn canonical_event_name(name: &str) -> Option<&'static str> {
     match name {
         "UserPromptSubmit" | "user_prompt_submit" => Some("UserPromptSubmit"),
-        "Stop" | "stop" => Some("Stop"),
+        "Stop" | "stop" | "Interrupt" | "interrupt" | "StopFailure" | "stop_failure" => Some("Stop"),
         _ => None,
     }
 }
@@ -330,6 +333,12 @@ mod tests {
         assert_eq!(canonical_event_name("user_prompt_submit"), Some("UserPromptSubmit"));
         assert_eq!(canonical_event_name("Stop"), Some("Stop"));
         assert_eq!(canonical_event_name("stop"), Some("Stop"));
+        // Kimi Code fires Interrupt instead of Stop on user abort (Esc/Ctrl+C);
+        // Claude/Grok/Kimi fire StopFailure when a turn dies on an API error.
+        assert_eq!(canonical_event_name("Interrupt"), Some("Stop"));
+        assert_eq!(canonical_event_name("interrupt"), Some("Stop"));
+        assert_eq!(canonical_event_name("StopFailure"), Some("Stop"));
+        assert_eq!(canonical_event_name("stop_failure"), Some("Stop"));
         assert_eq!(canonical_event_name("SessionStart"), None);
         assert_eq!(canonical_event_name("session_start"), None);
         assert_eq!(canonical_event_name("Notification"), None);

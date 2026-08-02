@@ -10,6 +10,7 @@ import { useToast } from '@/composables/useToast'
 import {
   useSessionMonitorStore,
   HOOK_AGENTS,
+  MONITOR_AGENTS,
   MONITOR_AGENT_PLATFORM,
   type MonitorAgent,
   type AgentSessionState,
@@ -33,6 +34,35 @@ const HOOK_CONFIG_PATHS: Record<string, string> = {
 const defaultConfigPath = computed(() => HOOK_CONFIG_PATHS[store.activeAgent] ?? '')
 const runningCount = computed(
   () => store.displaySessions.filter(session => session.status === 'running').length,
+)
+
+// Outdated hook installs: managed handlers exist but no longer match the
+// current expected set (e.g. StopFailure/Interrupt were added in a later
+// version). Only a reinstall brings them up to date, so one banner covers
+// every tab — including the merged "all" view, which has no hook card.
+const outdatedHookAgents = computed(() =>
+  HOOK_AGENTS.filter(agent => {
+    const status = store.hookStatuses[agent]
+    return status ? !status.installed && status.managedHandlerCount > 0 : false
+  }),
+)
+const outdatedHookAgentNames = computed(() =>
+  outdatedHookAgents.value
+    .map(agent => agentLabel(agent))
+    .join(locale.value === 'en' ? ', ' : '、'),
+)
+
+// One-line enablement tags for the merged view: green when the agent's
+// channel is live (hook installed / Kiro watcher on), gray otherwise — a
+// quiet reminder that hook agents only report after a proper install.
+// Clicking a tag jumps to that agent's tab for install/repair.
+const agentTags = computed(() =>
+  MONITOR_AGENTS.map(agent => ({
+    agent,
+    enabled: agent === 'kiro'
+      ? !!(store.kiroStatus?.enabled && store.kiroStatus?.available)
+      : !!store.hookStatuses[agent as 'codex' | 'claude' | 'grok' | 'kimi']?.installed,
+  })),
 )
 
 function agentLabel(agent: MonitorAgent): string {
@@ -162,6 +192,24 @@ onUnmounted(() => store.dispose())
         {{ store.kiroStatus?.enabled ? t('session_monitor.disable_monitor') : t('session_monitor.enable_monitor') }}
       </button>
     </div>
+
+    <div v-if="isAll" class="monitor-tag-row">
+      <button
+        v-for="tag in agentTags"
+        :key="tag.agent"
+        class="monitor-tag"
+        :class="tag.enabled ? 'is-on' : 'is-off'"
+        v-tooltip="t(tag.enabled ? 'session_monitor.tag_on' : 'session_monitor.tag_off')"
+        @click="store.activeAgent = tag.agent"
+      >
+        <span class="monitor-tag__dot" />
+        {{ agentLabel(tag.agent) }}
+      </button>
+    </div>
+
+    <p v-if="outdatedHookAgents.length" class="monitor-notice monitor-notice--warning">
+      {{ t('session_monitor.hook_upgrade_hint', { agents: outdatedHookAgentNames }) }}
+    </p>
 
     <section v-if="supportsHooks" class="hook-card ah-card">
       <div class="hook-card__status">
@@ -356,6 +404,33 @@ onUnmounted(() => store.dispose())
 .monitor-notice { margin: 10px 0 14px; padding: 9px 11px; border-radius: var(--radius-sm); font-size: 12px; line-height: 1.5; color: var(--ink-3); background: var(--sunken); }
 .monitor-notice--warning { color: var(--warning); background: color-mix(in srgb, var(--warning) 10%, transparent); }
 .monitor-notice--error { color: var(--danger); background: var(--danger-soft); }
+
+/* Enablement tags under the merged view header: one quiet line showing which
+   agents are live (green dot) and which still need a hook install (gray). */
+.monitor-tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 2px 0 12px;
+}
+.monitor-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-3);
+  font-size: 11px;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-soft), color var(--dur-fast) var(--ease-soft);
+}
+.monitor-tag:hover { border-color: var(--border-strong); color: var(--ink-2); }
+.monitor-tag.is-on { color: var(--ink-2); }
+.monitor-tag__dot { width: 6px; height: 6px; border-radius: 999px; }
+.monitor-tag.is-on .monitor-tag__dot { background: var(--success); }
+.monitor-tag.is-off .monitor-tag__dot { background: var(--ink-4); }
 .session-list-header { display: flex; align-items: center; justify-content: space-between; margin: 24px 0 10px; }
 .session-list-header h2 { color: var(--ink); font: 600 15px/1.2 var(--font-serif); }
 .session-monitor-list { display: flex; flex-direction: column; gap: 9px; }
