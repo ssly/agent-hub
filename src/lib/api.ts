@@ -202,6 +202,26 @@ export const getKiroMonitorStatus = () => invoke<any>('get_kiro_monitor_status')
 export const setKiroMonitorEnabled = (enabled: boolean) =>
   invoke<any>('set_kiro_monitor_enabled', { enabled })
 
+export const getGrokSessionMonitorSnapshot = () =>
+  invoke<any>('get_grok_session_monitor_snapshot')
+export const deleteGrokSessionMonitorSession = (sessionId: string) =>
+  invoke<void>('delete_grok_session_monitor_session', { sessionId })
+export const getGrokHookStatus = () => invoke<any>('get_grok_hook_status')
+export const previewGrokHookChange = (action: 'install' | 'uninstall') =>
+  invoke<any>('preview_grok_hook_change', { action })
+export const applyGrokHookChange = (action: 'install' | 'uninstall', expectedBeforeHash: string) =>
+  invoke<any>('apply_grok_hook_change', { action, expectedBeforeHash })
+
+export const getKimiSessionMonitorSnapshot = () =>
+  invoke<any>('get_kimi_session_monitor_snapshot')
+export const deleteKimiSessionMonitorSession = (sessionId: string) =>
+  invoke<void>('delete_kimi_session_monitor_session', { sessionId })
+export const getKimiHookStatus = () => invoke<any>('get_kimi_hook_status')
+export const previewKimiHookChange = (action: 'install' | 'uninstall') =>
+  invoke<any>('preview_kimi_hook_change', { action })
+export const applyKimiHookChange = (action: 'install' | 'uninstall', expectedBeforeHash: string) =>
+  invoke<any>('apply_kimi_hook_change', { action, expectedBeforeHash })
+
 // Switch
 export const listSwitchProfiles = (agentType: string) => invoke<any>('list_switch_profiles', { agentType })
 export const saveCurrentAuthProfile = (agentType: string, note: string) =>
@@ -281,6 +301,9 @@ export const getCodexTrayUsage = (force = false) =>
   invoke<CodexTraySnapshot>('get_codex_tray_usage', { force })
 export const resizeUsageTray = (height: number) =>
   invoke<void>('resize_usage_tray', { height })
+export const setUsageTrayPinned = (pinned: boolean) =>
+  invoke<void>('set_usage_tray_pinned', { pinned })
+export const openUsageTray = () => invoke<void>('open_usage_tray')
 
 // Grok Build uses only the CLI's current/default account. Agent Hub does not
 // manage or switch Grok credentials; this endpoint is read-only.
@@ -324,10 +347,30 @@ export interface KimiUsage {
 export const getKimiUsage = (force = false) =>
   invoke<KimiUsage>('get_kimi_usage', { force })
 
+// Claude Code official-login (OAuth subscription) usage. The backend reads
+// the CLI's own credentials read-only (CLAUDE_CODE_OAUTH_TOKEN env → macOS
+// Keychain "Claude Code-credentials" → ~/.claude/.credentials.json) and calls
+// the same /api/oauth/usage endpoint as Claude Code's /usage. Tokens are never
+// refreshed by us — an expired login surfaces a re-login hint instead.
+// Backend caches for 10 minutes unless `force` is true (manual refresh).
+export interface ClaudeUsage {
+  account_name: string | null
+  // subscriptionType from the OAuth credentials (pro / max / …), "unknown" fallback.
+  plan_type: string
+  window_5h: UsageWindow | null
+  window_weekly: UsageWindow | null
+  // Windows in ascending order, for generic iteration.
+  usage_windows: UsageWindow[]
+  fetched_at: number
+}
+export const getClaudeUsage = (force = false) =>
+  invoke<ClaudeUsage>('get_claude_usage', { force })
+
 export interface UsageProviderAvailability {
   codex: boolean
   grok_build: boolean
   kimi_code: boolean
+  claude_code: boolean
 }
 export const getUsageProviderAvailability = () =>
   invoke<UsageProviderAvailability>('get_usage_provider_availability')

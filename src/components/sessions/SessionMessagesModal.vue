@@ -2,6 +2,7 @@
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppModal from '@/components/ui/AppModal.vue'
+import AppLoading from '@/components/ui/AppLoading.vue'
 import { formatInt, formatSessionTime } from '@/lib/utils'
 import * as api from '@/lib/api'
 
@@ -63,7 +64,7 @@ watch(() => props.show, open => {
   <AppModal
     :show="show"
     :title="title || t('session.untitled')"
-    width-class="w-[48rem]"
+    width-class="w-[80rem]"
     @close="emit('close')"
   >
     <div class="space-y-4">
@@ -77,9 +78,7 @@ watch(() => props.show, open => {
       </div>
 
       <div class="ah-msg-list">
-        <div v-if="loading" class="loading-pulse text-center py-8" style="color: var(--ink-3)">
-          {{ t('session.loading_messages') }}
-        </div>
+        <AppLoading v-if="loading" class="py-8">{{ t('session.loading_messages') }}</AppLoading>
         <div v-else-if="loadError" class="text-center py-8" style="color: var(--danger)">
           {{ loadError }}
         </div>
@@ -123,3 +122,11 @@ watch(() => props.show, open => {
     </template>
   </AppModal>
 </template>
+
+<style scoped>
+/* Conversation reading benefits from area: stretch the message well beyond
+   the default 55vh cap so the modal fills close to its 85vh ceiling. */
+.ah-msg-list {
+  max-height: 68vh;
+}
+</style>

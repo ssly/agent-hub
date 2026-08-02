@@ -10,7 +10,10 @@
   <script>
     (function() {
       const saved = localStorage.getItem('ah-theme');
+      // Set the attribute explicitly both ways so other windows (tray popup)
+      // can tell an explicit light choice apart from "never chosen".
       if (saved === 'night') document.documentElement.setAttribute('data-theme', 'night');
+      else if (saved === 'light') document.documentElement.setAttribute('data-theme', 'light');
     })();
   </script>
 </head>

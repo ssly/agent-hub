@@ -1,125 +1,141 @@
 <div align="center">
 
-**[English](README.md)** · [简体中文](README.zh-CN.md)
+**[简体中文](README.md)** · [English](README.en.md)
 
 # Agent Hub
 
-**Unified management for local AI Agent platforms**
+**统一管理本地多个 AI Agent 平台的桌面应用**
 
-Manage plugins (Skills, MCP Servers, and Claude Code extensions), session history, and account profiles across
-Claude Code · Codex CLI · Cursor · Gemini · Kiro and more — in one desktop app.
+在一个应用里管理各平台的插件（Skill、MCP Server、Claude Code 原生插件）、会话历史、实时监听与账号体系，
+覆盖 Claude Code · Codex CLI · Gemini · Kiro · Kimi Code · Grok Build 等平台。
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Tauri 2.x](https://img.shields.io/badge/Tauri-2.x-blue?logo=tauri&logoColor=white)](https://v2.tauri.app/)
 [![macOS](https://img.shields.io/badge/macOS-supported-success?logo=apple&logoColor=white)](https://github.com/ssly/agent-hub/releases)
 [![Windows](https://img.shields.io/badge/Windows-supported-success?logo=windows&logoColor=white)](https://github.com/ssly/agent-hub/releases)
 
-[Download](#installation) · [Features](#features) · [Supported Platforms](#supported-platforms) · [Development](#development)
+[下载安装](#安装) · [功能](#功能) · [支持的平台](#支持的平台) · [开发](#开发)
 
 </div>
 
 ---
 
-## Why Agent Hub?
+## 为什么需要 Agent Hub？
 
-If you work with multiple AI coding agents, you've probably felt the pain:
+如果你同时使用多个 AI 编程 Agent，大概率遇到过这些麻烦：
 
-- Skills written for Claude Code need to be manually copied to Cursor and Gemini
-- MCP Server configs are scattered across global and project files in different formats (JSON, TOML)
-- Claude Code plugins, Skills, and MCP Servers have to be managed in separate tools
-- No easy way to browse past conversations or switch between accounts
+- 给 Claude Code 写的 Skill，要手动复制到 Cursor、Gemini 才能用
+- MCP Server 配置散落在全局和项目目录里，格式还各不相同（JSON、TOML）
+- Claude Code 插件、Skill、MCP Server 要在不同工具里分别管理
+- 翻历史会话不方便，多个账号之间切换更麻烦
+- 想知道各家配额还剩多少，得挨个打开官方工具查
 
-Agent Hub solves this. One desktop app to manage them all.
-
----
-
-## Features
-
-### 🧩 Unified Plugin Workspace
-
-- **One workspace** — Manage Skills, MCP Servers, and Claude Code native plugins from the same Agent page
-- **Global or project scope** — Use each Agent's global user directory or select a project folder to inspect its local configuration
-- **Claude Code plugins** — Browse installed native plugins and enable or disable user-scoped plugins; project, local, and managed scopes remain visible as read-only
-
-#### Skill Management
-
-- **Auto-discovery** — Detects installed agent platforms and their skill directories
-- **Skill browser** — Metadata view (name, version, description), inline file preview
-- **Cross-platform diff** — Compare the same skill between two platforms, line-by-line (Myers algorithm)
-- **One-click sync** — Copy a skill (or an entire folder) between platforms; shows a diff when the target already exists
-- **Global search** — Search skill names and descriptions across all platforms
-- **Trash bin** — Deleted skills are kept for 7 days, restorable anytime
-
-#### MCP Server Management
-
-- Supports **5 platforms** with JSON / TOML format auto-conversion
-- Accordion-style inline editing
-- Cross-platform sync — extracts universal fields (`command`, `args`, `env`), preserves platform-specific ones
-- Paste-import raw JSON / TOML config
-- Project-scoped MCP configs can be inspected alongside project Skills; project scope is read-only to avoid accidental repository changes
-
-### 📜 Session Browser
-
-- Browse history from **Claude Code**, **Codex CLI**, and **Kiro**
-- Filter by project path, paginate through conversations
-- View full message history (user & assistant turns)
-- **Batch HTML export** — Export selected conversations as one searchable, self-contained HTML file that opens in any modern browser
-- **Resume sessions** in your terminal — macOS: Warp, iTerm, Ghostty, Terminal · Windows: Windows Terminal, PowerShell, CMD
-
-### 📡 Session Monitor
-
-- Watch live sessions in real time — running/ended status, the latest user prompt, and the agent's reply
-- **Codex CLI** — two lifecycle Hooks (`UserPromptSubmit` + `Stop`) injected into `~/.codex/hooks.json`
-- **Claude Code** — the same two Hooks added to `~/.claude/settings.json`, hot-reloaded with no restart
-- **Kiro** — file watching on `~/.kiro/sessions/cli/` (append-only transcripts + lock-file pid liveness). Works out of the box on any kiro-cli version, with zero writes to Kiro configuration
-- Hook install/uninstall always shows a diff preview first and only ever touches Agent Hub's own entries
-
-### 👤 Accounts
-
-- Save and switch authentication profiles for **Claude Code** and **Codex CLI**
-- SHA-256 hash comparison auto-detects the active account
-- One-click clear of the active auth, with edit/delete on saved profiles
-- **Codex usage panel** — query the 5h / 7d rate-limit windows and reset credits for the current account
-
-### 🎨 General
-
-- **Auto-update** — resumable downloads with minisign signature verification
-- **Bilingual UI** — English and Chinese, auto-detected from system locale, instant toggle
-- **Light & Dark themes** — two built-in themes, preference persisted
-- **Custom platforms** — add any agent platform via config file
+Agent Hub 用一个桌面应用解决这些问题。
 
 ---
 
-## Installation
+## 功能
+
+### 🧩 插件工作区
+
+- **统一工作区** — 在同一个 Agent 页面里管理 Skill、MCP Server 和 Claude Code 原生插件
+- **全局 / 项目两种范围** — 使用各 Agent 的全局用户目录，或选择项目文件夹查看仓库内配置
+- **Claude Code 插件** — 浏览已安装的原生插件，用户级插件可直接启用/停用；项目级、本地与托管范围保持只读展示
+
+#### Skill 管理
+
+- **自动发现** — 检测已安装的 Agent 平台及其 Skill 目录
+- **Skill 浏览** — 元数据视图（名称、版本、描述），文件内联预览
+- **跨平台 Diff** — 逐行对比两个平台间的同名 Skill（Myers 算法）
+- **一键同步** — 在平台间复制 Skill（或整个目录），目标已存在时先展示 Diff
+- **全局搜索** — 跨平台搜索 Skill 名称与描述
+- **回收站** — 删除的 Skill 保留 7 天，随时可恢复
+
+#### MCP Server 管理
+
+- 支持 **8 个平台**，JSON / TOML 格式自动转换
+- 手风琴式内联编辑
+- 跨平台同步 — 提取通用字段（`command`、`args`、`env`），保留平台特有字段
+- 支持粘贴导入原始 JSON / TOML 配置
+- 项目范围的 MCP 配置可与项目 Skill 一并查看；项目范围保持只读，避免误改仓库
+
+### 📜 会话浏览器
+
+- 浏览 **Claude Code**、**Codex CLI**、**Kiro**、**Grok CLI** 的历史会话
+- 按项目路径过滤，分页浏览
+- 查看完整消息记录（用户提问与助手回复）
+- **批量 HTML 导出** — 把选中的会话导出为一个可搜索、自包含的 HTML 文件，任何现代浏览器都能打开
+- **终端恢复会话** — macOS：Warp、iTerm、Ghostty、Terminal · Windows：Windows Terminal、PowerShell、CMD
+
+### 📡 会话监听
+
+实时展示各 Agent 进行中 / 已结束的会话（状态、最新提问、助手回复）：
+
+- **Codex** — 向 `~/.codex/hooks.json` 注入 `UserPromptSubmit` + `Stop` 两个生命周期 Hook
+- **Claude Code** — 同样的两个 Hook 写入 `~/.claude/settings.json`，热加载无需重启
+- **Grok Build** — 独立受管 Hook 文件 `~/.grok/hooks/agent-hub.json`，不改动共享配置
+- **Kimi Code** — `~/.kimi-code/config.toml` 的 `[[hooks]]` 表，纯文本块增删，注释格式原样保留
+- **Kiro** — 纯文件监听 `~/.kiro/sessions/cli/`（增量 tail + 锁文件进程探测），任意 kiro-cli 版本开箱即用，对 Kiro 配置零写入
+- Hook 安装 / 卸载一律先展示 Diff 预览，且只触碰 Agent Hub 自己管理的条目
+
+### 📊 监控面板
+
+从系统托盘图标或侧边栏左下角打开的常驻小窗，把"配额 + 实时会话"放在同一个面板里：
+
+- **四平台用量查询** — Codex（5h / 7d 窗口 + 重置卡）、Claude Code（官方 OAuth 登录的 5h / 7d 窗口）、Grok Build、Kimi Code；查询不到的平台自动隐藏，一个都没有时展示固定空状态
+- **泡泡水 + 圆环可视化** — 最短窗口是内部水罐，其余窗口是外圈圆环，明暗主题自适应（暗色为藏蓝色系）
+- **监听简版区** — 与会话监听页同源的一行式实时会话（状态点 + Agent + 提问），状态翻转时中央大点脉冲缩小并弧线归位
+- **右键两级菜单** — 不透明度（80–100%）、按平台隐藏使用量、按 Agent 隐藏监听，选择持久化
+- **置顶常驻** — 置顶后可随意拖拽，每 5 分钟自动刷新配额，监听事件保持实时
+- 弹窗内手动刷新与「账号」页共享同一份后端缓存，两边数据始终一致
+
+### 👤 账号
+
+- **Claude Code** — 同时支持自定义 API Token 账号和官方 `/login` OAuth 订阅账号的保存与切换（OAuth 凭证写回 Keychain / 凭证文件，原子替换）
+- **Codex CLI** — 读取当前 CLI 登录，展示账号信息
+- SHA-256 哈希比对自动识别当前活跃账号
+- 一键清空当前登录，已存 profile 可编辑 / 删除
+- **四平台用量面板** — Codex、Claude Code、Grok Build、Kimi Code 的配额窗口查询，与监控面板数据同源同步
+
+### 🎨 通用
+
+- **自动更新** — 支持断点续传，minisign 签名校验
+- **中英双语** — 跟随系统语言，随时一键切换
+- **明暗双主题** — 水墨白 + 藏蓝暗色，偏好持久化，监控面板同步跟随
+- **自定义平台** — 通过配置文件接入任意 Agent 平台
+
+---
+
+## 安装
 
 ### macOS
 
-Download `.dmg` from [Releases](https://github.com/ssly/agent-hub/releases), open it, and drag the app to Applications.
+从 [Releases](https://github.com/ssly/agent-hub/releases) 下载 `.dmg`，打开后把应用拖进「应用程序」。
 
 > [!WARNING]
-> **First launch blocked by Gatekeeper?** This is expected for unsigned apps. Run:
+> **首次打开被 Gatekeeper 拦截？** 未签名应用都会遇到，执行：
 > ```bash
 > xattr -cr /Applications/"Agent Hub.app"
 > ```
-> Then open it again.
+> 然后重新打开即可。
 
 ### Windows
 
-Download `.exe` from [Releases](https://github.com/ssly/agent-hub/releases) and run the installer.
+从 [Releases](https://github.com/ssly/agent-hub/releases) 下载 `.exe` 安装包并运行。
 
 > [!WARNING]
-> **SmartScreen warning?** Click "More info" → "Run anyway". This is expected for apps without a paid code-signing certificate.
+> **SmartScreen 警告？** 点击「更多信息」→「仍要运行」。没有付费代码签名证书的应用都会出现此提示。
 
 ---
 
-## Supported Platforms
+## 支持的平台
 
-### Plugin / Skill Management
+### 插件 / Skill 管理
 
-| Platform | Skill Directory |
-|----------|----------------|
-| Shared Pool | `~/.agents/skills/` |
-| Codex CLI | `~/.agents/skills/` (Shared Pool) |
+| 平台 | Skill 目录 |
+|------|-----------|
+| 共享池 | `~/.agents/skills/` |
+| Codex CLI | `~/.agents/skills/`（共享池） |
 | Claude Code | `~/.claude/skills/` |
 | Antigravity | `~/.gemini/config/skills/` |
 | Gemini CLI | `~/.gemini/skills/` |
@@ -130,12 +146,12 @@ Download `.exe` from [Releases](https://github.com/ssly/agent-hub/releases) and 
 | Trae | `~/.trae/skills/` |
 | Kiro | `~/.kiro/skills/` |
 
-The Shared Pool (`~/.agents/skills/`) is read by default by Codex, Cursor, OpenCode, Gemini CLI, Kimi Code, and Grok Build; Antigravity reads `.agents/skills/` at project level.
+共享池（`~/.agents/skills/`）默认被 Codex、Cursor、OpenCode、Gemini CLI、Kimi Code、Grok Build 读取；Antigravity 在项目级读取 `.agents/skills/`。
 
-### MCP Server Management
+### MCP Server 管理
 
-| Platform | Config Path | Format |
-|----------|-------------|--------|
+| 平台 | 配置路径 | 格式 |
+|------|---------|------|
 | Claude Code | `~/.claude.json` | JSON |
 | Antigravity | `~/.gemini/config/mcp_config.json` | JSON |
 | Cursor | `~/.cursor/mcp.json` | JSON |
@@ -145,21 +161,32 @@ The Shared Pool (`~/.agents/skills/`) is read by default by Codex, Cursor, OpenC
 | Kiro | `~/.kiro/settings/mcp.json` | JSON |
 | Codex CLI | `~/.codex/config.toml` | TOML |
 
-When a project folder is selected, Agent Hub maps each platform to its repository-local layout (for example, Claude Code uses `.claude/skills/` and `.mcp.json`). Project-scoped content is shown read-only.
+选择项目文件夹后，Agent Hub 会把各平台映射到仓库内布局（例如 Claude Code 使用 `.claude/skills/` 和 `.mcp.json`），项目范围内容只读展示。
 
-### Session Monitoring
+### 会话监听
 
-| Platform | Mechanism | Path |
-|----------|-----------|------|
-| Codex CLI | Lifecycle Hooks (`UserPromptSubmit` + `Stop`) | `~/.codex/hooks.json` |
-| Claude Code | Lifecycle Hooks, hot-reloaded | `~/.claude/settings.json` |
-| Kiro | Session file watching (read-only, zero config) | `~/.kiro/sessions/cli/` |
+| 平台 | 机制 | 路径 |
+|------|------|------|
+| Codex CLI | 生命周期 Hook（`UserPromptSubmit` + `Stop`） | `~/.codex/hooks.json` |
+| Claude Code | 生命周期 Hook，热加载 | `~/.claude/settings.json` |
+| Grok Build | 独立受管 Hook 文件 | `~/.grok/hooks/agent-hub.json` |
+| Kimi Code | `[[hooks]]` 表（纯文本块增删） | `~/.kimi-code/config.toml` |
+| Kiro | 会话文件监听（只读、零配置） | `~/.kiro/sessions/cli/` |
+
+### 用量查询
+
+| 平台 | 认证来源 | 内容 |
+|------|---------|------|
+| Codex CLI | `~/.codex/auth.json`（ChatGPT 登录） | 5h / 7d 窗口 + 重置卡 |
+| Claude Code | 官方 OAuth 凭证（Keychain / `.credentials.json`，只读不刷新） | 5h / 7d 窗口 |
+| Grok Build | `~/.grok/auth.json` | 计费周期窗口 |
+| Kimi Code | `~/.kimi-code/config.toml` 的 Coding Plan API Key | 5h / 7d 窗口 |
 
 ---
 
-## Configuration
+## 配置
 
-Config file: `~/.agent-hub/config.toml` (auto-created on first launch).
+配置文件：`~/.agent-hub/config.toml`（首次启动自动创建）。
 
 ```toml
 [general]
@@ -173,50 +200,50 @@ skill_dir = "~/.my-agent/skills"
 
 ---
 
-## Development
+## 开发
 
-### Prerequisites
+### 环境准备
 
-- [Rust](https://rustup.rs/) (stable)
-- [Node.js](https://nodejs.org/) (for the Vite + Vue toolchain)
+- [Rust](https://rustup.rs/)（stable）
+- [Node.js](https://nodejs.org/)（Vite + Vue 工具链）
 
-### Quick Start
-
-```bash
-npm install     # install frontend deps
-cargo tauri dev # launch dev mode with hot reload
-npm run dev:web # browser-only UI with mock data
-```
-
-| What you change | What happens |
-|-----------------|-------------|
-| `src/**/*.vue` or `src/**/*.ts` | Vite HMR hot reload |
-| `src-tauri/src/*.rs` | Auto-recompile |
-
-### Build
+### 快速开始
 
 ```bash
-cargo tauri build          # Release
-cargo tauri build --debug  # Debug (faster)
+npm install     # 安装前端依赖
+cargo tauri dev # 开发模式，热更新
+npm run dev:web # 纯浏览器调试（mock 数据）
 ```
 
-macOS output: `src-tauri/target/release/bundle/` (`.app`, `.dmg`)
-Windows output: `src-tauri/target/release/bundle/` (`.exe`, `.msi`, `.nsis`)
+| 改动内容 | 效果 |
+|---------|------|
+| `src/**/*.vue` 或 `src/**/*.ts` | Vite HMR 热更新 |
+| `src-tauri/src/*.rs` | 自动重新编译 |
+
+### 构建
+
+```bash
+cargo tauri build          # 发布构建
+cargo tauri build --debug  # 调试构建（更快）
+```
+
+macOS 产物：`src-tauri/target/release/bundle/`（`.app`、`.dmg`）
+Windows 产物：`src-tauri/target/release/bundle/`（`.exe`、`.msi`、`.nsis`）
 
 ---
 
-## Tech Stack
+## 技术栈
 
-| Layer | Technology |
-|-------|-----------|
-| Backend | Rust + Tauri 2.x |
-| Frontend | Vue 3 + Pinia + vue-i18n + TailwindCSS v4 (Vite) |
-| Diff Engine | similar (Myers diff algorithm) |
-| Database | SQLite (rusqlite, bundled) |
-| HTTP | reqwest (rustls-tls) |
+| 层 | 技术 |
+|----|------|
+| 后端 | Rust + Tauri 2.x |
+| 前端 | Vue 3 + Pinia + vue-i18n + TailwindCSS v4（Vite） |
+| Diff 引擎 | similar（Myers diff 算法） |
+| 数据库 | SQLite（rusqlite，内置捆绑） |
+| HTTP | reqwest（rustls-tls） |
 
 ---
 
-## License
+## 许可证
 
 [MIT](LICENSE)

@@ -6,6 +6,7 @@ import { useToast } from '@/composables/useToast'
 import { formatBytes, avatarToneFromName } from '@/lib/utils'
 import * as api from '@/lib/api'
 import { FolderOpen } from 'lucide-vue-next'
+import AppLoading from '@/components/ui/AppLoading.vue'
 
 const { t } = useI18n()
 const store = useSkillsStore()
@@ -77,7 +78,7 @@ watch(() => [store.selectedSkillName, store.selectedFolder], loadDetail)
 <template>
   <div class="p-6 view-enter">
     <div class="ah-view-content ah-skill-detail">
-      <div v-if="loading" class="loading-pulse" style="color: var(--ink-3)">Loading...</div>
+      <AppLoading v-if="loading" class="py-16" />
 
       <template v-else-if="detail">
         <!-- Hero -->

@@ -121,7 +121,8 @@ const SESSION_PLATFORMS = [
   { id: 'codex', display_name: 'Codex', session_count: 5 },
   { id: 'claude-code', display_name: 'Claude Code', session_count: 28 },
   { id: 'grok', display_name: 'Grok Build', session_count: 2 },
-  { id: 'kiro', display_name: 'Kiro', session_count: 3 },
+  { id: 'kimi', display_name: 'Kimi Code', session_count: 4 },
+  { id: 'kiro', display_name: 'Kiro CLI', session_count: 3 },
 ]
 
 function makeSessions(offset: number, limit: number) {
@@ -484,9 +485,44 @@ export async function getGrokUsage(force = false) {
   return structuredClone(payload)
 }
 export async function getUsageProviderAvailability() {
-  return { codex: true, grok_build: true, kimi_code: true }
+  return { codex: true, grok_build: true, kimi_code: true, claude_code: true }
 }
 export async function resizeUsageTray() {}
+export async function setUsageTrayPinned() {}
+export async function openUsageTray() {}
+
+let mockClaudeUsage: { at: number; data: any } | null = null
+export async function getClaudeUsage(force = false) {
+  if (!force && mockCacheFresh(mockClaudeUsage)) {
+    return structuredClone(mockClaudeUsage!.data)
+  }
+  await delay()
+  const now = Math.floor(Date.now() / 1000)
+  const window5h = {
+    used_percent: 12,
+    remaining_percent: 88,
+    reset_after_seconds: 3_600 * 2,
+    reset_at: now + 3_600 * 2,
+    window_seconds: 18_000,
+  }
+  const windowWeekly = {
+    used_percent: 31,
+    remaining_percent: 69,
+    reset_after_seconds: 86_400 * 5,
+    reset_at: now + 86_400 * 5,
+    window_seconds: 604_800,
+  }
+  const payload = {
+    account_name: 'demo@anthropic.com',
+    plan_type: 'max',
+    window_5h: window5h,
+    window_weekly: windowWeekly,
+    usage_windows: [window5h, windowWeekly],
+    fetched_at: now,
+  }
+  mockClaudeUsage = { at: Date.now(), data: payload }
+  return structuredClone(payload)
+}
 
 export async function getKimiUsage(force = false) {
   if (!force && mockCacheFresh(mockKimiUsage)) {
@@ -525,6 +561,8 @@ export async function getKimiUsage(force = false) {
 // Session monitor
 let codexHookInstalled = false
 let claudeHookInstalled = false
+let grokHookInstalled = false
+let kimiHookInstalled = false
 
 let codexMonitorSessions = [
   {
@@ -576,6 +614,32 @@ let kiroMonitorSessions = [
 ]
 
 let kiroMonitorEnabled = true
+
+let grokMonitorSessions = [
+  {
+    sessionId: 'grok-9b3c',
+    turnId: 'turn-1',
+    source: 'terminal',
+    status: 'running',
+    cwd: '/Users/demo/projects/recommender',
+    userPrompt: '把推荐接口的分页改成游标式，注意兼容旧参数。',
+    assistantReply: null,
+    updatedAt: Date.now() - 45_000,
+  },
+]
+
+let kimiMonitorSessions = [
+  {
+    sessionId: 'kimi-51af',
+    turnId: 'turn-1',
+    source: 'terminal',
+    status: 'ended',
+    cwd: '/Users/demo/projects/notes-app',
+    userPrompt: '给设置页加上导出全部笔记的入口。',
+    assistantReply: '已在设置页新增导出按钮，支持 Markdown 打包下载。',
+    updatedAt: Date.now() - 900_000,
+  },
+]
 
 function makeHookStatus(installed: boolean, configPath: string, command: string) {
   return {
@@ -702,6 +766,71 @@ export async function setKiroMonitorEnabled(enabled: boolean) {
   await delay(200)
   kiroMonitorEnabled = enabled
   return getKiroMonitorStatus()
+}
+
+const GROK_HOOK_COMMAND = "'/Applications/AGENT HUB.app/Contents/MacOS/agent-hub' --agent-hub-grok-hook"
+const KIMI_HOOK_COMMAND = "'/Applications/AGENT HUB.app/Contents/MacOS/agent-hub' --agent-hub-kimi-hook"
+
+export async function getGrokSessionMonitorSnapshot() {
+  await delay()
+  return {
+    revision: 1,
+    sessions: grokMonitorSessions,
+  }
+}
+
+export async function deleteGrokSessionMonitorSession(sessionId: string) {
+  await delay()
+  grokMonitorSessions = grokMonitorSessions.filter(
+    session => session.sessionId !== sessionId,
+  )
+}
+
+export async function getGrokHookStatus() {
+  await delay()
+  return makeHookStatus(grokHookInstalled, '~/.grok/hooks/agent-hub.json', GROK_HOOK_COMMAND)
+}
+
+export async function previewGrokHookChange(action: 'install' | 'uninstall') {
+  await delay()
+  return makeHookPreview(action, '~/.grok/hooks/agent-hub.json', GROK_HOOK_COMMAND)
+}
+
+export async function applyGrokHookChange(action: 'install' | 'uninstall', _expectedBeforeHash: string) {
+  await delay(300)
+  grokHookInstalled = action === 'install'
+  return getGrokHookStatus()
+}
+
+export async function getKimiSessionMonitorSnapshot() {
+  await delay()
+  return {
+    revision: 1,
+    sessions: kimiMonitorSessions,
+  }
+}
+
+export async function deleteKimiSessionMonitorSession(sessionId: string) {
+  await delay()
+  kimiMonitorSessions = kimiMonitorSessions.filter(
+    session => session.sessionId !== sessionId,
+  )
+}
+
+export async function getKimiHookStatus() {
+  await delay()
+  return makeHookStatus(kimiHookInstalled, '~/.kimi-code/config.toml', KIMI_HOOK_COMMAND)
+}
+
+export async function previewKimiHookChange(action: 'install' | 'uninstall') {
+  await delay()
+  return makeHookPreview(action, '~/.kimi-code/config.toml', KIMI_HOOK_COMMAND)
+}
+
+export async function applyKimiHookChange(action: 'install' | 'uninstall', _expectedBeforeHash: string) {
+  await delay(300)
+  kimiHookInstalled = action === 'install'
+  return getKimiHookStatus()
 }
 
 // App

@@ -5,16 +5,21 @@ import * as api from '@/lib/api'
 export type HookAction = 'install' | 'uninstall'
 export type SessionSource = 'terminal' | 'chatgpt'
 export type RuntimeStatus = 'running' | 'ended'
-export type MonitorAgent = 'codex' | 'claude' | 'kiro'
-export const MONITOR_AGENTS: MonitorAgent[] = ['codex', 'claude', 'kiro']
+export type MonitorAgent = 'codex' | 'claude' | 'kiro' | 'grok' | 'kimi'
+export const MONITOR_AGENTS: MonitorAgent[] = ['codex', 'claude', 'grok', 'kimi', 'kiro']
 /** Sidebar tab: one of the agents, or the merged "all" view. */
 export type MonitorTab = MonitorAgent | 'all'
+/** Agents whose monitor feed is driven by installed hooks (vs file watching). */
+export type HookAgent = 'codex' | 'claude' | 'grok' | 'kimi'
+export const HOOK_AGENTS: HookAgent[] = ['codex', 'claude', 'grok', 'kimi']
 /** Monitor agent → sessions-browser platform id, so the shared messages /
  *  resume modals can load full history through the sessions adapters. */
-export const MONITOR_AGENT_PLATFORM: Record<MonitorAgent, string> = {
+export const MONITOR_AGENT_PLATFORM: Partial<Record<MonitorAgent, string>> = {
   codex: 'codex',
   claude: 'claude-code',
   kiro: 'kiro',
+  grok: 'grok',
+  kimi: 'kimi',
 }
 
 export interface SessionState {
@@ -72,21 +77,27 @@ const CHANGED_EVENTS: Record<MonitorAgent, string> = {
   codex: 'session-monitor:codex-changed',
   claude: 'session-monitor:claude-changed',
   kiro: 'session-monitor:kiro-changed',
+  grok: 'session-monitor:grok-changed',
+  kimi: 'session-monitor:kimi-changed',
 }
 
 const snapshotApi: Record<MonitorAgent, () => Promise<MonitorSnapshot>> = {
   codex: api.getCodexSessionMonitorSnapshot,
   claude: api.getClaudeSessionMonitorSnapshot,
   kiro: api.getKiroSessionMonitorSnapshot,
+  grok: api.getGrokSessionMonitorSnapshot,
+  kimi: api.getKimiSessionMonitorSnapshot,
 }
 
 const deleteSessionApi: Record<MonitorAgent, (sessionId: string) => Promise<void>> = {
   codex: api.deleteCodexSessionMonitorSession,
   claude: api.deleteClaudeSessionMonitorSession,
   kiro: api.deleteKiroSessionMonitorSession,
+  grok: api.deleteGrokSessionMonitorSession,
+  kimi: api.deleteKimiSessionMonitorSession,
 }
 
-const hookApi: Record<'codex' | 'claude', {
+const hookApi: Record<HookAgent, {
   status: () => Promise<HookStatus>
   preview: (action: HookAction) => Promise<HookChangePreview>
   apply: (action: HookAction, expectedBeforeHash: string) => Promise<HookStatus>
@@ -100,6 +111,16 @@ const hookApi: Record<'codex' | 'claude', {
     status: api.getClaudeHookStatus,
     preview: api.previewClaudeHookChange,
     apply: api.applyClaudeHookChange,
+  },
+  grok: {
+    status: api.getGrokHookStatus,
+    preview: api.previewGrokHookChange,
+    apply: api.applyGrokHookChange,
+  },
+  kimi: {
+    status: api.getKimiHookStatus,
+    preview: api.previewKimiHookChange,
+    apply: api.applyKimiHookChange,
   },
 }
 
@@ -117,10 +138,14 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     codex: emptySnapshot(),
     claude: emptySnapshot(),
     kiro: emptySnapshot(),
+    grok: emptySnapshot(),
+    kimi: emptySnapshot(),
   })
-  const hookStatuses = ref<Record<'codex' | 'claude', HookStatus | null>>({
+  const hookStatuses = ref<Record<HookAgent, HookStatus | null>>({
     codex: null,
     claude: null,
+    grok: null,
+    kimi: null,
   })
   const kiroStatus = ref<KiroMonitorStatus | null>(null)
   const loading = ref(false)
@@ -128,7 +153,7 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
   const error = ref('')
   const previewOpen = ref(false)
   const previewLoading = ref(false)
-  const previewAgent = ref<'codex' | 'claude'>('codex')
+  const previewAgent = ref<HookAgent>('codex')
   const preview = ref<HookChangePreview | null>(null)
   const previewError = ref('')
   let initialized = false
@@ -138,23 +163,23 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     activeAgent.value === 'all' ? emptySnapshot() : snapshots.value[activeAgent.value],
   )
   const hookStatus = computed(() =>
-    activeAgent.value === 'codex' || activeAgent.value === 'claude'
-      ? hookStatuses.value[activeAgent.value]
+    (HOOK_AGENTS as string[]).includes(activeAgent.value)
+      ? hookStatuses.value[activeAgent.value as HookAgent]
       : null,
   )
-  /** Rows for the current tab. "all" merges every agent: running sessions
-   *  first, then newest activity first within each status group. */
+  /** Rows for the current tab, both for "all" and single agents: running
+   *  sessions first, then newest activity first within each status group. */
   const displaySessions = computed<AgentSessionState[]>(() => {
-    if (activeAgent.value === 'all') {
-      return MONITOR_AGENTS.flatMap(agent =>
+    const tab = activeAgent.value
+    const sessions = tab === 'all'
+      ? MONITOR_AGENTS.flatMap(agent =>
         snapshots.value[agent].sessions.map(session => ({ ...session, agent })),
-      ).sort((a, b) => {
-        if (a.status !== b.status) return a.status === 'running' ? -1 : 1
-        return b.updatedAt - a.updatedAt
-      })
-    }
-    const agent = activeAgent.value
-    return snapshots.value[agent].sessions.map(session => ({ ...session, agent }))
+      )
+      : snapshots.value[tab].sessions.map(session => ({ ...session, agent: tab }))
+    return sessions.sort((a, b) => {
+      if (a.status !== b.status) return a.status === 'running' ? -1 : 1
+      return b.updatedAt - a.updatedAt
+    })
   })
 
   async function refresh() {
@@ -172,21 +197,17 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
         messages.push(errorMessage(result.reason))
       }
     })
-    const hookResults = await Promise.allSettled([
-      hookApi.codex.status(),
-      hookApi.claude.status(),
-    ])
-    const [codexHook, claudeHook] = hookResults
-    if (codexHook.status === 'fulfilled') {
-      hookStatuses.value.codex = codexHook.value
-    } else {
-      messages.push(errorMessage(codexHook.reason))
-    }
-    if (claudeHook.status === 'fulfilled') {
-      hookStatuses.value.claude = claudeHook.value
-    } else {
-      messages.push(errorMessage(claudeHook.reason))
-    }
+    const hookResults = await Promise.allSettled(
+      HOOK_AGENTS.map(agent => hookApi[agent].status()),
+    )
+    HOOK_AGENTS.forEach((agent, index) => {
+      const result = hookResults[index]
+      if (result.status === 'fulfilled') {
+        hookStatuses.value[agent] = result.value
+      } else {
+        messages.push(errorMessage(result.reason))
+      }
+    })
     try {
       kiroStatus.value = await api.getKiroMonitorStatus()
     } catch (cause) {
@@ -220,7 +241,7 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     initialized = false
   }
 
-  async function openHookPreview(agent: 'codex' | 'claude', action: HookAction) {
+  async function openHookPreview(agent: HookAgent, action: HookAction) {
     previewAgent.value = agent
     previewOpen.value = true
     previewLoading.value = true

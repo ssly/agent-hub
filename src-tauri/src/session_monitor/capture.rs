@@ -7,6 +7,8 @@ use uuid::Uuid;
 
 pub const CODEX_HOOK_ARG: &str = "--agent-hub-codex-hook";
 pub const CLAUDE_HOOK_ARG: &str = "--agent-hub-claude-hook";
+pub const GROK_HOOK_ARG: &str = "--agent-hub-grok-hook";
+pub const KIMI_HOOK_ARG: &str = "--agent-hub-kimi-hook";
 const MAX_HOOK_INPUT_BYTES: u64 = 256 * 1024;
 const MAX_IGNORED_SESSIONS: usize = 200;
 
@@ -39,6 +41,10 @@ pub fn try_capture_hook_event() -> bool {
         AgentKind::Codex
     } else if std::env::args().any(|arg| arg == CLAUDE_HOOK_ARG) {
         AgentKind::Claude
+    } else if std::env::args().any(|arg| arg == GROK_HOOK_ARG) {
+        AgentKind::Grok
+    } else if std::env::args().any(|arg| arg == KIMI_HOOK_ARG) {
+        AgentKind::Kimi
     } else {
         return false;
     };
@@ -64,19 +70,18 @@ fn capture_stdin_event(agent: AgentKind) -> Result<(), String> {
 
     let input: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|error| format!("invalid hook JSON: {error}"))?;
-    let event_name = input
-        .get("hook_event_name")
-        .and_then(serde_json::Value::as_str)
+    // Codex/Claude/Kimi wrap events in snake_case, Grok in camelCase.
+    let event_name = string_field_any(&input, &["hook_event_name", "hookEventName"])
         .ok_or_else(|| "hook_event_name is missing".to_string())?;
-    if !accepted_event(event_name) {
+    let Some(event_name) = canonical_event_name(&event_name) else {
         return Ok(());
-    }
+    };
 
     let event_id = Uuid::new_v4().to_string();
-    let session_id = string_field(&input, "session_id")
+    let session_id = string_field_any(&input, &["session_id", "sessionId"])
         .or_else(|| std::env::var("CODEX_THREAD_ID").ok())
         .unwrap_or_else(|| format!("unknown-{event_id}"));
-    let user_prompt = string_field(&input, "prompt");
+    let user_prompt = prompt_field(&input);
 
     // Codex desktop only: drop internal desktop turns (ambient suggestions,
     // safety reviewer, memory consolidation). Their Stop event carries no
@@ -96,13 +101,14 @@ fn capture_stdin_event(agent: AgentKind) -> Result<(), String> {
         }
     }
 
-    // Codex provides `turn_id`, Claude Code provides `prompt_id` (v2.1.196+).
+    // Codex provides `turn_id`, Claude Code provides `prompt_id` (v2.1.196+);
+    // Grok and Kimi carry no turn id and fall back to the event id.
     let turn_id = resolve_turn_id(&input, &event_id);
     let source = match agent {
         AgentKind::Codex => detect_source(),
         // Claude Desktop is intentionally out of scope; the Claude Code hook
         // only fires for terminal sessions. Kiro events come from the file
-        // watcher, not from hooks.
+        // watcher, not from hooks. Grok Build and Kimi Code are terminal CLIs.
         _ => SessionSource::Terminal,
     };
     let event = HookEvent {
@@ -114,7 +120,7 @@ fn capture_stdin_event(agent: AgentKind) -> Result<(), String> {
         source,
         cwd: string_field(&input, "cwd"),
         user_prompt,
-        assistant_reply: string_field(&input, "last_assistant_message"),
+        assistant_reply: string_field_any(&input, &["last_assistant_message", "lastAssistantMessage"]),
         occurred_at: now_millis(),
     };
 
@@ -138,8 +144,46 @@ fn capture_stdin_event(agent: AgentKind) -> Result<(), String> {
     Ok(())
 }
 
-fn accepted_event(name: &str) -> bool {
-    name == "UserPromptSubmit" || name == "Stop"
+/// Normalize the hook event value across agents: Codex/Claude/Kimi use
+/// PascalCase, Grok uses snake_case. Returns None for events we ignore.
+fn canonical_event_name(name: &str) -> Option<&'static str> {
+    match name {
+        "UserPromptSubmit" | "user_prompt_submit" => Some("UserPromptSubmit"),
+        "Stop" | "stop" => Some("Stop"),
+        _ => None,
+    }
+}
+
+fn string_field_any(input: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| string_field(input, key))
+}
+
+/// Extract the user prompt from the hook payload. Codex/Claude/Grok send a
+/// plain string; Kimi Code sends an array of content parts
+/// (`[{type: "text", text: "…"}, …]`), whose text parts are joined here.
+fn prompt_field(input: &serde_json::Value) -> Option<String> {
+    for key in ["prompt", "promptText"] {
+        let Some(value) = input.get(key) else {
+            continue;
+        };
+        if let Some(text) = string_field(input, key) {
+            return Some(text);
+        }
+        if let Some(parts) = value.as_array() {
+            let text = parts
+                .iter()
+                .filter(|part| part.get("type").and_then(serde_json::Value::as_str) == Some("text"))
+                .filter_map(|part| part.get("text").and_then(serde_json::Value::as_str))
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            if !text.is_empty() {
+                return Some(text);
+            }
+        }
+    }
+    None
 }
 
 fn resolve_turn_id(input: &serde_json::Value, fallback: &str) -> String {
@@ -242,6 +286,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn prompt_field_reads_plain_string() {
+        let input = serde_json::json!({"prompt": "  帮我修一下这个 bug  "});
+        assert_eq!(prompt_field(&input).as_deref(), Some("帮我修一下这个 bug"));
+    }
+
+    #[test]
+    fn prompt_field_joins_kimi_content_parts() {
+        let input = serde_json::json!({
+            "prompt": [
+                {"type": "text", "text": "第一段"},
+                {"type": "image", "source": {"kind": "url", "url": "https://x/y.png"}},
+                {"type": "text", "text": "第二段"}
+            ]
+        });
+        assert_eq!(prompt_field(&input).as_deref(), Some("第一段\n第二段"));
+    }
+
+    #[test]
+    fn prompt_field_returns_none_for_empty_or_missing_prompt() {
+        assert_eq!(prompt_field(&serde_json::json!({})), None);
+        assert_eq!(prompt_field(&serde_json::json!({"prompt": "  "})), None);
+        assert_eq!(prompt_field(&serde_json::json!({"prompt": []})), None);
+        assert_eq!(
+            prompt_field(&serde_json::json!({"prompt": [{"type": "image", "source": {}}]})),
+            None
+        );
+    }
+
+    #[test]
     fn source_distinguishes_desktop_and_terminal_originators() {
         assert_eq!(
             source_from_originator("codex desktop"),
@@ -252,13 +325,15 @@ mod tests {
     }
 
     #[test]
-    fn only_prompt_submit_and_stop_events_are_accepted() {
-        assert!(accepted_event("UserPromptSubmit"));
-        assert!(accepted_event("Stop"));
-        assert!(!accepted_event("SessionStart"));
-        assert!(!accepted_event("SessionEnd"));
-        assert!(!accepted_event("Notification"));
-        assert!(!accepted_event("SubagentStop"));
+    fn event_names_are_normalized_across_agents() {
+        assert_eq!(canonical_event_name("UserPromptSubmit"), Some("UserPromptSubmit"));
+        assert_eq!(canonical_event_name("user_prompt_submit"), Some("UserPromptSubmit"));
+        assert_eq!(canonical_event_name("Stop"), Some("Stop"));
+        assert_eq!(canonical_event_name("stop"), Some("Stop"));
+        assert_eq!(canonical_event_name("SessionStart"), None);
+        assert_eq!(canonical_event_name("session_start"), None);
+        assert_eq!(canonical_event_name("Notification"), None);
+        assert_eq!(canonical_event_name("SubagentStop"), None);
     }
 
     #[test]

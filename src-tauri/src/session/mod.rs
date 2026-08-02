@@ -2,6 +2,7 @@ mod claude;
 mod codex;
 mod export;
 mod grok;
+mod kimi;
 mod kiro;
 mod models;
 
@@ -56,11 +57,20 @@ pub fn list_session_platforms() -> Result<Vec<SessionPlatform>, String> {
         });
     }
 
+    let kimi_count = kimi::count_kimi_sessions()?;
+    if kimi_count > 0 {
+        platforms.push(SessionPlatform {
+            id: "kimi".to_string(),
+            display_name: "Kimi Code".to_string(),
+            session_count: kimi_count,
+        });
+    }
+
     let kiro_count = kiro::count_kiro_sessions()?;
     if kiro_count > 0 {
         platforms.push(SessionPlatform {
             id: "kiro".to_string(),
-            display_name: "Kiro".to_string(),
+            display_name: "Kiro CLI".to_string(),
             session_count: kiro_count,
         });
     }
@@ -101,6 +111,7 @@ fn list_sessions_all(platform_id: &str) -> Result<Vec<models::SessionSummary>, S
         "codex" => codex::list_codex_sessions_all(),
         "kiro" => kiro::list_kiro_sessions_all(),
         "grok" => grok::list_grok_sessions_all(),
+        "kimi" => kimi::list_kimi_sessions_all(),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
 }
@@ -274,6 +285,7 @@ fn last_session_messages(
         "codex" => codex::last_codex_messages(session_id),
         "kiro" => kiro::last_kiro_messages(session_id),
         "grok" => grok::last_grok_messages(session_id),
+        "kimi" => kimi::last_kimi_messages(session_id),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
 }
@@ -538,6 +550,7 @@ pub fn get_session_messages(
         "codex" => codex::get_codex_messages(session_id, offset, limit),
         "kiro" => kiro::get_kiro_messages(session_id, offset, limit),
         "grok" => grok::get_grok_messages(session_id, offset, limit),
+        "kimi" => kimi::get_kimi_messages(session_id, offset, limit),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
 }
@@ -552,6 +565,7 @@ pub fn search_session_messages(
         "codex" => codex::search_codex_messages(&query_lower),
         "kiro" => kiro::search_kiro_messages(&query_lower),
         "grok" => grok::search_grok_messages(&query_lower),
+        "kimi" => kimi::search_kimi_messages(&query_lower),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
 }
@@ -562,6 +576,7 @@ pub fn delete_session(platform_id: &str, session_id: &str) -> Result<(), String>
         "codex" => codex::delete_codex_session(session_id),
         "kiro" => kiro::delete_kiro_session(session_id),
         "grok" => grok::delete_grok_session(session_id),
+        "kimi" => kimi::delete_kimi_session(session_id),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
 }
@@ -641,6 +656,12 @@ fn build_resume_command(platform_id: &str, session_id: &str) -> Result<String, S
                 return Err("Grok CLI is not available on PATH.".to_string());
             }
             Ok(format!("grok --resume {}", shell_quote(session_id)))
+        }
+        "kimi" => {
+            if !command_exists("kimi") {
+                return Err("Kimi Code CLI is not available on PATH.".to_string());
+            }
+            Ok(format!("kimi --session {}", shell_quote(session_id)))
         }
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
@@ -753,6 +774,29 @@ mod tests {
     }
 
     #[test]
+    fn kimi_sessions_real_data_smoke_test() {
+        let sessions = kimi::list_kimi_sessions_all().expect("kimi scan should not fail");
+        if sessions.is_empty() {
+            return;
+        }
+        let first = &sessions[0];
+        let page = kimi::get_kimi_messages(&first.id, 0, 50);
+        if let Ok(messages) = page {
+            assert!(messages.len() <= 50);
+        }
+    }
+
+    #[test]
+    fn build_resume_command_for_kimi_contains_session_flag() {
+        if !command_exists("kimi") {
+            return;
+        }
+        let command = build_resume_command("kimi", "abc-123").expect("command should build");
+        assert!(command.contains("kimi --session"));
+        assert!(command.contains("'abc-123'"));
+    }
+
+    #[test]
     fn resume_preview_smoke_test() {
         let platforms = list_session_platforms().expect("platforms should list");
         for platform in platforms {
@@ -818,6 +862,7 @@ mod tests {
                 message_count: None,
                 tokens_used: None,
                 platform_id: "x".to_string(),
+                source: None,
             },
             models::SessionSummary {
                 id: "2".to_string(),
@@ -829,6 +874,7 @@ mod tests {
                 message_count: None,
                 tokens_used: None,
                 platform_id: "x".to_string(),
+                source: None,
             },
         ];
 

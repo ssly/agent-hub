@@ -2,6 +2,7 @@
 import { useI18n } from 'vue-i18n'
 import { useToast } from '@/composables/useToast'
 import { useClaudePluginsStore, type ClaudeCodePlugin } from '@/stores/claude-plugins'
+import AppLoading from '@/components/ui/AppLoading.vue'
 
 const { t } = useI18n()
 const { showToast } = useToast()
@@ -30,8 +31,8 @@ async function handleToggle(plugin: ClaudeCodePlugin) {
 
 <template>
   <div class="ah-cc-plugins">
-    <div v-if="store.loading && store.plugins.length === 0" class="ah-cc-plugins__state loading-pulse">
-      {{ t('plugin.claude_loading') }}
+    <div v-if="store.loading && store.plugins.length === 0" class="ah-cc-plugins__state">
+      <AppLoading :size="40">{{ t('plugin.claude_loading') }}</AppLoading>
     </div>
 
     <div v-else-if="store.error" class="ah-cc-plugins__state">

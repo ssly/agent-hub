@@ -6,6 +6,7 @@ import { useToast } from '@/composables/useToast'
 import * as api from '@/lib/api'
 import { ref, computed, watch } from 'vue'
 import AppModal from '@/components/ui/AppModal.vue'
+import AppLoading from '@/components/ui/AppLoading.vue'
 
 const props = withDefaults(defineProps<{ embedded?: boolean; readonly?: boolean }>(), {
   embedded: false,
@@ -298,9 +299,9 @@ function stripTomlHeader(text: string, name: string): string {
           width-class="w-[44rem]"
           @close="closeServerDetail"
         >
-          <div v-if="!store.serverDetails[detailServerName]" class="loading-pulse flex items-center justify-center py-12" style="color: var(--ink-3)">
+          <AppLoading v-if="!store.serverDetails[detailServerName]" class="py-12" :size="40">
             {{ t('switch.content_loading') }}
-          </div>
+          </AppLoading>
           <div v-else class="ah-config-view-wrap ah-config-view-wrap--fill">
             <span class="ah-config-view__badge">
               {{ store.serverDetails[detailServerName]?.format === 'toml' ? 'TOML' : 'JSON' }}

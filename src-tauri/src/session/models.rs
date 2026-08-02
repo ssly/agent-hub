@@ -16,6 +16,11 @@ pub struct SessionSummary {
     pub message_count: Option<u32>,
     pub tokens_used: Option<u64>,
     pub platform_id: String,
+    /// Provenance of the client that created the session, when the storage
+    /// format records it: "terminal" (CLI) or "chatgpt" (ChatGPT desktop /
+    /// IDE client). None means undetectable — UIs fall back to the bare
+    /// platform name.
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

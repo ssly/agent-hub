@@ -14,7 +14,7 @@ export interface OrbWindow {
 const props = defineProps<{ windows: OrbWindow[] }>()
 const { t, locale } = useI18n()
 
-// Fixed viewBox; the graph renders at ~152px wide via CSS.
+// Fixed viewBox; the graph renders at ~132px wide via CSS.
 const CX = 90
 const CY = 90
 const WAVE_LEN = 52
@@ -34,9 +34,9 @@ const rings = computed(() =>
     radius: OUTER_RING_R - (all.length - 1 - index) * RING_GAP,
   })),
 )
-const bubbleR = computed(() =>
-  props.windows.length === 1 ? 76 : props.windows.length === 2 ? 64 : 50,
-)
+// Single-window orbs still size the tank as if one ring wrapped it (64), so
+// providers without a secondary window render at the same visual size.
+const bubbleR = computed(() => (props.windows.length >= 3 ? 50 : 64))
 
 function usedPercent(window: UsageWindow) {
   return Math.min(100, Math.max(0, window.used_percent ?? 0))
@@ -123,12 +123,16 @@ function tip(item: OrbWindow) {
   return lines.join('\n')
 }
 
+// The whole graph (bubble tank + rings) shares one hover tooltip: every
+// window's lines joined together, placed beside the orb when there is room.
+const graphTip = computed(() => props.windows.map((item) => tip(item)).join('\n'))
+
 const centerRemain = computed(() => remainingPercent(bubbleWindow.value.window))
 </script>
 
 <template>
   <div class="usage-orb">
-    <div class="usage-orb__graph">
+    <div class="usage-orb__graph" v-tooltip:right="graphTip">
       <svg viewBox="0 0 180 180" aria-hidden="true">
         <defs>
           <clipPath :id="clipId">
@@ -155,15 +159,10 @@ const centerRemain = computed(() => remainingPercent(bubbleWindow.value.window))
             <circle :cx="CX + ring.radius" :cy="CY" r="2.1" />
             <circle :cx="CX + ring.radius * 0.68" :cy="CY - ring.radius * 0.73" r="1.5" />
           </g>
-          <circle
-            v-tooltip="tip(ring.item)"
-            class="ring-hit"
-            :cx="CX" :cy="CY" :r="ring.radius"
-          />
         </g>
 
         <!-- Bubble tank for the shortest window. -->
-        <g v-tooltip="tip(bubbleWindow)" class="usage-orb__tank" :class="`tone-${bubbleWindow.tone}`">
+        <g class="usage-orb__tank" :class="`tone-${bubbleWindow.tone}`">
           <circle class="tank-bg" :cx="CX" :cy="CY" :r="bubbleR" />
           <g :clip-path="`url(#${clipId})`">
             <g class="tank-water" :style="waterStyle">
@@ -188,26 +187,41 @@ const centerRemain = computed(() => remainingPercent(bubbleWindow.value.window))
       </div>
     </div>
 
-    <ul class="usage-orb__legend">
-      <li
-        v-for="item in windows"
-        :key="item.key"
-        v-tooltip="tip(item)"
-        :class="`tone-${item.tone}`"
-      >
-        <span class="legend-dot" />
-        <span class="legend-label">{{ item.label }} {{ t('tray.limit') }}</span>
-        <span class="legend-used">{{ t('tray.used') }} {{ Math.round(usedPercent(item.window)) }}%</span>
-        <strong class="legend-remain">{{ t('tray.remaining') }} {{ remainingPercent(item.window) }}%</strong>
-      </li>
-    </ul>
+    <div class="usage-orb__side">
+      <ul class="usage-orb__legend">
+        <li
+          v-for="item in windows"
+          :key="item.key"
+          v-tooltip:top="tip(item)"
+          :class="`tone-${item.tone}`"
+        >
+          <span class="legend-dot" />
+          <span class="legend-label">{{ item.label }} {{ t('tray.limit') }}</span>
+          <span class="legend-nums">
+            <span class="legend-used">{{ t('tray.used') }} {{ Math.round(usedPercent(item.window)) }}%</span>
+            <strong class="legend-remain">{{ t('tray.remaining') }} {{ remainingPercent(item.window) }}%</strong>
+          </span>
+        </li>
+      </ul>
+      <!-- Extra side-column content (e.g. Codex reset-credit chips) so every
+           provider panel keeps the same overall height. -->
+      <slot />
+    </div>
   </div>
 </template>
 
 <style scoped>
-.usage-orb { display: flex; flex-direction: column; align-items: stretch; }
-.usage-orb__graph { position: relative; width: 152px; margin: 0 auto; }
+.usage-orb { display: flex; align-items: center; gap: 14px; }
+.usage-orb__graph { position: relative; flex: 0 0 auto; width: 132px; }
 .usage-orb__graph svg { display: block; width: 100%; height: auto; }
+.usage-orb__side {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+}
 
 .tone-primary { color: var(--tray-accent); }
 .tone-secondary { color: var(--tray-success); }
@@ -216,7 +230,8 @@ const centerRemain = computed(() => remainingPercent(bubbleWindow.value.window))
 /* Quota rings */
 .ring-track {
   fill: none;
-  stroke: color-mix(in srgb, currentColor 14%, transparent);
+  /* Stronger tint in dark mode via --tray-ring-track (see CodexTrayView). */
+  stroke: var(--tray-ring-track, color-mix(in srgb, currentColor 14%, transparent));
   stroke-width: 10;
 }
 .ring-fill {
@@ -232,12 +247,6 @@ const centerRemain = computed(() => remainingPercent(bubbleWindow.value.window))
   animation: orb-spin 9s linear infinite;
 }
 .ring-orbit circle { fill: currentColor; opacity: .5; }
-.ring-hit {
-  fill: none;
-  stroke: transparent;
-  stroke-width: 14;
-  pointer-events: stroke;
-}
 @keyframes orb-spin { to { transform: rotate(360deg); } }
 
 /* Bubble tank */
@@ -287,30 +296,39 @@ const centerRemain = computed(() => remainingPercent(bubbleWindow.value.window))
 }
 .usage-orb__center span { color: var(--tray-ink-3); font-size: 10px; }
 
-/* Per-window legend rows */
+/* Per-window legend rows: dot + label on line 1, used/remaining on line 2,
+   sitting to the right of the orb so 1-window and 2-window providers share
+   the same overall height. */
 .usage-orb__legend {
   list-style: none;
-  margin: 10px 0 0;
+  margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  justify-content: center;
+  gap: 8px;
 }
 .usage-orb__legend li {
+  /* fit-content keeps the v-tooltip hover area on the text itself instead of
+     the full side-column width. */
+  width: fit-content;
   display: grid;
-  grid-template-columns: auto 1fr auto auto;
+  grid-template-columns: auto 1fr;
   align-items: center;
-  gap: 8px;
+  column-gap: 7px;
+  row-gap: 1px;
   font-size: 11px;
   cursor: default;
 }
 .legend-dot {
+  grid-row: 1 / 3;
   width: 7px;
   height: 7px;
   border-radius: 999px;
   background: currentColor;
 }
 .legend-label { color: var(--tray-ink-2); font-weight: 600; text-transform: uppercase; }
+.legend-nums { display: flex; gap: 8px; white-space: nowrap; }
 .legend-used { color: var(--tray-ink-3); font-variant-numeric: tabular-nums; }
 .legend-remain { color: var(--tray-ink); font-variant-numeric: tabular-nums; }
 

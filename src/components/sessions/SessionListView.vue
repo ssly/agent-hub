@@ -7,6 +7,7 @@ import { useHoverResetBool } from '@/composables/useHoverReset'
 import * as api from '@/lib/api'
 import { computed } from 'vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
+import AppLoading from '@/components/ui/AppLoading.vue'
 import SessionCard from '@/components/sessions/SessionCard.vue'
 import SessionMessagesModal from '@/components/sessions/SessionMessagesModal.vue'
 import SessionResumeModal from '@/components/sessions/SessionResumeModal.vue'
@@ -80,6 +81,17 @@ function platformName(platformId: string | undefined): string {
   return store.platforms.find(p => p.id === id)?.display_name || id
 }
 
+/** Badge with client-source refinement: Codex threads recorded as created by
+ *  the ChatGPT desktop/IDE client (threads.source = "vscode") are marked as
+ *  such; anything else keeps the plain platform name. */
+function sessionBadge(session: { platform_id?: string; source?: string | null }): string {
+  const id = session.platform_id || store.selectedPlatformId || ''
+  if (id === 'codex' && session.source === 'chatgpt') {
+    return t('session_monitor.source_chatgpt')
+  }
+  return platformName(session.platform_id)
+}
+
 // Single delete: the card already ran its two-step confirm, so this fires the
 // real delete straight away (removes the on-disk session record).
 async function handleDelete(session: any) {
@@ -118,7 +130,7 @@ function clearSessionSearch() {
 <template>
   <div class="p-6 view-enter">
     <div class="ah-view-content">
-      <div v-if="store.isLoading" class="loading-pulse" style="color: var(--ink-3)">{{ t('session.loading_messages') }}</div>
+      <AppLoading v-if="store.isLoading" class="py-16">{{ t('session.loading_messages') }}</AppLoading>
 
       <div v-else-if="store.loadError" style="color: var(--danger)">{{ store.loadError }}</div>
 
@@ -138,9 +150,7 @@ function clearSessionSearch() {
             </button>
           </div>
 
-          <div v-if="store.isSearching" class="loading-pulse py-12 text-center" style="color: var(--ink-3)">
-            {{ t('session.loading_messages') }}
-          </div>
+          <AppLoading v-if="store.isSearching" class="py-12">{{ t('session.loading_messages') }}</AppLoading>
 
           <div v-else-if="store.searchResults.length === 0" class="py-12 text-center" style="color: var(--ink-3)">
             {{ t('session.no_search_results', { query: store.searchQuery }) }}
@@ -285,7 +295,7 @@ function clearSessionSearch() {
             <SessionCard
               v-for="session in store.sessions"
               :key="session.id"
-              :badge="platformName(session.platform_id)"
+              :badge="sessionBadge(session)"
               :time="formatSessionTime(session.updated_at, locale)"
               :title="session.title || t('session.untitled')"
               :subtitle="session.project_path || t('session.no_project')"

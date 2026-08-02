@@ -9,8 +9,10 @@ import SessionResumeModal from '@/components/sessions/SessionResumeModal.vue'
 import { useToast } from '@/composables/useToast'
 import {
   useSessionMonitorStore,
+  HOOK_AGENTS,
   MONITOR_AGENT_PLATFORM,
   type MonitorAgent,
+  type AgentSessionState,
   type SessionState,
 } from '@/stores/session-monitor'
 
@@ -18,19 +20,38 @@ const { t, locale } = useI18n()
 const store = useSessionMonitorStore()
 const { showToast } = useToast()
 
-const supportsHooks = computed(() => store.activeAgent === 'codex' || store.activeAgent === 'claude')
+const supportsHooks = computed(() => (HOOK_AGENTS as string[]).includes(store.activeAgent))
 const isKiro = computed(() => store.activeAgent === 'kiro')
 const isAll = computed(() => store.activeAgent === 'all')
 const hookAction = computed(() => store.hookStatus?.installed ? 'uninstall' : 'install')
-const defaultConfigPath = computed(() =>
-  store.activeAgent === 'claude' ? '~/.claude/settings.json' : '~/.codex/hooks.json',
-)
+const HOOK_CONFIG_PATHS: Record<string, string> = {
+  codex: '~/.codex/hooks.json',
+  claude: '~/.claude/settings.json',
+  grok: '~/.grok/hooks/agent-hub.json',
+  kimi: '~/.kimi-code/config.toml',
+}
+const defaultConfigPath = computed(() => HOOK_CONFIG_PATHS[store.activeAgent] ?? '')
 const runningCount = computed(
   () => store.displaySessions.filter(session => session.status === 'running').length,
 )
 
 function agentLabel(agent: MonitorAgent): string {
   return t(`session_monitor.agent_${agent}`)
+}
+
+/** Card badge: mark the concrete client when the capture channel proves it.
+ *  Every Kiro row today comes from the ~/.kiro/sessions/cli file watcher
+ *  (source === 'terminal'), which is kiro-cli only — the IDE does not write
+ *  there. Codex rows carry hook-detected provenance: the ChatGPT desktop /
+ *  IDE client is marked as such, everything else stays "Codex". */
+function agentBadgeLabel(session: AgentSessionState): string {
+  if (session.agent === 'kiro' && session.source === 'terminal') {
+    return t('session_monitor.agent_kiro_cli')
+  }
+  if (session.agent === 'codex' && session.source === 'chatgpt') {
+    return t('session_monitor.source_chatgpt')
+  }
+  return agentLabel(session.agent)
 }
 
 /** Title of the sessions section: the merged tab has no single agent name. */
@@ -58,9 +79,10 @@ function sourceLabel(session: SessionState): string {
     : t('session_monitor.source_terminal')
 }
 
-/** Platform id of the sessions adapter backing a monitor row's full history. */
+/** Platform id of the sessions adapter backing a monitor row's full history.
+ *  Null when the agent has no sessions adapter. */
 function sessionPlatform(session: { agent: MonitorAgent } | null): string | null {
-  return session ? MONITOR_AGENT_PLATFORM[session.agent] : null
+  return session ? MONITOR_AGENT_PLATFORM[session.agent] ?? null : null
 }
 
 function emptyHint(): string {
@@ -73,7 +95,7 @@ function emptyHint(): string {
       : t('session_monitor.empty_monitor_hint')
   }
   return store.hookStatus?.installed
-    ? t('session_monitor.empty_installed_hint', { agent: agentLabel(store.activeAgent as 'codex' | 'claude') })
+    ? t('session_monitor.empty_installed_hint', { agent: agentLabel(store.activeAgent as MonitorAgent) })
     : t('session_monitor.empty_hook_hint')
 }
 
@@ -127,7 +149,7 @@ onUnmounted(() => store.dispose())
         class="btn"
         :class="hookAction === 'uninstall' ? 'btn-danger' : 'btn-primary'"
         :disabled="store.previewLoading || store.hookLoading"
-        @click="store.openHookPreview(store.activeAgent as 'codex' | 'claude', hookAction)"
+        @click="store.openHookPreview(store.activeAgent as 'codex' | 'claude' | 'grok' | 'kimi', hookAction)"
       >
         {{ hookAction === 'uninstall' ? t('session_monitor.uninstall_hook') : t('session_monitor.install_hook') }}
       </button>
@@ -148,8 +170,8 @@ onUnmounted(() => store.dispose())
         <div class="min-w-0">
           <div class="hook-card__title">
             {{ store.hookStatus?.installed
-              ? t('session_monitor.hook_installed', { agent: agentLabel(store.activeAgent as 'codex' | 'claude') })
-              : t('session_monitor.hook_missing', { agent: agentLabel(store.activeAgent as 'codex' | 'claude') }) }}
+              ? t('session_monitor.hook_installed', { agent: agentLabel(store.activeAgent as MonitorAgent) })
+              : t('session_monitor.hook_missing', { agent: agentLabel(store.activeAgent as MonitorAgent) }) }}
           </div>
           <div class="hook-card__path">
             {{ store.hookStatus?.configPath || defaultConfigPath }}
@@ -189,6 +211,9 @@ onUnmounted(() => store.dispose())
     <p v-if="store.activeAgent === 'codex' && store.hookStatus?.installed" class="monitor-notice monitor-notice--warning">
       {{ t('session_monitor.trust_hint') }}
     </p>
+    <p v-if="(store.activeAgent === 'grok' || store.activeAgent === 'kimi') && store.hookStatus?.installed" class="monitor-notice">
+      {{ t('session_monitor.hook_reload_hint') }}
+    </p>
     <p v-if="store.hookStatus?.issue" class="monitor-notice monitor-notice--warning">
       {{ store.hookStatus.issue }}
     </p>
@@ -215,7 +240,7 @@ onUnmounted(() => store.dispose())
       <SessionCard
         v-for="session in store.displaySessions"
         :key="`${session.agent}-${session.sessionId}`"
-        :badge="agentLabel(session.agent)"
+        :badge="agentBadgeLabel(session)"
         :source="session.source"
         :source-label="sourceLabel(session)"
         :status="session.status"
@@ -223,8 +248,8 @@ onUnmounted(() => store.dispose())
         :delete-note="t('session_monitor.delete_note')"
         :title="session.userPrompt || t('session_monitor.no_prompt')"
         :subtitle="session.cwd || undefined"
-        :deletable="session.status === 'ended'"
-        @open="store.openMessages(session)"
+        :resumable="sessionPlatform(session) !== null"
+        @open="sessionPlatform(session) !== null && store.openMessages(session)"
         @resume="store.openResume(session)"
         @delete="store.deleteSession(session.sessionId, session.agent)"
       >

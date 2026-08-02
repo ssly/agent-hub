@@ -1,4 +1,4 @@
-use super::capture::{CLAUDE_HOOK_ARG, CODEX_HOOK_ARG};
+use super::capture::{CLAUDE_HOOK_ARG, CODEX_HOOK_ARG, GROK_HOOK_ARG, KIMI_HOOK_ARG};
 use super::types::{AgentKind, HookChangePreview, HookDiffLine, HookStatus};
 use serde_json::{json, Map, Value};
 use similar::{ChangeTag, TextDiff};
@@ -37,6 +37,8 @@ fn hook_arg(agent: AgentKind) -> Result<&'static str, String> {
     match agent {
         AgentKind::Codex => Ok(CODEX_HOOK_ARG),
         AgentKind::Claude => Ok(CLAUDE_HOOK_ARG),
+        AgentKind::Grok => Ok(GROK_HOOK_ARG),
+        AgentKind::Kimi => Ok(KIMI_HOOK_ARG),
         // Kiro is covered by read-only file watching: stable kiro-cli 2.x
         // does not load hook configs at all, and injecting agent-embedded
         // hooks would change the user's default agent.
@@ -49,6 +51,11 @@ fn config_path(agent: AgentKind) -> Result<PathBuf, String> {
     match agent {
         AgentKind::Codex => Ok(home.join(".codex").join("hooks.json")),
         AgentKind::Claude => Ok(home.join(".claude").join("settings.json")),
+        // Grok merges every ~/.grok/hooks/*.json (always trusted, no trust
+        // gate), so Agent Hub gets its own managed file instead of editing a
+        // shared one.
+        AgentKind::Grok => Ok(home.join(".grok").join("hooks").join("agent-hub.json")),
+        AgentKind::Kimi => Ok(home.join(".kimi-code").join("config.toml")),
         AgentKind::Kiro => Err("Kiro 会话监听基于文件监听，无需安装 Hook。".to_string()),
     }
 }
@@ -58,6 +65,8 @@ fn config_label(agent: AgentKind) -> &'static str {
         AgentKind::Codex => "Codex Hook 配置文件",
         AgentKind::Claude => "Claude Code 配置文件",
         AgentKind::Kiro => "Kiro Hook 文件",
+        AgentKind::Grok => "Grok Hook 文件",
+        AgentKind::Kimi => "Kimi Code 配置文件",
     }
 }
 
@@ -66,10 +75,15 @@ fn agent_label(agent: AgentKind) -> &'static str {
         AgentKind::Codex => "Codex",
         AgentKind::Claude => "Claude Code",
         AgentKind::Kiro => "Kiro",
+        AgentKind::Grok => "Grok Build",
+        AgentKind::Kimi => "Kimi Code",
     }
 }
 
 pub fn get_hook_status(agent: AgentKind) -> Result<HookStatus, String> {
+    if agent == AgentKind::Kimi {
+        return kimi_hook_status();
+    }
     let path = config_path(agent)?;
     let arg = hook_arg(agent)?;
     let command = expected_command(arg)?;
@@ -135,6 +149,10 @@ pub fn preview_hook_change(
     let arg = hook_arg(agent)?;
     let command = expected_command(arg)?;
     let before = read_existing(&path)?;
+    if agent == AgentKind::Kimi {
+        let after = kimi_render_after(action, &command, &before);
+        return Ok(build_preview(action, &path, &command, &before, &after));
+    }
     let after = render_after(agent, action, &path, &command, arg, &before)?;
     Ok(build_preview(action, &path, &command, &before, &after))
 }
@@ -155,7 +173,11 @@ pub fn apply_hook_change(
         ));
     }
 
-    let after = render_after(agent, action, &path, &command, arg, &before)?;
+    let after = if agent == AgentKind::Kimi {
+        kimi_render_after(action, &command, &before)
+    } else {
+        render_after(agent, action, &path, &command, arg, &before)?
+    };
     if before != after {
         if action == HookAction::Install {
             if let Some(parent) = path.parent() {
@@ -440,6 +462,140 @@ fn read_existing(path: &Path) -> Result<String, String> {
     }
 }
 
+// --- Kimi Code (TOML) ------------------------------------------------------
+// Kimi reads `[[hooks]]` tables from ~/.kimi-code/config.toml — the user's
+// main settings file — so edits are text-based: only the managed blocks
+// (identified by our hook arg) are removed/appended. Every other byte —
+// comments, formatting, unrelated tables — survives untouched.
+
+fn kimi_hook_status() -> Result<HookStatus, String> {
+    let path = config_path(AgentKind::Kimi)?;
+    let command = expected_command(KIMI_HOOK_ARG)?;
+    if !path.exists() {
+        return Ok(HookStatus {
+            installed: false,
+            config_path: path.display().to_string(),
+            command,
+            managed_handler_count: 0,
+            issue: None,
+        });
+    }
+
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("unable to read {}: {error}", path.display()))?;
+    let managed = kimi_managed_entries(&content)?;
+    let prompt_commands: Vec<&str> = managed
+        .iter()
+        .filter(|(event, _)| event == USER_PROMPT_SUBMIT)
+        .map(|(_, command)| command.as_str())
+        .collect();
+    let stop_commands: Vec<&str> = managed
+        .iter()
+        .filter(|(event, _)| event == STOP)
+        .map(|(_, command)| command.as_str())
+        .collect();
+    let installed = managed.len() == 2
+        && prompt_commands.len() == 1
+        && stop_commands.len() == 1
+        && prompt_commands[0] == command
+        && stop_commands[0] == command;
+    let issue = if installed || managed.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "{} Hook 配置不完整或命令路径已变化，可重新安装进行修复。",
+            agent_label(AgentKind::Kimi)
+        ))
+    };
+
+    Ok(HookStatus {
+        installed,
+        config_path: path.display().to_string(),
+        command,
+        managed_handler_count: managed.len(),
+        issue,
+    })
+}
+
+/// (event, command) pairs of the `[[hooks]]` tables we manage.
+fn kimi_managed_entries(content: &str) -> Result<Vec<(String, String)>, String> {
+    let doc: toml::Value = toml::from_str(content)
+        .map_err(|error| format!("Kimi Code 配置文件不是有效 TOML：{error}"))?;
+    let Some(tables) = doc.get("hooks").and_then(toml::Value::as_array) else {
+        return Ok(Vec::new());
+    };
+    let mut entries = Vec::new();
+    for table in tables {
+        let command = table.get("command").and_then(toml::Value::as_str).unwrap_or("");
+        if !command.split_whitespace().any(|part| part == KIMI_HOOK_ARG) {
+            continue;
+        }
+        let event = table
+            .get("event")
+            .and_then(toml::Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        entries.push((event, command.to_string()));
+    }
+    Ok(entries)
+}
+
+fn kimi_render_after(action: HookAction, command: &str, before: &str) -> String {
+    let mut cleaned = remove_kimi_managed_blocks(before);
+    if action == HookAction::Uninstall {
+        return cleaned;
+    }
+    if !cleaned.is_empty() {
+        cleaned.push('\n');
+    }
+    cleaned.push_str(&format!(
+        "[[hooks]]\nevent = \"{USER_PROMPT_SUBMIT}\"\ncommand = \"{}\"\ntimeout = 10\n\n[[hooks]]\nevent = \"{STOP}\"\ncommand = \"{}\"\ntimeout = 10\n",
+        kimi_toml_escape(command),
+        kimi_toml_escape(command),
+    ));
+    cleaned
+}
+
+/// Escape a command line for embedding in a TOML basic string.
+fn kimi_toml_escape(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Drop every `[[hooks]]` table block containing our hook arg, preserving the
+/// rest of the file byte-for-byte.
+fn remove_kimi_managed_blocks(before: &str) -> String {
+    let mut segments: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for line in before.split_inclusive('\n') {
+        if line.trim_start().starts_with('[') && !current.is_empty() {
+            segments.push(std::mem::take(&mut current));
+        }
+        current.push_str(line);
+    }
+    if !current.is_empty() {
+        segments.push(current);
+    }
+
+    let mut out = String::new();
+    for segment in segments {
+        let is_managed_hook_block =
+            segment.trim_start().starts_with("[[hooks]]") && segment.contains(KIMI_HOOK_ARG);
+        if !is_managed_hook_block {
+            out.push_str(&segment);
+        }
+    }
+    // Removing the last block can leave trailing blank lines behind; keep a
+    // single trailing newline.
+    let trimmed = out.trim_end();
+    if trimmed.is_empty() {
+        String::new()
+    } else {
+        let mut out = trimmed.to_string();
+        out.push('\n');
+        out
+    }
+}
+
 fn resolve_write_target(path: &Path) -> Result<PathBuf, String> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
@@ -644,6 +800,56 @@ mod tests {
         // Kiro monitoring is file-watching only; no hook target exists.
         assert!(config_path(AgentKind::Kiro).is_err());
         assert!(hook_arg(AgentKind::Kiro).is_err());
+    }
+
+    #[test]
+    fn kimi_install_appends_two_managed_blocks_and_preserves_config() {
+        let before = "model = \"k2\"\n\n[[hooks]]\nevent = \"Notification\"\ncommand = \"terminal-notifier -message done\"\n";
+        let after = kimi_render_after(
+            HookAction::Install,
+            "'/Applications/Agent Hub' --agent-hub-kimi-hook",
+            before,
+        );
+        assert!(after.contains("model = \"k2\""));
+        assert!(after.contains("terminal-notifier"));
+        let entries = kimi_managed_entries(&after).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().any(|(event, _)| event == USER_PROMPT_SUBMIT));
+        assert!(entries.iter().any(|(event, _)| event == STOP));
+    }
+
+    #[test]
+    fn kimi_uninstall_removes_only_managed_blocks() {
+        let before = "model = \"k2\"\n\n[[hooks]]\nevent = \"Notification\"\ncommand = \"terminal-notifier -message done\"\n";
+        let installed = kimi_render_after(
+            HookAction::Install,
+            "agent-hub --agent-hub-kimi-hook",
+            before,
+        );
+        let after = kimi_render_after(
+            HookAction::Uninstall,
+            "agent-hub --agent-hub-kimi-hook",
+            &installed,
+        );
+        assert!(after.contains("model = \"k2\""));
+        assert!(after.contains("terminal-notifier"));
+        assert!(!after.contains(KIMI_HOOK_ARG));
+        // Only the user's own hook block survives.
+        assert_eq!(after.matches("[[hooks]]").count(), 1);
+    }
+
+    #[test]
+    fn kimi_managed_entries_ignores_foreign_hooks() {
+        let content = "[[hooks]]\nevent = \"Notification\"\ncommand = \"notify-send done\"\n";
+        assert!(kimi_managed_entries(content).unwrap().is_empty());
+    }
+
+    #[test]
+    fn kimi_toml_escape_handles_backslashes_and_quotes() {
+        assert_eq!(
+            kimi_toml_escape("\"C:\\Tools\\Agent Hub.exe\" --agent-hub-kimi-hook"),
+            "\\\"C:\\\\Tools\\\\Agent Hub.exe\\\" --agent-hub-kimi-hook"
+        );
     }
 
     #[test]

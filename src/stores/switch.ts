@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import * as api from '@/lib/api'
-import type { CodexUsage, CodexResetCredits, GrokUsage, KimiUsage } from '@/lib/api'
+import type { ClaudeUsage, CodexUsage, CodexResetCredits, GrokUsage, KimiUsage } from '@/lib/api'
 
 export const useSwitchStore = defineStore('switch', () => {
   const selectedAgent = ref<string | null>(localStorage.getItem('ah-switch-agent'))
@@ -37,6 +37,14 @@ export const useSwitchStore = defineStore('switch', () => {
   const kimiUsageLoading = ref(false)
   const kimiUsageError = ref<string | null>(null)
   const kimiUsageLastQuery = ref<number>(0)
+
+  // Claude Code official-login (OAuth subscription) usage. Independent of the
+  // switchable custom-token pool: this always reflects the official /login
+  // account whose credentials live in the keychain/credentials file.
+  const claudeUsage = ref<ClaudeUsage | null>(null)
+  const claudeUsageLoading = ref(false)
+  const claudeUsageError = ref<string | null>(null)
+  const claudeUsageLastQuery = ref<number>(0)
 
   // Edit modal state
   const editModalOpen = ref(false)
@@ -120,6 +128,42 @@ export const useSwitchStore = defineStore('switch', () => {
     }
   }
 
+  async function refreshClaudeUsage(force = false) {
+    if (selectedAgent.value !== 'claude-code' || claudeUsageLoading.value) return
+    claudeUsageLoading.value = true
+    claudeUsageError.value = null
+    try {
+      claudeUsage.value = await api.getClaudeUsage(force)
+      claudeUsageLastQuery.value = (claudeUsage.value.fetched_at || Math.floor(Date.now() / 1000)) * 1000
+    } catch (reason: any) {
+      claudeUsageError.value = String(reason?.message || reason)
+      claudeUsage.value = null
+      claudeUsageLastQuery.value = 0
+    } finally {
+      claudeUsageLoading.value = false
+    }
+  }
+
+  // The tray popup emits `usage-refreshed` after a successful query; re-pull
+  // the shared backend cache (force=false, already fresh) so an open Accounts
+  // view shows the same numbers. Refreshers no-op for non-selected agents.
+  let usageListenerReady = false
+  async function ensureUsageListener() {
+    if (usageListenerReady || import.meta.env.MODE === 'web') return
+    usageListenerReady = true
+    try {
+      const { listen } = await import('@tauri-apps/api/event')
+      await listen<{ provider: string }>('usage-refreshed', event => {
+        if (event.payload.provider === 'codex') void refreshCodexUsage(false)
+        if (event.payload.provider === 'grok-build') void refreshGrokUsage(false)
+        if (event.payload.provider === 'kimi-code') void refreshKimiUsage(false)
+        if (event.payload.provider === 'claude-code') void refreshClaudeUsage(false)
+      })
+    } catch {
+      usageListenerReady = false
+    }
+  }
+
   async function loadProfiles() {
     if (!selectedAgent.value) return
     // Codex, Grok Build, and Kimi Code are read-only: one current CLI account,
@@ -146,10 +190,12 @@ export const useSwitchStore = defineStore('switch', () => {
   // Entering the selected account section loads the shared usage snapshot
   // (backend serves cache when younger than 10 minutes) or Claude profiles.
   async function loadSelectedAgent() {
+    void ensureUsageListener()
     await loadProfiles()
     if (selectedAgent.value === 'codex') await refreshCodexUsage(false)
     if (selectedAgent.value === 'grok-build') await refreshGrokUsage(false)
     if (selectedAgent.value === 'kimi-code') await refreshKimiUsage(false)
+    if (selectedAgent.value === 'claude-code') await refreshClaudeUsage(false)
   }
 
   async function openEditModal(profile: any) {
@@ -228,8 +274,9 @@ export const useSwitchStore = defineStore('switch', () => {
     codexUsage, codexUsageLoading, codexUsageError, codexUsageLastQuery, codexResetCredits,
     grokUsage, grokUsageLoading, grokUsageError, grokUsageLastQuery,
     kimiUsage, kimiUsageLoading, kimiUsageError, kimiUsageLastQuery,
+    claudeUsage, claudeUsageLoading, claudeUsageError, claudeUsageLastQuery,
     selectAgent, loadProfiles, loadSelectedAgent, openEditModal, closeEditModal, resetState,
-    refreshCodexUsage, refreshGrokUsage, refreshKimiUsage,
+    refreshCodexUsage, refreshGrokUsage, refreshKimiUsage, refreshClaudeUsage,
     openClearActiveModal, closeClearActiveModal, deleteActiveAuth,
   }
 })

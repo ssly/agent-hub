@@ -1669,6 +1669,92 @@ pub fn get_kiro_monitor_status(
 }
 
 #[tauri::command]
+pub fn get_grok_session_monitor_snapshot(
+    monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
+) -> MonitorSnapshot {
+    monitor.snapshot(AgentKind::Grok)
+}
+
+#[tauri::command]
+pub fn delete_grok_session_monitor_session(
+    monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
+    session_id: String,
+) -> Result<(), CommandError> {
+    monitor
+        .remove_session(AgentKind::Grok, &session_id)
+        .map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn get_grok_hook_status() -> Result<crate::session_monitor::HookStatus, CommandError> {
+    crate::session_monitor::get_hook_status(AgentKind::Grok).map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn preview_grok_hook_change(
+    action: String,
+) -> Result<crate::session_monitor::HookChangePreview, CommandError> {
+    crate::session_monitor::preview_hook_change(AgentKind::Grok, parse_hook_action(&action)?)
+        .map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn apply_grok_hook_change(
+    action: String,
+    expected_before_hash: String,
+) -> Result<crate::session_monitor::HookStatus, CommandError> {
+    crate::session_monitor::apply_hook_change(
+        AgentKind::Grok,
+        parse_hook_action(&action)?,
+        &expected_before_hash,
+    )
+    .map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn get_kimi_session_monitor_snapshot(
+    monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
+) -> MonitorSnapshot {
+    monitor.snapshot(AgentKind::Kimi)
+}
+
+#[tauri::command]
+pub fn delete_kimi_session_monitor_session(
+    monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
+    session_id: String,
+) -> Result<(), CommandError> {
+    monitor
+        .remove_session(AgentKind::Kimi, &session_id)
+        .map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn get_kimi_hook_status() -> Result<crate::session_monitor::HookStatus, CommandError> {
+    crate::session_monitor::get_hook_status(AgentKind::Kimi).map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn preview_kimi_hook_change(
+    action: String,
+) -> Result<crate::session_monitor::HookChangePreview, CommandError> {
+    crate::session_monitor::preview_hook_change(AgentKind::Kimi, parse_hook_action(&action)?)
+        .map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn apply_kimi_hook_change(
+    action: String,
+    expected_before_hash: String,
+) -> Result<crate::session_monitor::HookStatus, CommandError> {
+    crate::session_monitor::apply_hook_change(
+        AgentKind::Kimi,
+        parse_hook_action(&action)?,
+        &expected_before_hash,
+    )
+    .map_err(CommandError::General)
+}
+
+#[tauri::command]
 pub fn set_kiro_monitor_enabled(
     monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
     enabled: bool,

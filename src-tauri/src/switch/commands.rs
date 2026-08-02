@@ -20,6 +20,7 @@ struct UsageCacheEntry<T> {
 static CODEX_USAGE_CACHE: Mutex<Option<UsageCacheEntry<CodexTraySnapshot>>> = Mutex::new(None);
 static GROK_USAGE_CACHE: Mutex<Option<UsageCacheEntry<GrokUsageResponse>>> = Mutex::new(None);
 static KIMI_USAGE_CACHE: Mutex<Option<UsageCacheEntry<KimiUsageResponse>>> = Mutex::new(None);
+static CLAUDE_USAGE_CACHE: Mutex<Option<UsageCacheEntry<ClaudeUsageResponse>>> = Mutex::new(None);
 
 fn usage_unix_now() -> u64 {
     SystemTime::now()
@@ -65,6 +66,16 @@ fn apply_grok_usage_timers(usage: &mut GrokUsageResponse, now: u64) {
 }
 
 fn apply_kimi_usage_timers(usage: &mut KimiUsageResponse, now: u64) {
+    refresh_usage_windows(&mut usage.usage_windows, now);
+    if let Some(window) = usage.window_5h.as_mut() {
+        refresh_usage_window_timers(window, now);
+    }
+    if let Some(window) = usage.window_weekly.as_mut() {
+        refresh_usage_window_timers(window, now);
+    }
+}
+
+fn apply_claude_usage_timers(usage: &mut ClaudeUsageResponse, now: u64) {
     refresh_usage_windows(&mut usage.usage_windows, now);
     if let Some(window) = usage.window_5h.as_mut() {
         refresh_usage_window_timers(window, now);
@@ -251,13 +262,31 @@ pub fn list_switch_profiles(agent_type: String) -> Result<ListSwitchResponse, St
     let live_content = config_path
         .as_ref()
         .and_then(|p| std::fs::read_to_string(p).ok());
-    let active_identity = live_content
+
+    // Detect the live auth shape. Token mode: settings.json carries
+    // env.ANTHROPIC_AUTH_TOKEN (custom account). Otherwise, when official
+    // OAuth credentials exist, the identity is the oauthAccount UUID (falling
+    // back to the account email) from ~/.claude.json.
+    let live_token_identity = live_content
         .as_ref()
         .and_then(|c| extract_account_identity(&agent_type, c));
-    let current_key = live_content
-        .as_ref()
-        .and_then(|c| extract_key(&agent_type, c))
-        .map(|k| mask_key(&k));
+    let oauth_mode = agent_type == "claude-code" && live_token_identity.is_none();
+    let oauth_identity = if oauth_mode {
+        claude_oauth_identity()
+    } else {
+        None
+    };
+    let (active_identity, current_key) = if oauth_mode {
+        (oauth_identity, None)
+    } else {
+        (
+            live_token_identity,
+            live_content
+                .as_ref()
+                .and_then(|c| extract_key(&agent_type, c))
+                .map(|k| mask_key(&k)),
+        )
+    };
 
     // First pass: read every saved profile and derive its stable identity.
     struct RawProfile {
@@ -287,9 +316,21 @@ pub fn list_switch_profiles(agent_type: String) -> Result<ListSwitchResponse, St
                 Ok(c) => c,
                 Err(_) => continue,
             };
+            // OAuth profiles carry their identity in meta.json (captured at
+            // save time); token profiles derive it from the stored config.
+            let identity = if meta.kind == "oauth" {
+                meta.identity.clone()
+            } else {
+                extract_account_identity(&agent_type, &content)
+            };
+            let key = if meta.kind == "oauth" {
+                None
+            } else {
+                extract_key(&agent_type, &content).map(|k| mask_key(&k))
+            };
             raw.push(RawProfile {
-                identity: extract_account_identity(&agent_type, &content),
-                key: extract_key(&agent_type, &content).map(|k| mask_key(&k)),
+                identity,
+                key,
                 meta,
             });
         }
@@ -299,11 +340,19 @@ pub fn list_switch_profiles(agent_type: String) -> Result<ListSwitchResponse, St
     // stable identity, persist it so the current account always appears in the
     // list (and gets selected). This never duplicates a refresh-stale snapshot
     // because the comparison is by identity, not by secret/hash.
-    if let (Some(identity), Some(_)) = (&active_identity, &live_content) {
+    if let Some(identity) = &active_identity {
         let already_saved = raw.iter().any(|r| r.identity.as_deref() == Some(identity));
         if !already_saved {
-            let note = extract_account_name(&agent_type, live_content.as_ref().unwrap())
-                .unwrap_or_default();
+            let note = if oauth_mode {
+                read_claude_oauth_account()
+                    .and_then(|a| a.email)
+                    .unwrap_or_default()
+            } else {
+                live_content
+                    .as_ref()
+                    .and_then(|c| extract_account_name(&agent_type, c))
+                    .unwrap_or_default()
+            };
             if let Ok(id) = save_current_auth_profile_inner(&agent_type, note.clone(), true) {
                 raw.push(RawProfile {
                     identity: active_identity.clone(),
@@ -312,6 +361,16 @@ pub fn list_switch_profiles(agent_type: String) -> Result<ListSwitchResponse, St
                         id,
                         note,
                         saved_at: now_iso(),
+                        kind: if oauth_mode {
+                            "oauth".to_string()
+                        } else {
+                            "token".to_string()
+                        },
+                        identity: if oauth_mode {
+                            active_identity.clone()
+                        } else {
+                            None
+                        },
                     },
                 });
             }
@@ -330,6 +389,7 @@ pub fn list_switch_profiles(agent_type: String) -> Result<ListSwitchResponse, St
             note: r.meta.note,
             saved_at: r.meta.saved_at,
             key: r.key,
+            kind: r.meta.kind,
         })
         .collect();
 
@@ -364,6 +424,19 @@ fn save_current_auth_profile_inner(
     allow_duplicate: bool,
 ) -> Result<String, String> {
     let src = agent_config_path(agent_type)?;
+    // Claude Code OAuth mode: settings.json has no env token but official
+    // /login credentials exist — save the credential JSON instead of the
+    // settings file.
+    if agent_type == "claude-code" {
+        let has_token = std::fs::read_to_string(&src)
+            .ok()
+            .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
+            .and_then(|v| extract_claude_auth_token(&v))
+            .is_some();
+        if !has_token {
+            return save_claude_oauth_profile(agent_type, note, allow_duplicate);
+        }
+    }
     if !src.exists() {
         return Err("no_active_auth".to_string());
     }
@@ -385,6 +458,69 @@ fn save_current_auth_profile_inner(
         id: id.clone(),
         note,
         saved_at: now_iso(),
+        kind: "token".to_string(),
+        identity: None,
+    };
+    let meta_str = serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join("meta.json"), meta_str).map_err(|e| e.to_string())?;
+
+    Ok(id)
+}
+
+/// Persist the current official Claude Code OAuth login as a profile. The raw
+/// credential JSON (keychain item or `.credentials.json`) is stored verbatim as
+/// the profile's `config.json`; the stable identity (oauthAccount UUID, else
+/// email) goes into `meta.json` so the active profile can be matched later
+/// even after the access token rotates.
+fn save_claude_oauth_profile(
+    agent_type: &str,
+    note: String,
+    allow_duplicate: bool,
+) -> Result<String, String> {
+    let credentials = read_claude_oauth_credentials_raw().ok_or_else(|| {
+        "未找到 Claude Code 登录凭证。请先在 Claude Code 中运行 /login。".to_string()
+    })?;
+    let identity = claude_oauth_identity();
+    let note = if note.trim().is_empty() {
+        read_claude_oauth_account()
+            .and_then(|a| a.email)
+            .unwrap_or(note)
+    } else {
+        note
+    };
+
+    if !allow_duplicate {
+        if let Some(identity) = &identity {
+            let dir = profiles_dir(agent_type)?;
+            if let Ok(entries) = std::fs::read_dir(&dir) {
+                for entry in entries.flatten() {
+                    let meta_path = entry.path().join("meta.json");
+                    let Ok(meta_str) = std::fs::read_to_string(&meta_path) else {
+                        continue;
+                    };
+                    let Ok(meta) = serde_json::from_str::<ProfileMeta>(&meta_str) else {
+                        continue;
+                    };
+                    if meta.kind == "oauth" && meta.identity.as_deref() == Some(identity) {
+                        return Err("duplicate_key".to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    let id = Uuid::new_v4().to_string();
+    let dir = profiles_dir(agent_type)?.join(&id);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+
+    std::fs::write(dir.join("config.json"), credentials.as_bytes()).map_err(|e| e.to_string())?;
+
+    let meta = ProfileMeta {
+        id: id.clone(),
+        note,
+        saved_at: now_iso(),
+        kind: "oauth".to_string(),
+        identity,
     };
     let meta_str = serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?;
     std::fs::write(dir.join("meta.json"), meta_str).map_err(|e| e.to_string())?;
@@ -418,6 +554,8 @@ pub fn add_auth_profile(
         id: id.clone(),
         note,
         saved_at: now_iso(),
+        kind: "token".to_string(),
+        identity: None,
     };
     let meta_str = serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?;
     std::fs::write(dir.join("meta.json"), meta_str).map_err(|e| e.to_string())?;
@@ -440,6 +578,29 @@ pub fn switch_auth_profile(agent_type: String, id: String) -> Result<(), String>
     }
 
     if agent_type == "claude-code" {
+        let kind = std::fs::read_to_string(dir.join("meta.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str::<ProfileMeta>(&s).ok())
+            .map(|m| m.kind)
+            .unwrap_or_else(|| "token".to_string());
+
+        if kind == "oauth" {
+            // Write the saved credential JSON back to where Claude Code reads
+            // it (macOS keychain, or `.credentials.json` as the cross-platform
+            // fallback), then strip env.ANTHROPIC_AUTH_TOKEN from settings.json
+            // so the official OAuth login takes effect.
+            let credentials = std::fs::read_to_string(&src).map_err(|e| e.to_string())?;
+            write_claude_oauth_credentials(&credentials)?;
+            if dest.exists() {
+                let current_str = std::fs::read_to_string(&dest).map_err(|e| e.to_string())?;
+                let stripped = remove_claude_env_token(&current_str)?;
+                let tmp = dest.with_extension("json.tmp");
+                std::fs::write(&tmp, stripped.as_bytes()).map_err(|e| e.to_string())?;
+                crate::paths::replace_file(&tmp, &dest).map_err(|e| e.to_string())?;
+            }
+            return Ok(());
+        }
+
         let profile_str = std::fs::read_to_string(&src).map_err(|e| e.to_string())?;
         let mut profile_val: serde_json::Value =
             serde_json::from_str(&profile_str).map_err(|e| e.to_string())?;
@@ -532,6 +693,9 @@ pub fn update_auth_profile_content(
 
 #[tauri::command]
 pub fn clear_active_auth(agent_type: String) -> Result<String, String> {
+    if agent_type == "claude-code" && claude_oauth_active() {
+        return Err("官方登录账号请先在 Claude Code 中 /logout".to_string());
+    }
     let src = agent_config_path(&agent_type)?;
     if !src.exists() {
         return Err("no_active_auth".to_string());
@@ -552,6 +716,11 @@ pub fn clear_active_auth(agent_type: String) -> Result<String, String> {
 /// Unlike `clear_active_auth`, this never touches `~/.agent-hub/switch/<agent>/`.
 #[tauri::command]
 pub fn delete_active_auth(agent_type: String) -> Result<(), String> {
+    // Official OAuth logins live in the macOS keychain / .credentials.json —
+    // never delete those from here; the user must /logout in Claude Code.
+    if agent_type == "claude-code" && claude_oauth_active() {
+        return Err("官方登录账号请先在 Claude Code 中 /logout".to_string());
+    }
     // Validate the agent type up front so we surface a clear error rather than
     // silently deleting an unrelated file.
     let path = agent_config_path(&agent_type)?;
@@ -1007,6 +1176,7 @@ pub struct UsageProviderAvailability {
     pub codex: bool,
     pub grok_build: bool,
     pub kimi_code: bool,
+    pub claude_code: bool,
 }
 
 /// Report which quota providers have usable local credentials without making
@@ -1019,11 +1189,13 @@ pub fn get_usage_provider_availability() -> UsageProviderAvailability {
         .and_then(|home| resolve_grok_auth(&home))
         .is_ok();
     let kimi_code = resolve_kimi_credential().is_ok();
+    let claude_code = resolve_claude_oauth().is_ok();
 
     UsageProviderAvailability {
         codex,
         grok_build,
         kimi_code,
+        claude_code,
     }
 }
 
@@ -1600,6 +1772,464 @@ pub async fn get_kimi_usage(force: Option<bool>) -> Result<KimiUsageResponse, St
     Ok(usage)
 }
 
+// --- Claude Code quota via the official OAuth login ---------------------------
+//
+// Authentication model: Claude Code `/login` stores OAuth subscription
+// credentials in the macOS login keychain (service `Claude Code-credentials`)
+// or, on Linux/Windows and as a fallback, in
+// `<CLAUDE_CONFIG_DIR|~/.claude>/.credentials.json`. We only ever *read* these
+// (except for the explicit account-switch write-back) and never call the
+// refresh endpoint: when the ~8h access token expires we ask the user to open
+// Claude Code once so it refreshes itself, avoiding any refresh-token
+// rotation race with the official client.
+
+const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+const CLAUDE_KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
+
+#[derive(serde::Serialize, Debug, Clone)]
+pub struct ClaudeUsageResponse {
+    /// Email from `~/.claude.json` `oauthAccount.emailAddress`, display-only.
+    pub account_name: Option<String>,
+    /// `subscriptionType` from the credential JSON (`max`/`pro`/…), or
+    /// "unknown" when the credential does not carry one.
+    pub plan_type: String,
+    /// The 5-hour rate-limit window (`five_hour`).
+    pub window_5h: Option<UsageWindow>,
+    /// The weekly quota window (`seven_day`).
+    pub window_weekly: Option<UsageWindow>,
+    /// Windows in ascending order, for any UI that iterates generically.
+    pub usage_windows: Vec<UsageWindow>,
+    pub fetched_at: u64,
+}
+
+/// Resolved Claude Code OAuth credential: the bearer token plus its expiry
+/// (unix milliseconds; 0 = unknown, e.g. from the env var) and display fields.
+struct ClaudeOauth {
+    access_token: String,
+    expires_at_ms: u64,
+    subscription_type: Option<String>,
+    account_name: Option<String>,
+}
+
+/// Identity fields of the official login, from `~/.claude.json` `oauthAccount`.
+struct ClaudeOauthAccount {
+    account_uuid: Option<String>,
+    email: Option<String>,
+}
+
+/// Read `~/.claude.json` and pull the top-level `oauthAccount` identity block.
+/// Returns `None` when the file or the block is absent (never logged in via
+/// the official flow).
+fn read_claude_oauth_account() -> Option<ClaudeOauthAccount> {
+    let home = dirs::home_dir()?;
+    let content = std::fs::read_to_string(home.join(".claude.json")).ok()?;
+    let val: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let account = val.get("oauthAccount")?;
+    let non_empty = |key: &str| {
+        account
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    Some(ClaudeOauthAccount {
+        account_uuid: non_empty("accountUuid"),
+        email: non_empty("emailAddress"),
+    })
+}
+
+/// The Claude Code config directory: `CLAUDE_CONFIG_DIR` or `~/.claude`.
+fn claude_config_dir() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR") {
+        let trimmed = dir.trim();
+        if !trimmed.is_empty() {
+            return Some(PathBuf::from(trimmed));
+        }
+    }
+    dirs::home_dir().map(|home| home.join(".claude"))
+}
+
+/// Parse the credential JSON shared by the keychain item and
+/// `.credentials.json`: `{ "claudeAiOauth": { accessToken, expiresAt, … } }`.
+/// Pure so it can be unit-tested; returns (access_token, expires_at_ms,
+/// subscription_type).
+fn parse_claude_credentials(content: &str) -> Result<(String, u64, Option<String>), String> {
+    let val: serde_json::Value =
+        serde_json::from_str(content).map_err(|e| format!("解析 Claude 凭证失败: {e}"))?;
+    let oauth = val
+        .get("claudeAiOauth")
+        .ok_or_else(|| "Claude 凭证缺少 claudeAiOauth 字段".to_string())?;
+    let access_token = oauth
+        .get("accessToken")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Claude 凭证缺少 accessToken".to_string())?
+        .to_string();
+    let expires_at_ms = oauth
+        .get("expiresAt")
+        .and_then(|v| v.as_u64().or_else(|| v.as_f64().map(|f| f as u64)))
+        .unwrap_or(0);
+    let subscription_type = oauth
+        .get("subscriptionType")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    Ok((access_token, expires_at_ms, subscription_type))
+}
+
+/// Read the credential JSON from the macOS login keychain via the `security`
+/// CLI. May trigger a system authorization prompt; any failure (non-zero exit,
+/// timeout, empty output) falls back to the file-based credential.
+#[cfg(target_os = "macos")]
+fn read_keychain_credentials() -> Option<String> {
+    use std::io::Read as _;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new("security")
+        .args([
+            "find-generic-password",
+            "-s",
+            CLAUDE_KEYCHAIN_SERVICE,
+            "-w",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !status.success() {
+                    return None;
+                }
+                let mut out = String::new();
+                child.stdout.take()?.read_to_string(&mut out).ok()?;
+                let trimmed = out.trim();
+                if trimmed.is_empty() {
+                    return None;
+                }
+                return Some(trimmed.to_string());
+            }
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(_) => return None,
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn read_keychain_credentials() -> Option<String> {
+    None
+}
+
+/// Read the raw credential JSON from keychain or `.credentials.json`, without
+/// the `CLAUDE_CODE_OAUTH_TOKEN` env override (which has no full JSON to save).
+/// Used by the account-switch save path.
+fn read_claude_oauth_credentials_raw() -> Option<String> {
+    if let Some(raw) = read_keychain_credentials() {
+        return Some(raw);
+    }
+    let path = claude_config_dir()?.join(".credentials.json");
+    std::fs::read_to_string(path).ok()
+}
+
+/// Resolve the current official Claude Code OAuth credential, read-only.
+/// Priority: `CLAUDE_CODE_OAUTH_TOKEN` env var → macOS keychain →
+/// `.credentials.json`.
+fn resolve_claude_oauth() -> Result<ClaudeOauth, String> {
+    let account_name = read_claude_oauth_account().and_then(|a| a.email);
+
+    if let Ok(token) = std::env::var("CLAUDE_CODE_OAUTH_TOKEN") {
+        let token = token.trim();
+        if !token.is_empty() {
+            return Ok(ClaudeOauth {
+                access_token: token.to_string(),
+                expires_at_ms: 0,
+                subscription_type: None,
+                account_name,
+            });
+        }
+    }
+
+    if let Some(raw) = read_claude_oauth_credentials_raw() {
+        let (access_token, expires_at_ms, subscription_type) = parse_claude_credentials(&raw)?;
+        return Ok(ClaudeOauth {
+            access_token,
+            expires_at_ms,
+            subscription_type,
+            account_name,
+        });
+    }
+
+    Err("未找到 Claude Code 登录凭证。请先在 Claude Code 中运行 /login。".to_string())
+}
+
+/// Stable identity of the current official OAuth login: the
+/// `oauthAccount.accountUuid`, falling back to the email. Returns `None` when
+/// no usable OAuth credential exists (so token mode / signed-out stays
+/// distinguishable).
+fn claude_oauth_identity() -> Option<String> {
+    resolve_claude_oauth().ok()?;
+    read_claude_oauth_account().and_then(|a| a.account_uuid.or(a.email))
+}
+
+/// Whether the live Claude Code auth is an official OAuth login: settings.json
+/// carries no env token, but OAuth credentials exist. Used to guard the
+/// destructive clear/delete paths.
+fn claude_oauth_active() -> bool {
+    let has_token = agent_config_path("claude-code")
+        .ok()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
+        .and_then(|v| extract_claude_auth_token(&v))
+        .is_some();
+    !has_token && resolve_claude_oauth().is_ok()
+}
+
+/// Remove `env.ANTHROPIC_AUTH_TOKEN` from a settings.json document, preserving
+/// every other field. A now-empty `env` object is dropped entirely.
+fn remove_claude_env_token(content: &str) -> Result<String, String> {
+    let mut val: serde_json::Value =
+        serde_json::from_str(content).map_err(|e| format!("解析 settings.json 失败: {e}"))?;
+    if let Some(obj) = val.as_object_mut() {
+        let drop_env = match obj.get_mut("env").and_then(|e| e.as_object_mut()) {
+            Some(env) => {
+                env.remove("ANTHROPIC_AUTH_TOKEN");
+                env.is_empty()
+            }
+            None => false,
+        };
+        if drop_env {
+            obj.remove("env");
+        }
+    }
+    serde_json::to_string_pretty(&val).map_err(|e| e.to_string())
+}
+
+/// Write a credential JSON back to the macOS keychain (`security
+/// add-generic-password -U` upserts the Claude Code item). Returns false on
+/// any failure so the caller falls back to the file-based credential.
+#[cfg(target_os = "macos")]
+fn write_keychain_credentials(json: &str) -> bool {
+    use std::process::{Command, Stdio};
+
+    let user = std::env::var("USER")
+        .ok()
+        .filter(|u| !u.trim().is_empty())
+        .unwrap_or_else(|| "claude".to_string());
+    Command::new("security")
+        .args([
+            "add-generic-password",
+            "-U",
+            "-s",
+            CLAUDE_KEYCHAIN_SERVICE,
+            "-a",
+            &user,
+            "-w",
+            json,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn write_keychain_credentials(_json: &str) -> bool {
+    false
+}
+
+/// Persist an OAuth credential JSON so Claude Code picks it up: macOS keychain
+/// first, atomically-written `.credentials.json` (mode 0600) otherwise. This
+/// is the only place Agent Hub ever *writes* Claude OAuth credentials.
+fn write_claude_oauth_credentials(json: &str) -> Result<(), String> {
+    // Light validation: never write back something Claude Code cannot parse.
+    parse_claude_credentials(json)?;
+
+    if write_keychain_credentials(json) {
+        return Ok(());
+    }
+
+    let dir = claude_config_dir().ok_or_else(|| "无法确定用户主目录".to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(".credentials.json");
+    let tmp = dir.join(".credentials.json.tmp");
+    std::fs::write(&tmp, json.as_bytes()).map_err(|e| format!("写入 Claude 凭证失败: {e}"))?;
+    crate::paths::replace_file(&tmp, &path).map_err(|e| format!("写入 Claude 凭证失败: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+/// Normalize a `utilization` value to a 0–100 integer percent. The API emits
+/// 0–100 floats; values ≤ 1 are defensively treated as a 0–1 ratio.
+fn claude_utilization_percent(node: Option<&serde_json::Value>) -> Option<u8> {
+    let raw = node?.as_f64()?;
+    let percent = if raw <= 1.0 { raw * 100.0 } else { raw };
+    Some(percent.round().clamp(0.0, 100.0) as u8)
+}
+
+/// Parse an ISO-8601 `resets_at` timestamp into unix seconds.
+fn claude_reset_unix(node: Option<&serde_json::Value>) -> Option<u64> {
+    let text = node?.as_str()?;
+    chrono::DateTime::parse_from_rfc3339(text)
+        .ok()
+        .and_then(|date| u64::try_from(date.timestamp()).ok())
+}
+
+/// Build a usage window from a `{utilization, resets_at}` node. Returns `None`
+/// for absent/null windows (e.g. plans without a weekly limit).
+fn claude_build_window(
+    node: Option<&serde_json::Value>,
+    window_seconds: u64,
+    now: u64,
+) -> Option<UsageWindow> {
+    let obj = node?.as_object()?;
+    let used_percent = claude_utilization_percent(obj.get("utilization"))?;
+    let reset_at = claude_reset_unix(obj.get("resets_at")).unwrap_or(0);
+    Some(UsageWindow {
+        used_percent,
+        remaining_percent: 100u8.saturating_sub(used_percent),
+        reset_after_seconds: reset_at.saturating_sub(now),
+        reset_at,
+        window_seconds,
+    })
+}
+
+fn map_claude_usage(
+    raw: &serde_json::Value,
+    account_name: Option<String>,
+    plan_type: String,
+    fetched_at: u64,
+) -> Result<ClaudeUsageResponse, String> {
+    let now = u64::try_from(Utc::now().timestamp()).unwrap_or(0);
+    // five_hour → 5h window, seven_day → weekly window. Other windows
+    // (seven_day_sonnet, seven_day_opus, …) are intentionally ignored.
+    let window_5h = claude_build_window(raw.get("five_hour"), 18_000, now);
+    let window_weekly = claude_build_window(raw.get("seven_day"), 604_800, now);
+
+    let mut windows: Vec<UsageWindow> = Vec::new();
+    if let Some(ref w) = window_5h {
+        windows.push(w.clone());
+    }
+    if let Some(ref w) = window_weekly {
+        windows.push(w.clone());
+    }
+    windows.sort_by_key(|w| w.window_seconds);
+    windows.dedup_by_key(|w| w.window_seconds);
+
+    if windows.is_empty() {
+        return Err("Claude 用量响应中没有可识别的窗口数据".to_string());
+    }
+
+    Ok(ClaudeUsageResponse {
+        account_name,
+        plan_type,
+        window_5h,
+        window_weekly,
+        usage_windows: windows,
+        fetched_at,
+    })
+}
+
+async fn fetch_claude_usage() -> Result<ClaudeUsageResponse, String> {
+    let oauth = resolve_claude_oauth()?;
+
+    // Read-only token policy: never refresh. When the access token has
+    // expired, Claude Code itself refreshes it the next time it runs.
+    if oauth.expires_at_ms > 0 {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        if oauth.expires_at_ms <= now_ms {
+            return Err("登录态已过期，请打开一次 Claude Code 刷新后重试".to_string());
+        }
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("构建 Claude 用量请求失败: {e}"))?;
+
+    let response = client
+        .get(CLAUDE_USAGE_URL)
+        .header("Authorization", format!("Bearer {}", oauth.access_token))
+        .header("anthropic-beta", "oauth-2025-04-20")
+        // The endpoint 401s without a Claude Code user-agent.
+        .header("User-Agent", "claude-code/2.1.80")
+        .header("Content-Type", "application/json")
+        .send()
+        .await
+        .map_err(|e| format!("请求 Claude 用量接口失败: {e}"))?;
+    let status = response.status();
+
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err("Claude 用量接口请求过于频繁（HTTP 429），请稍后再试".to_string());
+    }
+    if !status.is_success() {
+        return Err(format!("Claude 用量接口返回错误: HTTP {status}"));
+    }
+
+    let raw: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("解析 Claude 用量响应失败: {e}"))?;
+
+    map_claude_usage(
+        &raw,
+        oauth.account_name,
+        oauth.subscription_type.unwrap_or_else(|| "unknown".to_string()),
+        u64::try_from(Utc::now().timestamp()).unwrap_or(0),
+    )
+}
+
+/// Claude Code usage from the official OAuth login. Shared by the Accounts
+/// view and tray popup.
+///
+/// When `force` is false/omitted, returns the in-memory cache if it is younger
+/// than 10 minutes. Manual refresh buttons should pass `force: true`.
+#[tauri::command]
+pub async fn get_claude_usage(force: Option<bool>) -> Result<ClaudeUsageResponse, String> {
+    let force = force.unwrap_or(false);
+    let now = usage_unix_now();
+    if !force {
+        if let Ok(guard) = CLAUDE_USAGE_CACHE.lock() {
+            if let Some(entry) = guard.as_ref() {
+                if usage_cache_is_fresh(entry.fetched_at, now) {
+                    let mut usage = entry.data.clone();
+                    apply_claude_usage_timers(&mut usage, now);
+                    return Ok(usage);
+                }
+            }
+        }
+    }
+
+    let usage = fetch_claude_usage().await?;
+    if let Ok(mut guard) = CLAUDE_USAGE_CACHE.lock() {
+        *guard = Some(UsageCacheEntry {
+            fetched_at: usage.fetched_at.max(now),
+            data: usage.clone(),
+        });
+    }
+    Ok(usage)
+}
+
 async fn fetch_codex_tray_snapshot() -> Result<CodexTraySnapshot, String> {
     let (usage_result, credits_result) =
         futures_util::future::join(get_codex_usage(), get_codex_reset_credits()).await;
@@ -2014,5 +2644,181 @@ api_key = "sk-kimi-test-abc123"
                 .as_ref()
                 .map(|w| (w.used_percent, w.remaining_percent)),
         );
+    }
+
+    // --- Claude Code OAuth credentials + usage mapping ---
+
+    const CLAUDE_CREDENTIALS: &str = r#"{
+        "claudeAiOauth": {
+            "accessToken": "sk-ant-oat01-test-token",
+            "refreshToken": "sk-ant-ort01-test-refresh",
+            "expiresAt": 1893456000000,
+            "scopes": ["user:inference", "user:profile"],
+            "subscriptionType": "max"
+        }
+    }"#;
+
+    #[test]
+    fn claude_credentials_parse_nested_oauth_block() {
+        let (token, expires_at_ms, subscription) =
+            parse_claude_credentials(CLAUDE_CREDENTIALS).expect("should parse");
+        assert_eq!(token, "sk-ant-oat01-test-token");
+        assert_eq!(expires_at_ms, 1_893_456_000_000);
+        assert_eq!(subscription.as_deref(), Some("max"));
+    }
+
+    #[test]
+    fn claude_credentials_missing_fields_error() {
+        // Missing the claudeAiOauth wrapper entirely.
+        assert!(parse_claude_credentials(r#"{"other": true}"#).is_err());
+        // Wrapper present but no accessToken.
+        assert!(parse_claude_credentials(r#"{"claudeAiOauth": {"expiresAt": 1}}"#).is_err());
+        // Empty accessToken is rejected too.
+        assert!(
+            parse_claude_credentials(r#"{"claudeAiOauth": {"accessToken": "  "}}"#).is_err()
+        );
+        // Not JSON at all.
+        assert!(parse_claude_credentials("not json").is_err());
+    }
+
+    #[test]
+    fn claude_utilization_accepts_ratio_and_percent() {
+        // 0–1 ratio form is scaled to percent.
+        assert_eq!(
+            claude_utilization_percent(Some(&serde_json::json!(0.25))),
+            Some(25)
+        );
+        // 0–100 float form is used as-is.
+        assert_eq!(
+            claude_utilization_percent(Some(&serde_json::json!(25.0))),
+            Some(25)
+        );
+        assert_eq!(
+            claude_utilization_percent(Some(&serde_json::json!(99.6))),
+            Some(100)
+        );
+        // Non-numeric nodes yield None.
+        assert!(claude_utilization_percent(Some(&serde_json::json!("25"))).is_none());
+        assert!(claude_utilization_percent(None).is_none());
+    }
+
+    #[test]
+    fn claude_reset_unix_parses_iso8601() {
+        let ts = claude_reset_unix(Some(&serde_json::json!("2030-01-01T00:00:00Z")))
+            .expect("should parse ISO-8601");
+        assert_eq!(ts, 1_893_456_000);
+        // Fractional seconds and offsets are accepted too.
+        let with_fraction =
+            claude_reset_unix(Some(&serde_json::json!("2030-01-01T00:00:00.123456+00:00")));
+        assert_eq!(with_fraction, Some(1_893_456_000));
+        assert!(claude_reset_unix(Some(&serde_json::json!("not a date"))).is_none());
+        assert!(claude_reset_unix(Some(&serde_json::json!(123))).is_none());
+    }
+
+    #[test]
+    fn claude_map_usage_builds_5h_and_weekly_windows() {
+        let raw = serde_json::json!({
+            "five_hour": {"utilization": 25.0, "resets_at": "2030-01-01T00:00:00Z"},
+            "seven_day": {"utilization": 0.5, "resets_at": "2030-01-08T00:00:00Z"},
+            "seven_day_sonnet": {"utilization": 10.0, "resets_at": "2030-01-08T00:00:00Z"}
+        });
+
+        let resp = map_claude_usage(&raw, Some("user@example.com".to_string()), "max".into(), 1)
+            .expect("should map");
+        assert_eq!(resp.plan_type, "max");
+        assert_eq!(resp.account_name.as_deref(), Some("user@example.com"));
+        assert_eq!(resp.usage_windows.len(), 2);
+        // Sorted ascending: 5h before weekly; sonnet window ignored.
+        assert_eq!(resp.usage_windows[0].window_seconds, 18_000);
+        assert_eq!(resp.usage_windows[0].used_percent, 25);
+        assert_eq!(resp.usage_windows[0].remaining_percent, 75);
+        assert_eq!(resp.usage_windows[0].reset_at, 1_893_456_000);
+        assert_eq!(resp.usage_windows[1].window_seconds, 604_800);
+        // Ratio form 0.5 → 50%.
+        assert_eq!(resp.usage_windows[1].used_percent, 50);
+        assert!(resp.window_5h.is_some());
+        assert!(resp.window_weekly.is_some());
+    }
+
+    #[test]
+    fn claude_map_usage_skips_null_windows() {
+        let raw = serde_json::json!({
+            "five_hour": {"utilization": 10.0, "resets_at": "2030-01-01T00:00:00Z"},
+            "seven_day": null
+        });
+        let resp = map_claude_usage(&raw, None, "pro".into(), 1).expect("should map");
+        assert!(resp.window_5h.is_some());
+        assert!(resp.window_weekly.is_none());
+        assert_eq!(resp.usage_windows.len(), 1);
+
+        // No usable windows at all is an error.
+        let empty = serde_json::json!({"five_hour": null, "seven_day": null});
+        assert!(map_claude_usage(&empty, None, "pro".into(), 1).is_err());
+    }
+
+    // --- Claude Code switch: profile kind + env token removal ---
+
+    #[test]
+    fn profile_meta_defaults_kind_to_token() {
+        // Profiles saved before OAuth support have no kind field.
+        let meta: ProfileMeta = serde_json::from_str(
+            r#"{"id":"abc","note":"work","saved_at":"2026-01-01T00:00:00Z"}"#,
+        )
+        .expect("old meta.json should still parse");
+        assert_eq!(meta.kind, "token");
+        assert_eq!(meta.identity, None);
+
+        let oauth_meta: ProfileMeta = serde_json::from_str(
+            r#"{"id":"abc","note":"me@example.com","saved_at":"2026-01-01T00:00:00Z","kind":"oauth","identity":"uuid-1"}"#,
+        )
+        .expect("oauth meta should parse");
+        assert_eq!(oauth_meta.kind, "oauth");
+        assert_eq!(oauth_meta.identity.as_deref(), Some("uuid-1"));
+    }
+
+    #[test]
+    fn oauth_profile_content_has_no_token_identity() {
+        // A stored OAuth credential JSON must not be mistaken for a token
+        // profile: identity comes from meta.json instead.
+        assert!(extract_account_identity("claude-code", CLAUDE_CREDENTIALS).is_none());
+        assert!(extract_key("claude-code", CLAUDE_CREDENTIALS).is_none());
+    }
+
+    #[test]
+    fn remove_claude_env_token_preserves_other_fields() {
+        let settings = r#"{
+            "model": "opus",
+            "env": {
+                "ANTHROPIC_AUTH_TOKEN": "sk-ant-xyz123",
+                "ANTHROPIC_BASE_URL": "https://proxy.example.com"
+            },
+            "hooks": {"stop": []}
+        }"#;
+        let stripped = remove_claude_env_token(settings).expect("should strip");
+        let val: serde_json::Value = serde_json::from_str(&stripped).unwrap();
+        assert!(val.get("env").and_then(|e| e.get("ANTHROPIC_AUTH_TOKEN")).is_none());
+        assert_eq!(
+            val.get("env").and_then(|e| e.get("ANTHROPIC_BASE_URL")).and_then(|v| v.as_str()),
+            Some("https://proxy.example.com")
+        );
+        assert_eq!(val.get("model").and_then(|v| v.as_str()), Some("opus"));
+        assert!(val.get("hooks").is_some());
+    }
+
+    #[test]
+    fn remove_claude_env_token_drops_empty_env() {
+        let settings = r#"{"env": {"ANTHROPIC_AUTH_TOKEN": "sk-ant-xyz123"}}"#;
+        let stripped = remove_claude_env_token(settings).expect("should strip");
+        let val: serde_json::Value = serde_json::from_str(&stripped).unwrap();
+        assert!(val.get("env").is_none());
+    }
+
+    #[test]
+    fn remove_claude_env_token_noop_without_token() {
+        let settings = r#"{"model": "opus"}"#;
+        let stripped = remove_claude_env_token(settings).expect("should strip");
+        let val: serde_json::Value = serde_json::from_str(&stripped).unwrap();
+        assert_eq!(val.get("model").and_then(|v| v.as_str()), Some("opus"));
+        assert!(remove_claude_env_token("not json").is_err());
     }
 }

@@ -38,7 +38,7 @@ pub fn list_codex_sessions_all() -> Result<Vec<SessionSummary>, String> {
     let conn = open_codex_db_readonly(&db_path)?;
     let mut stmt = conn
         .prepare(
-            "SELECT id, title, cwd, model, tokens_used, created_at, updated_at, first_user_message \
+            "SELECT id, title, cwd, model, tokens_used, created_at, updated_at, first_user_message, source \
              FROM threads WHERE archived = 0 ORDER BY updated_at DESC",
         )
         .map_err(|err| err.to_string())?;
@@ -242,6 +242,7 @@ fn parse_codex_summary_row(row: &Row<'_>) -> Result<SessionSummary, rusqlite::Er
     let created_at: i64 = row.get(5)?;
     let updated_at: i64 = row.get(6)?;
     let first_user_message: String = row.get(7)?;
+    let raw_source: String = row.get(8)?;
     let title = if title.trim().is_empty() {
         truncate_chars(first_user_message, 80)
     } else {
@@ -258,7 +259,20 @@ fn parse_codex_summary_row(row: &Row<'_>) -> Result<SessionSummary, rusqlite::Er
         message_count: None,
         tokens_used: Some(tokens_used),
         platform_id: PLATFORM_ID.to_string(),
+        source: codex_client_source(&raw_source),
     })
+}
+
+/// Map the threads.source column to a client label. ChatGPT's desktop app
+/// (and its IDE-embedded sibling) records "vscode"; the terminal CLI records
+/// "cli"/"codex_cli". Anything else ("exec", JSON subagent payloads, …) is
+/// ambiguous and stays None so the UI shows the plain "Codex" name.
+fn codex_client_source(raw: &str) -> Option<String> {
+    match raw {
+        "vscode" => Some("chatgpt".to_string()),
+        "cli" | "codex_cli" => Some("terminal".to_string()),
+        _ => None,
+    }
 }
 
 fn codex_db_path() -> Result<PathBuf, String> {
@@ -422,6 +436,7 @@ pub fn search_codex_messages(
                     message_count: None,
                     tokens_used: Some(tokens_used),
                     platform_id: PLATFORM_ID.to_string(),
+                    source: None,
                 },
                 rollout_path,
             })
@@ -491,11 +506,21 @@ mod tests {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 rollout_path TEXT NOT NULL DEFAULT '',
                 archived INTEGER NOT NULL DEFAULT 0,
-                archived_at INTEGER
+                archived_at INTEGER,
+                source TEXT NOT NULL DEFAULT 'cli'
             );",
         )
         .expect("threads table should create");
         (dir, db_path)
+    }
+
+    #[test]
+    fn codex_client_source_maps_known_values() {
+        assert_eq!(codex_client_source("vscode").as_deref(), Some("chatgpt"));
+        assert_eq!(codex_client_source("cli").as_deref(), Some("terminal"));
+        assert_eq!(codex_client_source("codex_cli").as_deref(), Some("terminal"));
+        assert_eq!(codex_client_source("exec"), None);
+        assert_eq!(codex_client_source("{\"subagent\":{}}"), None);
     }
 
     #[test]

@@ -6,16 +6,26 @@ pub enum AgentKind {
     Codex,
     Claude,
     Kiro,
+    Grok,
+    Kimi,
 }
 
 impl AgentKind {
-    pub const ALL: [AgentKind; 3] = [Self::Codex, Self::Claude, Self::Kiro];
+    pub const ALL: [AgentKind; 5] = [
+        Self::Codex,
+        Self::Claude,
+        Self::Kiro,
+        Self::Grok,
+        Self::Kimi,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Codex => "codex",
             Self::Claude => "claude",
             Self::Kiro => "kiro",
+            Self::Grok => "grok",
+            Self::Kimi => "kimi",
         }
     }
 
@@ -24,6 +34,8 @@ impl AgentKind {
             Self::Codex => "codex-state.json",
             Self::Claude => "claude-state.json",
             Self::Kiro => "kiro-state.json",
+            Self::Grok => "grok-state.json",
+            Self::Kimi => "kimi-state.json",
         }
     }
 
@@ -32,6 +44,8 @@ impl AgentKind {
             Self::Codex => "session-monitor:codex-changed",
             Self::Claude => "session-monitor:claude-changed",
             Self::Kiro => "session-monitor:kiro-changed",
+            Self::Grok => "session-monitor:grok-changed",
+            Self::Kimi => "session-monitor:kimi-changed",
         }
     }
 }

@@ -3,7 +3,11 @@ import type { Directive } from 'vue'
 /**
  * v-tooltip — styled replacement for the native `title` attribute.
  *
- * Usage: `v-tooltip="text"`. Nothing shows when the value is empty.
+ * Usage: `v-tooltip="text"` (below the anchor, flipping above at the bottom
+ * edge), `v-tooltip:top="text"` (above the anchor, flipping below at the top
+ * edge), or `v-tooltip:left` / `v-tooltip:right` (beside the anchor on the
+ * preferred side, flipping at the screen edge). Nothing shows when the value
+ * is empty.
  * A single tooltip element is shared app-wide (appended to <body>); its
  * colors invert with the theme via --ink / --canvas (styles live in
  * theme.css under § Tooltip).
@@ -27,17 +31,75 @@ function hide() {
   tipEl?.classList.remove('is-visible')
 }
 
-function show(el: HTMLElement, text: string) {
+function show(el: HTMLElement, text: string, placement: 'bottom' | 'left' | 'right' | 'top') {
   if (!text) return
   const tip = ensureTip()
   tip.textContent = text
   tip.classList.add('is-visible')
 
-  // Measure after the text is in, then clamp into the viewport. Default
-  // placement is below the anchor; flip above when there is no room.
+  // Reset geometry before measuring: shrink-to-fit would otherwise size the
+  // box against the previous show's leftover position, producing narrow,
+  // super-tall tooltips.
+  tip.style.left = '0px'
+  tip.style.top = '0px'
+  tip.style.maxWidth = `${window.innerWidth - 16}px`
+
   const rect = el.getBoundingClientRect()
   const tipRect = tip.getBoundingClientRect()
   const margin = 8
+
+  // Beside the anchor, vertically centered, on the preferred side; flip when
+  // that side is off-screen. When neither side fits at natural width (typical
+  // in the narrow tray popup), shrink the box into the wider side; only when
+  // even that is too cramped fall through to the bottom placement.
+  const placeBeside = (prefer: 'left' | 'right'): boolean => {
+    const placeAt = (left: number, height: number) => {
+      let top = rect.top + rect.height / 2 - height / 2
+      top = Math.max(margin, Math.min(top, window.innerHeight - height - margin))
+      tip.style.left = `${left}px`
+      tip.style.top = `${top}px`
+    }
+    const leftSpace = rect.left - 6 - margin
+    const rightSpace = window.innerWidth - margin - rect.right - 6
+    const first = prefer === 'left' ? 'left' : 'right'
+    const second = prefer === 'left' ? 'right' : 'left'
+    for (const side of [first, second]) {
+      if (side === 'left' && leftSpace >= tipRect.width) {
+        placeAt(rect.left - tipRect.width - 6, tipRect.height)
+        return true
+      }
+      if (side === 'right' && rightSpace >= tipRect.width) {
+        placeAt(rect.right + 6, tipRect.height)
+        return true
+      }
+    }
+    const space = Math.max(leftSpace, rightSpace)
+    if (space < 96) return false
+    tip.style.maxWidth = `${space}px`
+    const shrunk = tip.getBoundingClientRect()
+    placeAt(leftSpace >= rightSpace ? rect.left - shrunk.width - 6 : rect.right + 6, shrunk.height)
+    return true
+  }
+
+  if ((placement === 'left' || placement === 'right') && placeBeside(placement)) {
+    return
+  }
+
+  // Above the anchor, horizontally centered; flip below at the top edge.
+  if (placement === 'top') {
+    const left = Math.max(
+      margin,
+      Math.min(rect.left + rect.width / 2 - tipRect.width / 2, window.innerWidth - tipRect.width - margin),
+    )
+    let top = rect.top - tipRect.height - 6
+    if (top < margin) {
+      top = rect.bottom + 6
+    }
+    tip.style.left = `${left}px`
+    tip.style.top = `${top}px`
+    return
+  }
+
   const left = Math.max(
     margin,
     Math.min(rect.left, window.innerWidth - tipRect.width - margin),
@@ -55,8 +117,9 @@ type TooltipElement = HTMLElement & { __ahTooltip__?: { onEnter: () => void; onL
 export const vTooltip: Directive<TooltipElement, string | undefined> = {
   mounted(el, binding) {
     el.dataset.ahTooltip = binding.value ?? ''
+    const placement = binding.arg === 'left' ? 'left' : binding.arg === 'right' ? 'right' : binding.arg === 'top' ? 'top' : 'bottom'
     const handlers = {
-      onEnter: () => show(el, el.dataset.ahTooltip || ''),
+      onEnter: () => show(el, el.dataset.ahTooltip || '', placement),
       onLeave: hide,
     }
     el.__ahTooltip__ = handlers

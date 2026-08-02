@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Activity, Blocks, FolderOpen, Globe2, MessagesSquare, UserRound, X } from 'lucide-vue-next'
+import { Activity, Blocks, FolderOpen, Gauge, Globe2, MessagesSquare, UserRound, X } from 'lucide-vue-next'
 import { useAppStore } from '@/stores/app'
 import { useSkillsStore } from '@/stores/skills'
 import { usePluginsStore } from '@/stores/plugins'
@@ -9,7 +9,8 @@ import { useSessionsStore } from '@/stores/sessions'
 import { useSessionMonitorStore, type MonitorTab } from '@/stores/session-monitor'
 import { useSwitchStore } from '@/stores/switch'
 import { useToast } from '@/composables/useToast'
-import { pickPluginDirectory } from '@/lib/api'
+import { openUsageTray, pickPluginDirectory } from '@/lib/api'
+import AgentIcon from '@/components/agents/AgentIcon.vue'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -92,7 +93,9 @@ function getSidebarItems() {
     { id: 'all', display_name: t('session_monitor.agent_all') },
     { id: 'codex', display_name: 'Codex' },
     { id: 'claude', display_name: 'Claude Code' },
-    { id: 'kiro', display_name: 'Kiro CLI' },
+    { id: 'grok', display_name: 'Grok Build' },
+    { id: 'kimi', display_name: 'Kimi Code' },
+    { id: 'kiro', display_name: 'Kiro' },
   ]
   if (appStore.currentTab === 'accounts') return [
     { id: 'codex', display_name: 'Codex' },
@@ -153,13 +156,12 @@ function handleSessionSearch(e: Event) {
         {{ t('ui.title') }}
       </span>
       <div class="flex items-center gap-0.5 shrink-0 ml-auto">
-        <button v-show="!appStore.sidebarCollapsed" class="ah-sidebar__header-btn" @click="appStore.switchLocale()">
-          {{ appStore.locale === 'en' ? 'EN' : '中' }}
-        </button>
-        <button v-show="!appStore.sidebarCollapsed" class="ah-sidebar__header-btn" @click="appStore.toggleTheme()">
-          {{ appStore.isNightTheme() ? '☀' : '☾' }}
-        </button>
-        <button v-show="!appStore.sidebarCollapsed" class="ah-sidebar__header-btn" @click="handleRefresh">
+        <button
+          v-show="!appStore.sidebarCollapsed"
+          v-tooltip="t('ui.refresh')"
+          class="ah-sidebar__header-btn"
+          @click="handleRefresh"
+        >
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
         </button>
       </div>
@@ -220,7 +222,10 @@ function handleSessionSearch(e: Event) {
           @click="handleItemClick(item.id)"
         >
           <div class="flex items-center justify-between">
-            <span class="ah-platform-item__name">{{ item.display_name }}</span>
+            <span class="ah-platform-item__label">
+              <AgentIcon :agent-id="item.id" class="ah-platform-item__icon" />
+              <span class="ah-platform-item__name">{{ item.display_name }}</span>
+            </span>
             <span v-if="appStore.currentTab === 'sessions' && item.session_count != null" class="ah-platform-item__count">
               {{ item.session_count }}
             </span>
@@ -263,13 +268,36 @@ function handleSessionSearch(e: Event) {
         {{ t('trash.title') }} ({{ appStore.trashCount }})
       </div>
 
-      <!-- Version -->
+      <!-- Version (+ footer shortcuts: monitor panel, language, theme) -->
       <div
-        class="px-3 py-2 text-center cursor-pointer select-none transition-colors hover:bg-[color:var(--sunken)]"
+        class="relative px-3 py-2 text-center cursor-pointer select-none transition-colors hover:bg-[color:var(--sunken)]"
         style="border-top: 1px solid var(--hairline)"
         @click="appStore.openAbout"
         :title="appStore.isDownloading ? t('about.downloading_title', { percent: appStore.updateProgress }) : (appStore.availableUpdate ? `发现新版本 v${appStore.availableUpdate.version}，点击查看` : t('about.title'))"
       >
+        <div class="sidebar-footer-actions">
+          <button
+            v-tooltip="t('tray.open_usage')"
+            class="sidebar-footer-btn"
+            @click.stop="openUsageTray"
+          >
+            <Gauge :size="12" />
+          </button>
+          <button
+            v-tooltip="t('ui.switch_language')"
+            class="sidebar-footer-btn sidebar-footer-btn--text"
+            @click.stop="appStore.switchLocale()"
+          >
+            {{ appStore.locale === 'en' ? 'EN' : '中' }}
+          </button>
+          <button
+            v-tooltip="t('ui.toggle_theme')"
+            class="sidebar-footer-btn sidebar-footer-btn--text"
+            @click.stop="appStore.toggleTheme()"
+          >
+            {{ appStore.isNight ? '☾' : '☀' }}
+          </button>
+        </div>
         <!-- Downloading: spinner + percent -->
         <span
           v-if="appStore.isDownloading"
@@ -293,24 +321,61 @@ function handleSessionSearch(e: Event) {
 </template>
 
 <style scoped>
+.sidebar-footer-actions {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.sidebar-footer-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  color: var(--ink-4);
+  background: transparent;
+  cursor: pointer;
+  transition: color .15s ease, background-color .15s ease;
+}
+.sidebar-footer-btn--text {
+  width: auto;
+  min-width: 20px;
+  padding: 0 3px;
+  font-size: 10px;
+  font-weight: 600;
+}
+.sidebar-footer-btn:hover {
+  color: var(--accent);
+  background: var(--sunken);
+}
+
 .ah-nav {
   padding: 8px 10px 7px;
   border-bottom: 1px solid var(--hairline);
+  /* 2×2 grid: icon above label, one cell per main tab. */
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
 }
 .ah-nav-item {
-  width: 100%;
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 7px 9px;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 4px;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--ink-2);
-  font-size: 13px;
-  text-align: left;
+  font-size: 12px;
   cursor: pointer;
-  margin-bottom: 1px;
   transition: background var(--dur-fast) var(--ease-soft), color var(--dur-fast) var(--ease-soft);
 }
 .ah-nav-item:hover { background: var(--hover); color: var(--ink); }

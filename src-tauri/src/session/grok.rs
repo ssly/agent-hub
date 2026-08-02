@@ -236,6 +236,7 @@ fn parse_grok_summary(
         message_count,
         tokens_used: None,
         platform_id: PLATFORM_ID.to_string(),
+        source: None,
     })
 }
 

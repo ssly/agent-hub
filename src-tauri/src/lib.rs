@@ -121,6 +121,16 @@ pub fn run() {
             commands::delete_kiro_session_monitor_session,
             commands::get_kiro_monitor_status,
             commands::set_kiro_monitor_enabled,
+            commands::get_grok_session_monitor_snapshot,
+            commands::delete_grok_session_monitor_session,
+            commands::get_grok_hook_status,
+            commands::preview_grok_hook_change,
+            commands::apply_grok_hook_change,
+            commands::get_kimi_session_monitor_snapshot,
+            commands::delete_kimi_session_monitor_session,
+            commands::get_kimi_hook_status,
+            commands::preview_kimi_hook_change,
+            commands::apply_kimi_hook_change,
             claude_plugin::list_claude_plugins,
             claude_plugin::set_claude_plugin_enabled,
             switch::commands::list_switch_profiles,
@@ -138,8 +148,11 @@ pub fn run() {
             switch::commands::get_codex_tray_usage,
             switch::commands::get_grok_usage,
             switch::commands::get_kimi_usage,
+            switch::commands::get_claude_usage,
             switch::commands::get_usage_provider_availability,
             tray::resize_usage_tray,
+            tray::set_usage_tray_pinned,
+            tray::open_usage_tray,
         ])
         .run(tauri::generate_context!())
         .expect("error while running agent-hub");

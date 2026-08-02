@@ -142,20 +142,36 @@ export const useAppStore = defineStore('app', () => {
     sidebarCollapsed.value = !sidebarCollapsed.value
   }
 
+  // Reactive mirror of the root data-theme attribute (restored from
+  // localStorage by an inline script in index.html before the app mounts).
+  // The sidebar toggle icon binds to this — reading the DOM attribute
+  // directly would never re-render after a toggle.
+  const theme = ref<'light' | 'night'>(
+    document.documentElement.getAttribute('data-theme') === 'night' ? 'night' : 'light',
+  )
+  const isNight = computed(() => theme.value === 'night')
+
   function toggleTheme() {
     const root = document.documentElement
-    const current = root.getAttribute('data-theme')
-    if (current === 'night') {
-      root.removeAttribute('data-theme')
+    if (theme.value === 'night') {
+      theme.value = 'light'
+      root.setAttribute('data-theme', 'light')
       localStorage.setItem('ah-theme', 'light')
     } else {
+      theme.value = 'night'
       root.setAttribute('data-theme', 'night')
       localStorage.setItem('ah-theme', 'night')
     }
-  }
-
-  function isNightTheme(): boolean {
-    return document.documentElement.getAttribute('data-theme') === 'night'
+    // The tray popup is a separate window with its own DOM; broadcast so it
+    // repaints immediately instead of waiting for the next open.
+    void (async () => {
+      try {
+        const { emit } = await import('@tauri-apps/api/event')
+        await emit('theme-changed', theme.value)
+      } catch {
+        // Browser preview has no Tauri event bus.
+      }
+    })()
   }
 
   async function switchLocale() {
@@ -170,7 +186,7 @@ export const useAppStore = defineStore('app', () => {
     aboutModalOpen, availableUpdate,
     updateStatus, updateProgress, updateDownloaded, updateTotal, updateError, updateInfo, updateDownloadSource,
     isDownloading, resetUpdateState,
-    init, refreshTrashCount, switchTab, setView, toggleSidebar, toggleTheme, isNightTheme, switchLocale,
+    init, refreshTrashCount, switchTab, setView, toggleSidebar, theme, isNight, toggleTheme, switchLocale,
     openTrash, restoreTrash, deleteTrashForever, emptyTrash, openAbout,
   }
 })

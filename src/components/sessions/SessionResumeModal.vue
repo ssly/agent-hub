@@ -2,6 +2,7 @@
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppModal from '@/components/ui/AppModal.vue'
+import AppLoading from '@/components/ui/AppLoading.vue'
 import { useToast } from '@/composables/useToast'
 import * as api from '@/lib/api'
 
@@ -65,9 +66,7 @@ watch(() => props.show, async open => {
     width-class="w-[36rem]"
     @close="emit('close')"
   >
-    <div v-if="loading" class="loading-pulse text-center py-8" style="color: var(--ink-3)">
-      {{ t('session.loading_messages') }}
-    </div>
+    <AppLoading v-if="loading" class="py-8">{{ t('session.loading_messages') }}</AppLoading>
     <div v-else-if="loadError" class="py-8 text-center" style="color: var(--danger)">
       {{ t('session.resume_failed', { error: loadError }) }}
     </div>

@@ -13,6 +13,30 @@ const MENU_CHECK_UPDATE: &str = "tray-check-update";
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 const MENU_QUIT: &str = "tray-quit";
 
+/// Pinned popups survive focus loss; the flag lives in memory only, so a
+/// restart always begins unpinned.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+static TRAY_PINNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Last physical window position, kept in memory only (per user request:
+/// remembered while the app lives, forgotten on exit). Updated by both user
+/// drags and programmatic centering, so "remembered" means "where it last was".
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+static TRAY_POSITION: std::sync::Mutex<Option<(i32, i32)>> = std::sync::Mutex::new(None);
+
+#[tauri::command]
+pub fn set_usage_tray_pinned(pinned: bool) {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    TRAY_PINNED.store(pinned, std::sync::atomic::Ordering::Relaxed);
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let _ = pinned;
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn remembered_position() -> Option<(i32, i32)> {
+    TRAY_POSITION.lock().ok().and_then(|stored| *stored)
+}
+
 /// Event emitted to the main window when the tray menu "Check for Updates"
 /// item is clicked. The frontend opens About and runs the existing updater flow.
 pub const TRAY_CHECK_UPDATES_EVENT: &str = "tray-check-updates";
@@ -28,13 +52,13 @@ struct TrayLabels {
 fn tray_labels(locale: &str) -> TrayLabels {
     if locale.to_ascii_lowercase().starts_with("zh") {
         TrayLabels {
-            tooltip: "用量查询",
+            tooltip: "监控面板",
             check_update: "检查更新",
             quit: "退出",
         }
     } else {
         TrayLabels {
-            tooltip: "Usage",
+            tooltip: "Monitor Panel",
             check_update: "Check for Updates",
             quit: "Quit",
         }
@@ -54,6 +78,38 @@ pub fn resize_usage_tray(app: AppHandle, height: f64) {
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     resize_centered_on_current_monitor(&app, height);
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let _ = app;
+}
+
+/// Open the usage popup from the main window (sidebar button). Same window,
+/// same behavior as a tray-icon click: remembered position wins, otherwise it
+/// centers on the main window's monitor at compact loading height.
+#[tauri::command]
+pub fn open_usage_tray(app: AppHandle) {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        use tauri::{Emitter, LogicalSize, PhysicalPosition, Position};
+
+        if let Some(window) = app.get_webview_window("codex-usage") {
+            let _ = window.set_size(LogicalSize::new(TRAY_WINDOW_WIDTH, TRAY_LOADING_HEIGHT));
+            if let Some((x, y)) = remembered_position() {
+                let _ = window.set_position(Position::Physical(PhysicalPosition::new(x, y)));
+            } else {
+                let monitor = app
+                    .get_webview_window("main")
+                    .and_then(|main| main.current_monitor().ok().flatten())
+                    .or_else(|| window.current_monitor().ok().flatten());
+                if let Some(monitor) = monitor {
+                    position_on_monitor(&window, &monitor, TRAY_LOADING_HEIGHT);
+                }
+            }
+            let _ = window.show();
+            let _ = window.set_focus();
+            let _ = window.emit("usage-tray-opened", ());
+        }
+    }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let _ = app;
@@ -134,10 +190,18 @@ fn setup_desktop(app: &mut App) -> tauri::Result<()> {
     let window = window_builder.build()?;
 
     let window_to_hide = window.clone();
-    window.on_window_event(move |event| {
-        if matches!(event, WindowEvent::Focused(false)) {
-            let _ = window_to_hide.hide();
+    window.on_window_event(move |event| match event {
+        WindowEvent::Focused(false) => {
+            if !TRAY_PINNED.load(std::sync::atomic::Ordering::Relaxed) {
+                let _ = window_to_hide.hide();
+            }
         }
+        WindowEvent::Moved(position) => {
+            if let Ok(mut stored) = TRAY_POSITION.lock() {
+                *stored = Some((position.x, position.y));
+            }
+        }
+        _ => {}
     });
 
     // Right-click context menu: Check for Updates + Quit.
@@ -200,7 +264,15 @@ fn setup_desktop(app: &mut App) -> tauri::Result<()> {
 
             let app = tray.app_handle().clone();
             if let Some(window) = app.get_webview_window("codex-usage") {
-                resize_and_position_window(&app, &window, rect, TRAY_LOADING_HEIGHT);
+                // Reuse the in-memory position when we have one (the user may
+                // have dragged the popup); only the very first open centers.
+                if let Some((x, y)) = remembered_position() {
+                    use tauri::{LogicalSize, PhysicalPosition, Position};
+                    let _ = window.set_size(LogicalSize::new(TRAY_WINDOW_WIDTH, TRAY_LOADING_HEIGHT));
+                    let _ = window.set_position(Position::Physical(PhysicalPosition::new(x, y)));
+                } else {
+                    resize_and_position_window(&app, &window, rect, TRAY_LOADING_HEIGHT);
+                }
                 let _ = window.show();
                 let _ = window.set_focus();
                 let _ = window.emit("usage-tray-opened", ());
@@ -251,9 +323,13 @@ fn resize_centered_on_current_monitor(app: &AppHandle, height: f64) {
 
     // Apply the requested content size first and unconditionally. Re-centering
     // is secondary and may legitimately be unavailable during a window resize.
+    // A remembered position (dragged or previously centered) wins over
+    // re-centering so resizing never yanks the popup back to screen center.
     let _ = window.set_size(LogicalSize::new(TRAY_WINDOW_WIDTH, height));
-    if let Ok(Some(monitor)) = window.current_monitor() {
-        position_on_monitor(&window, &monitor, height);
+    if remembered_position().is_none() {
+        if let Ok(Some(monitor)) = window.current_monitor() {
+            position_on_monitor(&window, &monitor, height);
+        }
     }
 }
 

@@ -19,6 +19,7 @@ import SwitchView from '@/components/switch/SwitchView.vue'
 import SearchResults from '@/components/search/SearchResults.vue'
 import DiffView from '@/components/diff/DiffView.vue'
 import AppModal from '@/components/ui/AppModal.vue'
+import AppLoading from '@/components/ui/AppLoading.vue'
 import aboutHeroUrl from '@/assets/about-hero.png'
 
 // Detect Tauri context for plugin usage (updater works only in desktop build)
@@ -431,9 +432,7 @@ onBeforeUnmount(() => {
       @close="onTrashModalClose"
       width-class="w-[36rem]"
     >
-      <div v-if="appStore.trashLoading" class="loading-pulse text-center py-12" style="color: var(--ink-3)">
-        Loading...
-      </div>
+      <AppLoading v-if="appStore.trashLoading" class="py-12" />
       <div v-else-if="appStore.trashItems.length === 0" class="text-center py-12" style="color: var(--ink-3)">
         {{ t('trash.empty') }}
       </div>

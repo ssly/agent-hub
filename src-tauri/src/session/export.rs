@@ -121,8 +121,9 @@ fn build_html(platform_id: &str, locale: &str, conversations: &[ExportConversati
     let platform_name = match platform_id {
         "claude-code" => "Claude Code",
         "codex" => "Codex",
-        "kiro" => "Kiro",
+        "kiro" => "Kiro CLI",
         "grok" => "Grok Build",
+        "kimi" => "Kimi Code",
         _ => platform_id,
     };
     let locale_tag = if locale.to_ascii_lowercase().starts_with("zh") {
@@ -459,6 +460,7 @@ mod tests {
                 message_count: None,
                 tokens_used: None,
                 platform_id: "codex".to_string(),
+                source: None,
             },
             messages: vec![SessionMessage {
                 role: "assistant".to_string(),

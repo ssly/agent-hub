@@ -171,6 +171,16 @@ const kimiAuthBadge = computed(() => {
 const kimiWindow5h = computed(() => store.kimiUsage?.window_5h ?? null)
 const kimiWindowWeekly = computed(() => store.kimiUsage?.window_weekly ?? null)
 
+// --- Claude Code usage panel (official OAuth login, 5h + weekly windows) ---
+// Always reflects the official /login subscription account, independent of
+// the custom-token profile pool below it.
+const isClaudeCode = computed(() => store.selectedAgent === 'claude-code')
+const claudeAccountName = computed(
+  () => store.claudeUsage?.account_name || t('switch.claude_default_account')
+)
+const claudeWindow5h = computed(() => store.claudeUsage?.window_5h ?? null)
+const claudeWindowWeekly = computed(() => store.claudeUsage?.window_weekly ?? null)
+
 function fmtQueryTime(value: number): string {
   if (!value) return ''
   return new Date(value).toLocaleString(locale.value === 'zh-CN' ? 'zh-CN' : 'en-US', {
@@ -211,6 +221,16 @@ async function handleRefreshKimiUsage() {
   if (store.kimiUsageLoading) return
   await store.refreshKimiUsage(true)
   if (store.kimiUsageError) {
+    showToast(t('switch.usage_failed'), 'error')
+  } else {
+    showToast(t('switch.usage_refresh_toast'), 'success')
+  }
+}
+
+async function handleRefreshClaudeUsage() {
+  if (store.claudeUsageLoading) return
+  await store.refreshClaudeUsage(true)
+  if (store.claudeUsageError) {
     showToast(t('switch.usage_failed'), 'error')
   } else {
     showToast(t('switch.usage_refresh_toast'), 'success')
@@ -571,6 +591,77 @@ async function handleConfirmClear() {
             </div>
           </div>
 
+          <!-- Claude Code official-login usage (OAuth subscription). Shown
+               above the custom-token profile pool it is independent of. -->
+          <div v-if="isClaudeCode" class="ah-card mb-6" style="background: var(--surface); border-color: var(--border)">
+            <div class="flex items-center justify-between mb-3">
+              <span class="text-base font-semibold flex items-center gap-2" style="color: var(--ink)">
+                <Gauge :size="18" :style="{ color: 'var(--accent)' }" />
+                {{ t('switch.claude_usage_title', { name: claudeAccountName }) }}
+              </span>
+              <button
+                class="btn btn-secondary btn-sm flex items-center gap-1"
+                :disabled="store.claudeUsageLoading"
+                @click="handleRefreshClaudeUsage"
+              >
+                <RefreshCw :size="14" :class="{ 'animate-spin': store.claudeUsageLoading }" />
+                {{ t('switch.usage_refresh') }}
+              </button>
+            </div>
+
+            <div class="text-xs mb-3 flex items-center gap-1.5" style="color: var(--ink-4)">
+              <Info :size="13" class="flex-shrink-0" />
+              {{ t('switch.claude_usage_oauth_hint') }}
+            </div>
+
+            <div v-if="store.claudeUsageLoading" class="text-sm py-4" style="color: var(--ink-3)">
+              {{ t('switch.claude_usage_loading') }}
+            </div>
+
+            <div v-else-if="store.claudeUsageError" class="text-sm py-2 flex items-center justify-between gap-3" style="color: var(--danger)">
+              <span>{{ t('switch.usage_failed') }}: {{ store.claudeUsageError }}</span>
+              <button class="btn btn-danger btn-sm" @click="handleRefreshClaudeUsage">{{ t('switch.usage_retry') }}</button>
+            </div>
+
+            <div v-else-if="store.claudeUsage" class="space-y-3 text-sm">
+              <div class="text-xs" style="color: var(--ink-3)">
+                <span class="inline-flex items-center px-2 py-0.5 rounded-full" style="background: var(--sunken); color: var(--ink-2)">{{ store.claudeUsage.plan_type }}</span>
+              </div>
+
+              <!-- 5-hour rolling rate-limit window -->
+              <div v-if="claudeWindow5h" class="p-3 rounded-lg" style="background: var(--sunken)">
+                <div class="flex justify-between items-center">
+                  <span class="font-medium" style="color: var(--ink)">{{ t('switch.kimi_5h_window') }}</span>
+                  <span class="font-semibold" style="color: var(--accent)">{{ t('switch.usage_remaining', { n: claudeWindow5h.remaining_percent }) }}</span>
+                </div>
+                <div class="text-xs mt-1" style="color: var(--ink-3)">
+                  {{ t('switch.kimi_used_reset', {
+                    used: claudeWindow5h.used_percent,
+                    reset: fmtReset(claudeWindow5h.reset_after_seconds, claudeWindow5h.reset_at),
+                  }) }}
+                </div>
+              </div>
+
+              <!-- Weekly quota window -->
+              <div v-if="claudeWindowWeekly" class="p-3 rounded-lg" style="background: var(--sunken)">
+                <div class="flex justify-between items-center">
+                  <span class="font-medium" style="color: var(--ink)">{{ t('switch.kimi_weekly_window') }}</span>
+                  <span class="font-semibold" style="color: var(--accent)">{{ t('switch.usage_remaining', { n: claudeWindowWeekly.remaining_percent }) }}</span>
+                </div>
+                <div class="text-xs mt-1" style="color: var(--ink-3)">
+                  {{ t('switch.kimi_used_reset', {
+                    used: claudeWindowWeekly.used_percent,
+                    reset: fmtReset(claudeWindowWeekly.reset_after_seconds, claudeWindowWeekly.reset_at),
+                  }) }}
+                </div>
+              </div>
+
+              <div class="text-xs pt-2 border-t" style="color: var(--ink-4); border-color: var(--hairline)">
+                {{ t('switch.usage_last_query', { time: fmtQueryTime(store.claudeUsageLastQuery) }) }}
+              </div>
+            </div>
+          </div>
+
           <!-- Only Claude Code keeps the switchable profile pool. -->
           <div v-if="!isCodex && !isGrokBuild && !isKimiCode" class="flex gap-2 mb-4 flex-wrap items-center">
             <button class="btn btn-primary" @click="handleSaveCurrent">{{ t('switch.save_current') }}</button>
@@ -639,6 +730,11 @@ async function handleConfirmClear() {
                     <span class="text-sm font-medium" style="color: var(--ink)">
                       {{ profile.note || t('switch.account_fallback', { n: idx + 1 }) }}
                     </span>
+                    <span
+                      v-if="profile.kind === 'oauth'"
+                      class="text-xs px-2 py-0.5 rounded-full flex-shrink-0"
+                      style="background: var(--accent-soft); color: var(--accent)"
+                    >{{ t('switch.oauth_badge') }}</span>
                     <span v-if="profile.is_active" class="switch-active-badge">{{ t('switch.active_badge') }}</span>
                   </div>
                   <div class="text-xs" style="color: var(--ink-3)">
