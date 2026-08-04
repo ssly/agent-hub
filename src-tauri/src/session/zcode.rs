@@ -70,7 +70,7 @@ pub fn search_zcode_messages(
     Ok(results)
 }
 
-/// Zcode keeps its session list in `~/.zcode/v2/tasks-index.sqlite` (the same
+/// ZCode keeps its session list in `~/.zcode/v2/tasks-index.sqlite` (the same
 /// `tasks` table the Electron app's sidebar reads). Subagent transcripts
 /// (`sess_subagent_*`) live only in the messages DB and are not listed here,
 /// matching what the user sees in the app.
@@ -229,13 +229,13 @@ fn read_zcode_message_text(
     Ok(texts.join("\n"))
 }
 
-/// Deleting a Zcode session only flips the `deleted` flag in the task index —
+/// Deleting a ZCode session only flips the `deleted` flag in the task index —
 /// the app treats it as gone and the messages DB is left untouched, matching
 /// the Codex adapter's archive-only behavior.
 fn delete_zcode_session_in_db(db_path: &Path, session_id: &str) -> Result<(), String> {
     if !db_path.exists() {
         return Err(format!(
-            "Zcode session database not found: {}",
+            "ZCode session database not found: {}",
             db_path.display()
         ));
     }
@@ -259,9 +259,9 @@ fn delete_zcode_session_in_db(db_path: &Path, session_id: &str) -> Result<(), St
         )
         .map_err(|err| err.to_string())?;
     if exists > 0 {
-        return Err(format!("Zcode session already deleted: {}", session_id));
+        return Err(format!("ZCode session already deleted: {}", session_id));
     }
-    Err(format!("Zcode session not found: {}", session_id))
+    Err(format!("ZCode session not found: {}", session_id))
 }
 
 fn zcode_tasks_db_path() -> Result<PathBuf, String> {
@@ -300,7 +300,7 @@ fn open_zcode_db_with_flags(path: &Path, flags: OpenFlags) -> Result<Connection,
             }
         }
     }
-    Err(format!("Unable to open Zcode database: {}", path.display()))
+    Err(format!("Unable to open ZCode database: {}", path.display()))
 }
 
 #[cfg(test)]

@@ -70,8 +70,8 @@ pub fn builtin_platforms() -> Vec<PlatformDef> {
         },
         PlatformDef {
             id: "zcode".into(),
-            display_name: "Zcode".into(),
-            description: "Z.ai Zcode agent skills".into(),
+            display_name: "ZCode".into(),
+            description: "Z.ai ZCode agent skills".into(),
             presence_path: home.join(".zcode"),
             skill_dir: join_relative(home.clone(), ".zcode/skills"),
         },

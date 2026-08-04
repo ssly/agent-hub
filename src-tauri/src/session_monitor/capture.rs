@@ -13,6 +13,10 @@ pub const KIMI_HOOK_ARG: &str = "--agent-hub-kimi-hook";
 pub const ZCODE_HOOK_ARG: &str = "--agent-hub-zcode-hook";
 const MAX_HOOK_INPUT_BYTES: u64 = 256 * 1024;
 const MAX_IGNORED_SESSIONS: usize = 200;
+/// Kimi sub-agent markers older than this are treated as stale: the matching
+/// SubagentStop presumably never arrived (killed process), so they must not
+/// suppress the main turn's Stop forever.
+const KIMI_SUBAGENT_MARKER_TTL_MILLIS: i64 = 60 * 60 * 1000;
 
 /// Prompt signatures of Codex desktop's internal background turns. The
 /// desktop app runs its own hidden turns (ambient-suggestion generation, the
@@ -50,7 +54,7 @@ pub fn try_capture_hook_event() -> bool {
     } else if std::env::args().any(|arg| arg == KIMI_HOOK_ARG) {
         AgentKind::Kimi
     } else if std::env::args().any(|arg| arg == ZCODE_HOOK_ARG) {
-        AgentKind::Zcode
+        AgentKind::ZCode
     } else {
         return false;
     };
@@ -73,21 +77,82 @@ fn capture_stdin_event(agent: AgentKind) -> Result<(), String> {
     if bytes.len() as u64 > MAX_HOOK_INPUT_BYTES {
         return Err("hook input exceeded 256 KiB".to_string());
     }
+    debug_dump_payload(agent, &bytes);
 
     let input: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|error| format!("invalid hook JSON: {error}"))?;
-    // Codex/Claude/Kimi/Zcode wrap events in snake_case, Grok in camelCase.
+
+    // Provenance guard: Grok CLI also executes hooks configured for other
+    // agents (~/.claude/settings.json, ~/.cursor/hooks.json) but feeds them
+    // its OWN payloads, which would plant phantom rows in those agents'
+    // monitors. Reject payloads that cannot belong to the agent whose hook
+    // arg invoked us.
+    if !payload_matches_agent(agent, &input) {
+        return Ok(());
+    }
+
+    let event_id = Uuid::new_v4().to_string();
+    let session_id = string_field_any(&input, &["session_id", "sessionId", "conversation_id"])
+        .or_else(|| std::env::var("CODEX_THREAD_ID").ok())
+        .unwrap_or_else(|| format!("unknown-{event_id}"));
+
+    // Kimi Code fires the plain Stop event when a SUB-AGENT's model turn ends
+    // (payload identical to the main turn's Stop, always BEFORE SubagentStop —
+    // verified against kimi-code 2.x). Without filtering, every Agent-tool
+    // call flips the monitor row to "ended" while the main turn is still
+    // running. SubagentStart/SubagentStop maintain marker files per session;
+    // a Stop that arrives while any live marker exists belongs to a sub-agent
+    // and is dropped. Interrupt/StopFailure always pass through: they concern
+    // the whole turn, and dropping them could strand the row as "running".
+    if agent == AgentKind::Kimi {
+        let raw_name = string_field_any(&input, &["hook_event_name", "hookEventName"])
+            .unwrap_or_default();
+        match raw_name.as_str() {
+            "SubagentStart" => return mark_kimi_subagent(&session_id),
+            "SubagentStop" => return clear_kimi_subagent(&session_id),
+            "Stop" | "stop" if kimi_subagent_active(&session_id) => return Ok(()),
+            _ => {}
+        }
+    }
+
+    // Grok subagents are independent child sessions (verified against grok
+    // 0.2.x): a child fires its own user_prompt_submit under its own
+    // sessionId but never a stop — without filtering, every Task-tool call
+    // plants a permanently "running" phantom row showing the internal task
+    // prompt. SubagentStart names the child session in subagentId; every
+    // event from an ignored session is dropped.
+    if agent == AgentKind::Grok {
+        let raw_name = string_field_any(&input, &["hook_event_name", "hookEventName"])
+            .unwrap_or_default();
+        match raw_name.as_str() {
+            "subagent_start" | "SubagentStart" => {
+                if let Some(child_id) = string_field_any(&input, &["subagent_id", "subagentId"]) {
+                    let _ = mark_session_ignored(&child_id);
+                }
+                return Ok(());
+            }
+            "subagent_stop" | "SubagentStop" => return Ok(()),
+            _ => {}
+        }
+        if is_session_ignored(&session_id) {
+            return Ok(());
+        }
+    }
+
+    // Codex/Claude/Kimi/ZCode wrap events in snake_case, Grok in camelCase.
     let event_name = string_field_any(&input, &["hook_event_name", "hookEventName"])
         .ok_or_else(|| "hook_event_name is missing".to_string())?;
     let Some(event_name) = canonical_event_name(&event_name) else {
         return Ok(());
     };
 
-    let event_id = Uuid::new_v4().to_string();
-    let session_id = string_field_any(&input, &["session_id", "sessionId", "conversation_id"])
-        .or_else(|| std::env::var("CODEX_THREAD_ID").ok())
-        .unwrap_or_else(|| format!("unknown-{event_id}"));
-    let user_prompt = prompt_field(&input);
+    let user_prompt = prompt_field(&input).map(|prompt| {
+        if agent == AgentKind::Grok {
+            unwrap_grok_user_query(&prompt)
+        } else {
+            prompt
+        }
+    });
 
     // Codex desktop only: drop internal desktop turns (ambient suggestions,
     // safety reviewer, memory consolidation). Their Stop event carries no
@@ -115,7 +180,7 @@ fn capture_stdin_event(agent: AgentKind) -> Result<(), String> {
         AgentKind::Cursor => SessionSource::Cursor,
         // Claude Desktop is intentionally out of scope; the Claude Code hook
         // only fires for terminal sessions. Grok Build and Kimi Code are
-        // terminal CLIs, and the Zcode hook payload carries no client
+        // terminal CLIs, and the ZCode hook payload carries no client
         // discriminator.
         _ => SessionSource::Terminal,
     };
@@ -172,6 +237,32 @@ fn canonical_event_name(name: &str) -> Option<&'static str> {
 
 fn string_field_any(input: &serde_json::Value, keys: &[&str]) -> Option<String> {
     keys.iter().find_map(|key| string_field(input, key))
+}
+
+/// Whether the payload can genuinely come from `agent`. Guards against CLIs
+/// that execute other agents' hook configs with their own payload shape
+/// (Grok reads ~/.claude/settings.json and ~/.cursor/hooks.json).
+fn payload_matches_agent(agent: AgentKind, input: &serde_json::Value) -> bool {
+    match agent {
+        // Claude Code always wraps hook payloads in snake_case. A camelCase-
+        // only hookEventName means another CLI invoked our handler.
+        AgentKind::Claude => string_field(input, "hook_event_name").is_some(),
+        // Every genuine Cursor hook payload carries conversation_id.
+        AgentKind::Cursor => string_field(input, "conversation_id").is_some(),
+        _ => true,
+    }
+}
+
+/// Grok wraps the submitted text in `<user_query>` tags in hook payloads;
+/// strip the wrapper so the monitor shows the raw user text.
+fn unwrap_grok_user_query(prompt: &str) -> String {
+    let inner = prompt
+        .trim()
+        .strip_prefix("<user_query>")
+        .and_then(|rest| rest.strip_suffix("</user_query>"))
+        .map(str::trim)
+        .filter(|text| !text.is_empty());
+    inner.unwrap_or(prompt).to_owned()
 }
 
 /// Extract the user prompt from the hook payload. Codex/Claude/Grok send a
@@ -261,6 +352,94 @@ fn monitor_root() -> Result<PathBuf, String> {
         .ok_or_else(|| "home directory is unavailable".to_string())
 }
 
+// --- Kimi sub-agent Stop filtering -----------------------------------------
+// One marker file per in-flight sub-agent, under
+// `~/.agent-hub/session-monitor/kimi-subagents/<session-id>/<millis>-<uuid>`.
+// File create/remove avoids the read-modify-write races a counter file would
+// have when parallel sub-agents finish at the same time.
+
+fn kimi_subagent_dir(root: &std::path::Path, session_id: &str) -> PathBuf {
+    let safe: String = session_id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    root.join("kimi-subagents").join(safe)
+}
+
+fn mark_kimi_subagent(session_id: &str) -> Result<(), String> {
+    mark_kimi_subagent_in(&monitor_root()?, session_id)
+}
+
+fn mark_kimi_subagent_in(root: &std::path::Path, session_id: &str) -> Result<(), String> {
+    let dir = kimi_subagent_dir(root, session_id);
+    fs::create_dir_all(&dir)
+        .map_err(|error| format!("unable to create sub-agent marker directory: {error}"))?;
+    let marker = dir.join(format!("{}-{}", now_millis(), Uuid::new_v4()));
+    fs::write(&marker, []).map_err(|error| format!("unable to create sub-agent marker: {error}"))?;
+    Ok(())
+}
+
+fn clear_kimi_subagent(session_id: &str) -> Result<(), String> {
+    clear_kimi_subagent_in(&monitor_root()?, session_id)
+}
+
+fn clear_kimi_subagent_in(root: &std::path::Path, session_id: &str) -> Result<(), String> {
+    let dir = kimi_subagent_dir(root, session_id);
+    let mut markers = list_kimi_markers(&dir);
+    markers.sort();
+    if let Some(oldest) = markers.first() {
+        let _ = fs::remove_file(oldest);
+    }
+    Ok(())
+}
+
+/// True while any non-stale sub-agent marker exists for the session. Stale
+/// markers (SubagentStop lost to a kill/crash) are pruned here so a main-turn
+/// Stop is suppressed for at most KIMI_SUBAGENT_MARKER_TTL_MILLIS.
+fn kimi_subagent_active(session_id: &str) -> bool {
+    monitor_root()
+        .map(|root| kimi_subagent_active_in(&root, session_id))
+        .unwrap_or(false)
+}
+
+fn kimi_subagent_active_in(root: &std::path::Path, session_id: &str) -> bool {
+    let dir = kimi_subagent_dir(root, session_id);
+    let cutoff = now_millis() - KIMI_SUBAGENT_MARKER_TTL_MILLIS;
+    let mut active = false;
+    for marker in list_kimi_markers(&dir) {
+        let created = marker
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.split('-').next())
+            .and_then(|millis| millis.parse::<i64>().ok());
+        match created {
+            Some(millis) if millis >= cutoff => active = true,
+            _ => {
+                let _ = fs::remove_file(&marker);
+            }
+        }
+    }
+    active
+}
+
+fn list_kimi_markers(dir: &std::path::Path) -> Vec<PathBuf> {
+    fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| path.is_file())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn ignored_sessions_path() -> Result<PathBuf, String> {
     Ok(monitor_root()?.join("ignored-sessions.json"))
 }
@@ -290,7 +469,10 @@ fn save_ignored_sessions(ids: &[String]) -> Result<(), String> {
         .map_err(|error| format!("unable to persist ignored sessions: {error}"))
 }
 
-/// Remember a session whose events must be dropped (internal desktop turn).
+/// Remember a session whose events must be dropped. Two users: Codex desktop
+/// internal turns (removed again by the matching Stop, see
+/// take_ignored_session) and Grok sub-agent child sessions (kept until the
+/// cap evicts them — a child session never fires a stop we could hook).
 fn mark_session_ignored(session_id: &str) -> Result<(), String> {
     let mut ids = load_ignored_sessions();
     if !ids.iter().any(|id| id == session_id) {
@@ -314,11 +496,44 @@ fn take_ignored_session(session_id: &str) -> bool {
     true
 }
 
+/// Return whether the session was marked as ignored, without removing it.
+fn is_session_ignored(session_id: &str) -> bool {
+    load_ignored_sessions().iter().any(|id| id == session_id)
+}
+
 fn now_millis() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
         .unwrap_or_default()
+}
+
+/// Development aid: append every raw hook payload to
+/// `~/.agent-hub/session-monitor/hook-debug.jsonl`. Active in debug builds or
+/// when AGENT_HUB_HOOK_DEBUG is set, so release builds never write it unless
+/// explicitly requested. Payloads may contain user prompts — local debugging
+/// only.
+fn debug_dump_payload(agent: AgentKind, bytes: &[u8]) {
+    let enabled = cfg!(debug_assertions)
+        || std::env::var_os("AGENT_HUB_HOOK_DEBUG").is_some_and(|value| !value.is_empty());
+    if !enabled {
+        return;
+    }
+    let Ok(path) = monitor_root().map(|root| root.join("hook-debug.jsonl")) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let raw: serde_json::Value = serde_json::from_slice(bytes).unwrap_or_default();
+    let line = serde_json::json!({
+        "ts": now_millis(),
+        "agent": agent.as_str(),
+        "raw": raw,
+    });
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(file, "{line}");
+    }
 }
 
 #[cfg(test)]
@@ -429,8 +644,41 @@ mod tests {
     }
 
     #[test]
+    fn provenance_guard_rejects_foreign_payloads() {
+        // Genuine Claude Code payload: snake_case hook_event_name.
+        let claude = serde_json::json!({"hook_event_name": "Stop", "session_id": "s1"});
+        assert!(payload_matches_agent(AgentKind::Claude, &claude));
+        // Grok running our Claude hook with its own camelCase payload.
+        let grok = serde_json::json!({"hookEventName": "stop", "sessionId": "s2"});
+        assert!(!payload_matches_agent(AgentKind::Claude, &grok));
+        // Genuine Cursor payload carries conversation_id; a Grok payload
+        // invoked through ~/.cursor/hooks.json does not.
+        let cursor = serde_json::json!({"hook_event_name": "stop", "conversation_id": "c1"});
+        assert!(payload_matches_agent(AgentKind::Cursor, &cursor));
+        assert!(!payload_matches_agent(AgentKind::Cursor, &grok));
+        // Other agents are not cross-invoked and pass unconditionally.
+        assert!(payload_matches_agent(AgentKind::Kimi, &grok));
+        assert!(payload_matches_agent(AgentKind::Grok, &grok));
+        assert!(payload_matches_agent(AgentKind::Codex, &grok));
+    }
+
+    #[test]
+    fn grok_user_query_wrapper_is_stripped() {
+        assert_eq!(
+            unwrap_grok_user_query("<user_query>\n帮我修一下这个 bug\n</user_query>"),
+            "帮我修一下这个 bug"
+        );
+        // Untagged prompts (and empty wrappers) pass through untouched.
+        assert_eq!(unwrap_grok_user_query("plain prompt"), "plain prompt");
+        assert_eq!(
+            unwrap_grok_user_query("<user_query>\n</user_query>"),
+            "<user_query>\n</user_query>"
+        );
+    }
+
+    #[test]
     fn zcode_payload_fields_are_extracted() {
-        // Zcode wraps hook payloads in snake_case (with camelCase aliases):
+        // ZCode wraps hook payloads in snake_case (with camelCase aliases):
         // session_id is `sess_<uuid>`, Stop carries last_assistant_message.
         let prompt_input = serde_json::json!({
             "session_id": "sess-9f2c",
@@ -455,7 +703,7 @@ mod tests {
             "stop_hook_active": false
         });
         assert_eq!(
-            assistant_reply_field(AgentKind::Zcode, &stop_input).as_deref(),
+            assistant_reply_field(AgentKind::ZCode, &stop_input).as_deref(),
             Some("已切换为暗色主题。")
         );
 
@@ -471,7 +719,7 @@ mod tests {
             Some("sess-7a1b")
         );
         assert_eq!(
-            assistant_reply_field(AgentKind::Zcode, &aliased).as_deref(),
+            assistant_reply_field(AgentKind::ZCode, &aliased).as_deref(),
             Some("done")
         );
     }
@@ -504,5 +752,48 @@ mod tests {
         assert!(!is_internal_system_prompt(
             "# Overview of my project\n\n请写一份项目概览"
         ));
+    }
+
+    #[test]
+    fn kimi_subagent_markers_track_parallel_subagents() {
+        let root = std::env::temp_dir().join(format!("agent-hub-test-{}", Uuid::new_v4()));
+        let session = "session_test";
+        assert!(!kimi_subagent_active_in(&root, session));
+
+        // Two parallel sub-agents: the first SubagentStop must not clear the
+        // second sub-agent's marker.
+        mark_kimi_subagent_in(&root, session).unwrap();
+        mark_kimi_subagent_in(&root, session).unwrap();
+        assert!(kimi_subagent_active_in(&root, session));
+        clear_kimi_subagent_in(&root, session).unwrap();
+        assert!(kimi_subagent_active_in(&root, session));
+        clear_kimi_subagent_in(&root, session).unwrap();
+        assert!(!kimi_subagent_active_in(&root, session));
+
+        // SubagentStop without a matching start is a no-op.
+        clear_kimi_subagent_in(&root, session).unwrap();
+        assert!(!kimi_subagent_active_in(&root, session));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn kimi_subagent_markers_isolate_sessions_and_prune_stale() {
+        let root = std::env::temp_dir().join(format!("agent-hub-test-{}", Uuid::new_v4()));
+        mark_kimi_subagent_in(&root, "session_a").unwrap();
+        assert!(kimi_subagent_active_in(&root, "session_a"));
+        // A marker must never leak into another session's check.
+        assert!(!kimi_subagent_active_in(&root, "session_b"));
+
+        // A marker older than the TTL (lost SubagentStop) is pruned and no
+        // longer suppresses the main turn's Stop.
+        let dir = kimi_subagent_dir(&root, "session_stale");
+        fs::create_dir_all(&dir).unwrap();
+        let stale = dir.join(format!("{}-{}", now_millis() - 2 * KIMI_SUBAGENT_MARKER_TTL_MILLIS, Uuid::new_v4()));
+        fs::write(&stale, []).unwrap();
+        assert!(!kimi_subagent_active_in(&root, "session_stale"));
+        assert!(!stale.exists());
+
+        let _ = fs::remove_dir_all(&root);
     }
 }

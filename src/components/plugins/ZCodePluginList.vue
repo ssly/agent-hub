@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import { useZcodePluginsStore, type ZcodePlugin } from '@/stores/zcode-plugins'
+import { useZCodePluginsStore, type ZCodePlugin } from '@/stores/zcode-plugins'
 import AppLoading from '@/components/ui/AppLoading.vue'
 
 const { t } = useI18n()
-const store = useZcodePluginsStore()
+const store = useZCodePluginsStore()
 
-function componentsLabel(plugin: ZcodePlugin) {
+function componentsLabel(plugin: ZCodePlugin) {
   const parts: string[] = []
   if (plugin.skill_count > 0) parts.push(t('plugin.zcode_component_skills', { count: plugin.skill_count }))
   if (plugin.command_count > 0) parts.push(t('plugin.zcode_component_commands', { count: plugin.command_count }))

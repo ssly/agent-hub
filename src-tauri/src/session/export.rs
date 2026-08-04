@@ -124,7 +124,7 @@ fn build_html(platform_id: &str, locale: &str, conversations: &[ExportConversati
         "kiro" => "Kiro",
         "grok" => "Grok Build",
         "kimi" => "Kimi Code",
-        "zcode" => "Zcode",
+        "zcode" => "ZCode",
         _ => platform_id,
     };
     let locale_tag = if locale.to_ascii_lowercase().starts_with("zh") {

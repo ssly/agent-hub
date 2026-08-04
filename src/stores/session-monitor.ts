@@ -82,7 +82,7 @@ const snapshotApi: Record<MonitorAgent, () => Promise<MonitorSnapshot>> = {
   cursor: api.getCursorSessionMonitorSnapshot,
   grok: api.getGrokSessionMonitorSnapshot,
   kimi: api.getKimiSessionMonitorSnapshot,
-  zcode: api.getZcodeSessionMonitorSnapshot,
+  zcode: api.getZCodeSessionMonitorSnapshot,
 }
 
 const deleteSessionApi: Record<MonitorAgent, (sessionId: string) => Promise<void>> = {
@@ -91,7 +91,7 @@ const deleteSessionApi: Record<MonitorAgent, (sessionId: string) => Promise<void
   cursor: api.deleteCursorSessionMonitorSession,
   grok: api.deleteGrokSessionMonitorSession,
   kimi: api.deleteKimiSessionMonitorSession,
-  zcode: api.deleteZcodeSessionMonitorSession,
+  zcode: api.deleteZCodeSessionMonitorSession,
 }
 
 const hookApi: Record<HookAgent, {
@@ -125,9 +125,9 @@ const hookApi: Record<HookAgent, {
     apply: api.applyKimiHookChange,
   },
   zcode: {
-    status: api.getZcodeHookStatus,
-    preview: api.previewZcodeHookChange,
-    apply: api.applyZcodeHookChange,
+    status: api.getZCodeHookStatus,
+    preview: api.previewZCodeHookChange,
+    apply: api.applyZCodeHookChange,
   },
 }
 

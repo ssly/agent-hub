@@ -14,7 +14,7 @@ import {
   getKimiSessionMonitorSnapshot,
   getKimiUsage,
   getUsageProviderAvailability,
-  getZcodeSessionMonitorSnapshot,
+  getZCodeSessionMonitorSnapshot,
   resizeUsageTray,
   setUsageTrayPinned,
 } from '@/lib/api'
@@ -91,7 +91,7 @@ const MONITOR_SNAPSHOT_API: Record<MonitorAgent, () => Promise<MonitorSnapshot>>
   cursor: getCursorSessionMonitorSnapshot,
   grok: getGrokSessionMonitorSnapshot,
   kimi: getKimiSessionMonitorSnapshot,
-  zcode: getZcodeSessionMonitorSnapshot,
+  zcode: getZCodeSessionMonitorSnapshot,
 }
 const monitorSnapshots = ref<Record<MonitorAgent, MonitorSnapshot>>({
   codex: { revision: 0, sessions: [] },

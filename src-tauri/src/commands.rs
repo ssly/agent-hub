@@ -1371,41 +1371,6 @@ fn base64_to_string(value: &str) -> Result<String, CommandError> {
         .map_err(|err| CommandError::SyncError(err.to_string()))
 }
 
-// --- MCP Sync Commands ---
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct McpSyncTarget {
-    pub id: String,
-    pub display_name: String,
-    pub has_server: bool,
-    pub format: String,
-}
-
-#[tauri::command]
-pub fn get_mcp_sync_targets(platform_id: String, server_name: String) -> Vec<McpSyncTarget> {
-    crate::mcp::builtin_mcp_platforms()
-        .into_iter()
-        // Only JSON platforms can be sync targets. TOML platforms (Codex) use a
-        // different config structure and don't support cross-format MCP sync.
-        .filter(|def| matches!(def.format, crate::mcp::McpFormat::Json))
-        .filter(|def| def.presence_path.exists())
-        .filter(|def| def.id != platform_id)
-        .map(|def| {
-            let has_server = crate::mcp::read_mcp_server(&def.id, &server_name).is_ok();
-            McpSyncTarget {
-                id: def.id,
-                display_name: def.display_name,
-                has_server,
-                format: match def.format {
-                    crate::mcp::McpFormat::Json => "json",
-                    crate::mcp::McpFormat::Toml => "toml",
-                }
-                .to_string(),
-            }
-        })
-        .collect()
-}
-
 #[tauri::command]
 pub fn preview_mcp_change_cmd(
     platform_id: String,
@@ -1430,29 +1395,6 @@ pub fn preview_mcp_change_cmd(
         crate::mcp::preview_delete_mcp_server(&platform_id, &server_name)
             .map_err(|e| CommandError::SyncError(e))
     }
-}
-
-#[tauri::command]
-pub fn preview_mcp_sync_cmd(
-    source_platform_id: String,
-    target_platform_id: String,
-    server_name: String,
-) -> Result<crate::mcp::McpSyncPreview, CommandError> {
-    crate::mcp::preview_mcp_sync(&source_platform_id, &target_platform_id, &server_name)
-        .map_err(|e| CommandError::SyncError(e))
-}
-
-#[tauri::command]
-pub fn sync_mcp_server_cmd(
-    source_platform_id: String,
-    target_platform_id: String,
-    server_name: String,
-) -> Result<String, CommandError> {
-    let server = crate::mcp::read_mcp_server(&source_platform_id, &server_name)
-        .map_err(|e| CommandError::NotFound(e))?;
-    let written = crate::mcp::sync_mcp_server(&server.config, &target_platform_id, &server_name)
-        .map_err(|e| CommandError::SyncError(e))?;
-    Ok(if written { "ok" } else { "no-op" }.to_string())
 }
 
 // --- Monitor Commands ---
@@ -1777,7 +1719,7 @@ pub fn apply_kimi_hook_change(
 pub fn get_zcode_session_monitor_snapshot(
     monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
 ) -> MonitorSnapshot {
-    monitor.snapshot(AgentKind::Zcode)
+    monitor.snapshot(AgentKind::ZCode)
 }
 
 #[tauri::command]
@@ -1786,20 +1728,20 @@ pub fn delete_zcode_session_monitor_session(
     session_id: String,
 ) -> Result<(), CommandError> {
     monitor
-        .remove_session(AgentKind::Zcode, &session_id)
+        .remove_session(AgentKind::ZCode, &session_id)
         .map_err(CommandError::General)
 }
 
 #[tauri::command]
 pub fn get_zcode_hook_status() -> Result<crate::session_monitor::HookStatus, CommandError> {
-    crate::session_monitor::get_hook_status(AgentKind::Zcode).map_err(CommandError::General)
+    crate::session_monitor::get_hook_status(AgentKind::ZCode).map_err(CommandError::General)
 }
 
 #[tauri::command]
 pub fn preview_zcode_hook_change(
     action: String,
 ) -> Result<crate::session_monitor::HookChangePreview, CommandError> {
-    crate::session_monitor::preview_hook_change(AgentKind::Zcode, parse_hook_action(&action)?)
+    crate::session_monitor::preview_hook_change(AgentKind::ZCode, parse_hook_action(&action)?)
         .map_err(CommandError::General)
 }
 
@@ -1809,15 +1751,15 @@ pub fn apply_zcode_hook_change(
     expected_before_hash: String,
 ) -> Result<crate::session_monitor::HookStatus, CommandError> {
     crate::session_monitor::apply_hook_change(
-        AgentKind::Zcode,
+        AgentKind::ZCode,
         parse_hook_action(&action)?,
         &expected_before_hash,
     )
     .map_err(CommandError::General)
 }
 
-/// Zcode 插件市场只读列表。目录不存在（未安装 Zcode）时返回空列表，不报错。
+/// ZCode 插件市场只读列表。目录不存在（未安装 ZCode）时返回空列表，不报错。
 #[tauri::command]
-pub fn get_zcode_plugins() -> Vec<crate::zcode_plugin::ZcodePluginView> {
+pub fn get_zcode_plugins() -> Vec<crate::zcode_plugin::ZCodePluginView> {
     crate::zcode_plugin::list_zcode_plugins()
 }

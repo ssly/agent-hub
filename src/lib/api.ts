@@ -79,14 +79,8 @@ export const deleteMcpServer = (platformId: string, name: string) =>
   invoke<void>('delete_mcp_server_cmd', { platformId, name })
 export const importMcpServer = (platformId: string, name: string, configText: string) =>
   invoke<void>('import_mcp_server_cmd', { platformId, name, configText })
-export const getMcpSyncTargets = (platformId: string, serverName: string) =>
-  invoke<any[]>('get_mcp_sync_targets', { platformId, serverName })
-export const previewMcpSync = (sourcePlatformId: string, targetPlatformId: string, serverName: string) =>
-  invoke<any>('preview_mcp_sync_cmd', { sourcePlatformId, targetPlatformId, serverName })
 export const previewMcpChange = (platformId: string, serverName: string, configText?: string) =>
   invoke<any>('preview_mcp_change_cmd', { platformId, serverName, configText })
-export const syncMcpServer = (sourcePlatformId: string, targetPlatformId: string, serverName: string) =>
-  invoke<void>('sync_mcp_server_cmd', { sourcePlatformId, targetPlatformId, serverName })
 
 // Claude Code native plugins
 export const listClaudePlugins = (workspaceDir = '') =>
@@ -94,8 +88,8 @@ export const listClaudePlugins = (workspaceDir = '') =>
 export const setClaudePluginEnabled = (pluginId: string, scope: string, enabled: boolean) =>
   invoke<void>('set_claude_plugin_enabled', { pluginId, scope, enabled })
 
-// Zcode marketplace plugins (read-only)
-export const getZcodePlugins = () => invoke<any[]>('get_zcode_plugins')
+// ZCode marketplace plugins (read-only)
+export const getZCodePlugins = () => invoke<any[]>('get_zcode_plugins')
 
 export async function pickPluginDirectory(): Promise<string | null> {
   if (!isTauri) return '/Users/demo/projects/agent-hub'
@@ -227,14 +221,14 @@ export const previewKimiHookChange = (action: 'install' | 'uninstall') =>
 export const applyKimiHookChange = (action: 'install' | 'uninstall', expectedBeforeHash: string) =>
   invoke<any>('apply_kimi_hook_change', { action, expectedBeforeHash })
 
-export const getZcodeSessionMonitorSnapshot = () =>
+export const getZCodeSessionMonitorSnapshot = () =>
   invoke<any>('get_zcode_session_monitor_snapshot')
-export const deleteZcodeSessionMonitorSession = (sessionId: string) =>
+export const deleteZCodeSessionMonitorSession = (sessionId: string) =>
   invoke<void>('delete_zcode_session_monitor_session', { sessionId })
-export const getZcodeHookStatus = () => invoke<any>('get_zcode_hook_status')
-export const previewZcodeHookChange = (action: 'install' | 'uninstall') =>
+export const getZCodeHookStatus = () => invoke<any>('get_zcode_hook_status')
+export const previewZCodeHookChange = (action: 'install' | 'uninstall') =>
   invoke<any>('preview_zcode_hook_change', { action })
-export const applyZcodeHookChange = (action: 'install' | 'uninstall', expectedBeforeHash: string) =>
+export const applyZCodeHookChange = (action: 'install' | 'uninstall', expectedBeforeHash: string) =>
   invoke<any>('apply_zcode_hook_change', { action, expectedBeforeHash })
 
 // Switch

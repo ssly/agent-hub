@@ -51,7 +51,7 @@ const PLATFORMS = [
   },
   {
     id: 'zcode',
-    display_name: 'Zcode',
+    display_name: 'ZCode',
     skill_dir: '~/.zcode/skills',
     skill_count: 2,
   },
@@ -92,7 +92,7 @@ const MCP_PLATFORMS = [
   { id: 'antigravity', display_name: 'Antigravity', server_count: 2, config_path: '~/.gemini/config/mcp_config.json', format: 'json' },
   { id: 'grok-build', display_name: 'Grok Build', server_count: 1, config_path: '~/.grok/config.toml', format: 'toml' },
   { id: 'kimi-code', display_name: 'Kimi Code', server_count: 2, config_path: '~/.kimi-code/mcp.json', format: 'json' },
-  { id: 'zcode', display_name: 'Zcode', server_count: 1, config_path: '~/.zcode/cli/config.json', format: 'json' },
+  { id: 'zcode', display_name: 'ZCode', server_count: 1, config_path: '~/.zcode/cli/config.json', format: 'json' },
 ]
 
 const CLAUDE_PLUGINS = [
@@ -108,7 +108,7 @@ const PROJECT_CLAUDE_PLUGINS = [
 ]
 
 const ZCODE_PLUGINS = [
-  { id: 'superpowers@zcode-plugins-official', name: 'superpowers', marketplace: 'zcode-plugins-official', version: '0.1.0', description: 'A collection of agentic skills and workflows for Zcode.', author: 'z.ai', installed: true, skill_count: 14, command_count: 3, hook_count: 1, install_path: '/Users/demo/.zcode/cli/plugins/cache/zcode-plugins-official/superpowers/0.1.0' },
+  { id: 'superpowers@zcode-plugins-official', name: 'superpowers', marketplace: 'zcode-plugins-official', version: '0.1.0', description: 'A collection of agentic skills and workflows for ZCode.', author: 'z.ai', installed: true, skill_count: 14, command_count: 3, hook_count: 1, install_path: '/Users/demo/.zcode/cli/plugins/cache/zcode-plugins-official/superpowers/0.1.0' },
   { id: 'frontend-design@zcode-plugins-official', name: 'frontend-design', marketplace: 'zcode-plugins-official', version: '1.2.0', description: 'Frontend design skill for UI/UX implementation.', author: 'z.ai', installed: false, skill_count: 2, command_count: 0, hook_count: 0, install_path: '/Users/demo/.zcode/cli/plugins/cache/zcode-plugins-official/frontend-design/1.2.0' },
 ]
 
@@ -127,7 +127,7 @@ const SESSION_PLATFORMS = [
   { id: 'claude-code', display_name: 'Claude Code', session_count: 28 },
   { id: 'grok', display_name: 'Grok Build', session_count: 2 },
   { id: 'kimi', display_name: 'Kimi Code', session_count: 4 },
-  { id: 'zcode', display_name: 'Zcode', session_count: 3 },
+  { id: 'zcode', display_name: 'ZCode', session_count: 3 },
   { id: 'kiro', display_name: 'Kiro', session_count: 3 },
 ]
 
@@ -236,10 +236,7 @@ export async function getMcpServer(_platformId: string, name: string, _workspace
 export async function saveMcpServer() { await delay() }
 export async function deleteMcpServer() { await delay() }
 export async function importMcpServer() { await delay() }
-export async function getMcpSyncTargets() { await delay(); return MCP_PLATFORMS.map(p => ({ id: p.id, display_name: p.display_name })) }
-export async function previewMcpSync() { await delay(); return { changes: [] } }
 export async function previewMcpChange() { await delay(); return { server_name: 'mock', target_format: 'json', target_config_path: '/mock/config.json', has_conflict: false, diff_lines: [{ tag: 'added', content: '  "mock": { "command": "echo" }\n' }], added: 1, removed: 0 } }
-export async function syncMcpServer() { await delay(500) }
 
 // Claude Code native plugins
 export async function listClaudePlugins(workspaceDir?: string) {
@@ -253,8 +250,8 @@ export async function setClaudePluginEnabled(pluginId: string, scope: string, en
   plugin.enabled = enabled
 }
 
-// Zcode marketplace plugins (read-only)
-export async function getZcodePlugins() {
+// ZCode marketplace plugins (read-only)
+export async function getZCodePlugins() {
   await delay()
   return ZCODE_PLUGINS.map(plugin => ({ ...plugin }))
 }
@@ -886,7 +883,7 @@ export async function applyKimiHookChange(action: 'install' | 'uninstall', _expe
 
 const ZCODE_HOOK_COMMAND = "'/Applications/AGENT HUB.app/Contents/MacOS/agent-hub' --agent-hub-zcode-hook"
 
-export async function getZcodeSessionMonitorSnapshot() {
+export async function getZCodeSessionMonitorSnapshot() {
   await delay()
   return {
     revision: 1,
@@ -894,27 +891,27 @@ export async function getZcodeSessionMonitorSnapshot() {
   }
 }
 
-export async function deleteZcodeSessionMonitorSession(sessionId: string) {
+export async function deleteZCodeSessionMonitorSession(sessionId: string) {
   await delay()
   zcodeMonitorSessions = zcodeMonitorSessions.filter(
     session => session.sessionId !== sessionId,
   )
 }
 
-export async function getZcodeHookStatus() {
+export async function getZCodeHookStatus() {
   await delay()
   return makeHookStatus(zcodeHookInstalled, '~/.zcode/cli/config.json', ZCODE_HOOK_COMMAND)
 }
 
-export async function previewZcodeHookChange(action: 'install' | 'uninstall') {
+export async function previewZCodeHookChange(action: 'install' | 'uninstall') {
   await delay()
   return makeHookPreview(action, '~/.zcode/cli/config.json', ZCODE_HOOK_COMMAND)
 }
 
-export async function applyZcodeHookChange(action: 'install' | 'uninstall', _expectedBeforeHash: string) {
+export async function applyZCodeHookChange(action: 'install' | 'uninstall', _expectedBeforeHash: string) {
   await delay(300)
   zcodeHookInstalled = action === 'install'
-  return getZcodeHookStatus()
+  return getZCodeHookStatus()
 }
 
 // App

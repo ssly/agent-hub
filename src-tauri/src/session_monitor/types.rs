@@ -8,7 +8,7 @@ pub enum AgentKind {
     Cursor,
     Grok,
     Kimi,
-    Zcode,
+    ZCode,
 }
 
 impl AgentKind {
@@ -18,7 +18,7 @@ impl AgentKind {
         Self::Cursor,
         Self::Grok,
         Self::Kimi,
-        Self::Zcode,
+        Self::ZCode,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -28,7 +28,7 @@ impl AgentKind {
             Self::Cursor => "cursor",
             Self::Grok => "grok",
             Self::Kimi => "kimi",
-            Self::Zcode => "zcode",
+            Self::ZCode => "zcode",
         }
     }
 
@@ -39,7 +39,7 @@ impl AgentKind {
             Self::Cursor => "cursor-state.json",
             Self::Grok => "grok-state.json",
             Self::Kimi => "kimi-state.json",
-            Self::Zcode => "zcode-state.json",
+            Self::ZCode => "zcode-state.json",
         }
     }
 
@@ -50,7 +50,7 @@ impl AgentKind {
             Self::Cursor => "session-monitor:cursor-changed",
             Self::Grok => "session-monitor:grok-changed",
             Self::Kimi => "session-monitor:kimi-changed",
-            Self::Zcode => "session-monitor:zcode-changed",
+            Self::ZCode => "session-monitor:zcode-changed",
         }
     }
 }

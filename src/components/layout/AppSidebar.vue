@@ -96,7 +96,7 @@ function getSidebarItems() {
     { id: 'cursor', display_name: 'Cursor' },
     { id: 'grok', display_name: 'Grok Build' },
     { id: 'kimi', display_name: 'Kimi Code' },
-    { id: 'zcode', display_name: 'Zcode' },
+    { id: 'zcode', display_name: 'ZCode' },
   ]
   if (appStore.currentTab === 'accounts') return [
     { id: 'codex', display_name: 'Codex' },

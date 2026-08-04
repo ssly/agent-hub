@@ -71,11 +71,11 @@ pub fn builtin_mcp_platforms() -> Vec<McpPlatformDef> {
         },
         McpPlatformDef {
             id: "zcode".into(),
-            display_name: "Zcode".into(),
+            display_name: "ZCode".into(),
             presence_path: home.join(".zcode"),
             config_path: join_relative(home.clone(), ".zcode/cli/config.json"),
             format: McpFormat::Json,
-            // Zcode nests its name→server map one level down: mcp.servers.
+            // ZCode nests its name→server map one level down: mcp.servers.
             mcp_key: "mcp.servers".into(),
         },
         McpPlatformDef {

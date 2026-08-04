@@ -71,7 +71,7 @@ pub fn list_session_platforms() -> Result<Vec<SessionPlatform>, String> {
     if zcode_count > 0 {
         platforms.push(SessionPlatform {
             id: "zcode".to_string(),
-            display_name: "Zcode".to_string(),
+            display_name: "ZCode".to_string(),
             session_count: zcode_count,
         });
     }
@@ -677,10 +677,10 @@ fn build_resume_command(platform_id: &str, session_id: &str) -> Result<String, S
             }
             Ok(format!("kimi --session {}", shell_quote(session_id)))
         }
-        // Zcode is an Electron desktop app: sessions have no terminal resume
+        // ZCode is an Electron desktop app: sessions have no terminal resume
         // command. The resume modal surfaces this error instead of a command.
         "zcode" => Err(
-            "Zcode is a desktop application and does not support terminal session resume."
+            "ZCode is a desktop application and does not support terminal session resume."
                 .to_string(),
         ),
         _ => Err(format!("Unsupported platform: {}", platform_id)),

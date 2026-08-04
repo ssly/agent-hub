@@ -3,13 +3,13 @@ import { defineStore } from 'pinia'
 import { useSkillsStore } from './skills'
 import { useMcpStore } from './mcp'
 import { useClaudePluginsStore } from './claude-plugins'
-import { useZcodePluginsStore } from './zcode-plugins'
+import { useZCodePluginsStore } from './zcode-plugins'
 
 export const usePluginsStore = defineStore('plugins', () => {
   const skillsStore = useSkillsStore()
   const mcpStore = useMcpStore()
   const claudePluginsStore = useClaudePluginsStore()
-  const zcodePluginsStore = useZcodePluginsStore()
+  const zcodePluginsStore = useZCodePluginsStore()
   const selectedPlatformId = ref<string | null>(localStorage.getItem('ah-plugin-platform'))
   const workspaceDirectory = ref(localStorage.getItem('ah-plugin-workspace-dir') || '')
   const isLoading = ref(false)
@@ -90,7 +90,7 @@ export const usePluginsStore = defineStore('plugins', () => {
       id === 'claude-code'
         ? claudePluginsStore.loadPlugins(workspaceDirectory.value)
         : Promise.resolve(claudePluginsStore.clear()),
-      // Zcode 插件市场只有用户级数据，项目目录范围不展示。
+      // ZCode 插件市场只有用户级数据，项目目录范围不展示。
       id === 'zcode' && !workspaceDirectory.value
         ? zcodePluginsStore.loadPlugins()
         : Promise.resolve(zcodePluginsStore.clear()),

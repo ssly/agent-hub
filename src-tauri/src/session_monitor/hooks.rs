@@ -18,6 +18,11 @@ const STOP: &str = "Stop";
 // such events — its Stop covers every turn end.
 const STOP_FAILURE: &str = "StopFailure";
 const INTERRUPT: &str = "Interrupt";
+// Kimi fires a payload-identical Stop when a sub-agent's turn ends; capture
+// uses these two events to keep per-session sub-agent markers and drop those
+// premature Stops (see capture.rs).
+const SUBAGENT_START: &str = "SubagentStart";
+const SUBAGENT_STOP: &str = "SubagentStop";
 const CURSOR_BEFORE_SUBMIT_PROMPT: &str = "beforeSubmitPrompt";
 const CURSOR_AFTER_AGENT_RESPONSE: &str = "afterAgentResponse";
 const CURSOR_STOP: &str = "stop";
@@ -27,16 +32,34 @@ const CURSOR_STOP: &str = "stop";
 fn managed_events(agent: AgentKind) -> &'static [&'static str] {
     match agent {
         AgentKind::Codex => &[USER_PROMPT_SUBMIT, STOP],
-        AgentKind::Claude | AgentKind::Grok => &[USER_PROMPT_SUBMIT, STOP, STOP_FAILURE],
+        AgentKind::Claude => &[USER_PROMPT_SUBMIT, STOP, STOP_FAILURE],
+        // Grok's SubagentStart names sub-agent child sessions so capture can
+        // drop their events (they would plant permanently-running phantom
+        // rows). Grok sub-agents never fire plain stop, so no marker-based
+        // Stop filtering is needed here, unlike Kimi.
+        AgentKind::Grok => &[
+            USER_PROMPT_SUBMIT,
+            STOP,
+            STOP_FAILURE,
+            SUBAGENT_START,
+            SUBAGENT_STOP,
+        ],
         AgentKind::Cursor => &[
             CURSOR_BEFORE_SUBMIT_PROMPT,
             CURSOR_AFTER_AGENT_RESPONSE,
             CURSOR_STOP,
         ],
-        AgentKind::Kimi => &[USER_PROMPT_SUBMIT, STOP, INTERRUPT, STOP_FAILURE],
-        // Zcode snapshots hook config at session start; its two managed
+        AgentKind::Kimi => &[
+            USER_PROMPT_SUBMIT,
+            STOP,
+            INTERRUPT,
+            STOP_FAILURE,
+            SUBAGENT_START,
+            SUBAGENT_STOP,
+        ],
+        // ZCode snapshots hook config at session start; its two managed
         // events take no matcher.
-        AgentKind::Zcode => &[USER_PROMPT_SUBMIT, STOP],
+        AgentKind::ZCode => &[USER_PROMPT_SUBMIT, STOP],
     }
 }
 
@@ -70,7 +93,7 @@ fn hook_arg(agent: AgentKind) -> Result<&'static str, String> {
         AgentKind::Cursor => Ok(CURSOR_HOOK_ARG),
         AgentKind::Grok => Ok(GROK_HOOK_ARG),
         AgentKind::Kimi => Ok(KIMI_HOOK_ARG),
-        AgentKind::Zcode => Ok(ZCODE_HOOK_ARG),
+        AgentKind::ZCode => Ok(ZCODE_HOOK_ARG),
     }
 }
 
@@ -85,7 +108,7 @@ fn config_path(agent: AgentKind) -> Result<PathBuf, String> {
         // shared one.
         AgentKind::Grok => Ok(home.join(".grok").join("hooks").join("agent-hub.json")),
         AgentKind::Kimi => Ok(home.join(".kimi-code").join("config.toml")),
-        AgentKind::Zcode => Ok(home.join(".zcode").join("cli").join("config.json")),
+        AgentKind::ZCode => Ok(home.join(".zcode").join("cli").join("config.json")),
     }
 }
 
@@ -96,7 +119,7 @@ fn config_label(agent: AgentKind) -> &'static str {
         AgentKind::Cursor => "Cursor Hook 配置文件",
         AgentKind::Grok => "Grok Hook 文件",
         AgentKind::Kimi => "Kimi Code 配置文件",
-        AgentKind::Zcode => "Zcode 配置文件",
+        AgentKind::ZCode => "ZCode 配置文件",
     }
 }
 
@@ -107,7 +130,7 @@ fn agent_label(agent: AgentKind) -> &'static str {
         AgentKind::Cursor => "Cursor",
         AgentKind::Grok => "Grok Build",
         AgentKind::Kimi => "Kimi Code",
-        AgentKind::Zcode => "Zcode",
+        AgentKind::ZCode => "ZCode",
     }
 }
 
@@ -118,7 +141,7 @@ pub fn get_hook_status(agent: AgentKind) -> Result<HookStatus, String> {
     if agent == AgentKind::Cursor {
         return cursor_hook_status();
     }
-    if agent == AgentKind::Zcode {
+    if agent == AgentKind::ZCode {
         return zcode_hook_status();
     }
     let path = config_path(agent)?;
@@ -196,7 +219,7 @@ pub fn preview_hook_change(
         let after = cursor_render_after(action, &path, &command, &before)?;
         return Ok(build_preview(action, &path, &command, &before, &after));
     }
-    if agent == AgentKind::Zcode {
+    if agent == AgentKind::ZCode {
         let executable = expected_executable()?;
         let after = zcode_render_after(action, &path, &executable, &before)?;
         return Ok(build_preview(action, &path, &command, &before, &after));
@@ -225,7 +248,7 @@ pub fn apply_hook_change(
         kimi_render_after(action, &command, &before)
     } else if agent == AgentKind::Cursor {
         cursor_render_after(action, &path, &command, &before)?
-    } else if agent == AgentKind::Zcode {
+    } else if agent == AgentKind::ZCode {
         zcode_render_after(action, &path, &expected_executable()?, &before)?
     } else {
         render_after(agent, action, &path, &command, arg, &before)?
@@ -421,7 +444,7 @@ fn is_managed_handler(handler: &Value, arg: &str) -> bool {
             .is_some_and(|command| command.split_whitespace().any(|part| part == arg))
 }
 
-/// The bare Agent Hub executable path. Zcode's `process` hook executor takes
+/// The bare Agent Hub executable path. ZCode's `process` hook executor takes
 /// the binary path and an args array instead of one shell string.
 fn expected_executable() -> Result<String, String> {
     let executable = std::env::current_exe()
@@ -780,13 +803,17 @@ fn kimi_render_after(action: HookAction, command: &str, before: &str) -> String 
     if !cleaned.is_empty() {
         cleaned.push('\n');
     }
-    cleaned.push_str(&format!(
-        "[[hooks]]\nevent = \"{USER_PROMPT_SUBMIT}\"\ncommand = \"{}\"\ntimeout = 10\n\n[[hooks]]\nevent = \"{STOP}\"\ncommand = \"{}\"\ntimeout = 10\n\n[[hooks]]\nevent = \"{INTERRUPT}\"\ncommand = \"{}\"\ntimeout = 10\n\n[[hooks]]\nevent = \"{STOP_FAILURE}\"\ncommand = \"{}\"\ntimeout = 10\n",
-        kimi_toml_escape(command),
-        kimi_toml_escape(command),
-        kimi_toml_escape(command),
-        kimi_toml_escape(command),
-    ));
+    let blocks = managed_events(AgentKind::Kimi)
+        .iter()
+        .map(|event| {
+            format!(
+                "[[hooks]]\nevent = \"{event}\"\ncommand = \"{}\"\ntimeout = 10\n",
+                kimi_toml_escape(command)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    cleaned.push_str(&blocks);
     cleaned
 }
 
@@ -830,17 +857,17 @@ fn remove_kimi_managed_blocks(before: &str) -> String {
     }
 }
 
-// --- Zcode (JSON with enabled master switch + events map) -------------------
-// Zcode reads ~/.zcode/cli/config.json and runs hooks only when
+// --- ZCode (JSON with enabled master switch + events map) -------------------
+// ZCode reads ~/.zcode/cli/config.json and runs hooks only when
 // `hooks.enabled` is true. Its executor is `type: "process"` — binary path
 // plus an args array, no shell — and there is no trust gate. The file holds
-// other user settings (and Zcode's server schema is strict about unknown
+// other user settings (and ZCode's server schema is strict about unknown
 // keys), so edits are surgical serde_json::Value operations: only our managed
 // handlers (identified by the hook arg) are added or removed, everything else
 // survives untouched.
 
 fn zcode_hook_status() -> Result<HookStatus, String> {
-    let path = config_path(AgentKind::Zcode)?;
+    let path = config_path(AgentKind::ZCode)?;
     let command = expected_command(ZCODE_HOOK_ARG)?;
     if !path.exists() {
         return Ok(HookStatus {
@@ -857,7 +884,7 @@ fn zcode_hook_status() -> Result<HookStatus, String> {
     let root = parse_root(&content, &path)?;
     let executable = expected_executable()?;
     let managed = zcode_managed_entries(&root);
-    let events = managed_events(AgentKind::Zcode);
+    let events = managed_events(AgentKind::ZCode);
     let installed = managed.len() == events.len()
         && events
             .iter()
@@ -866,11 +893,11 @@ fn zcode_hook_status() -> Result<HookStatus, String> {
     let issue = if installed && !zcode_hooks_enabled(&root) {
         // Like Claude's disableAllHooks: an installed-but-disabled hook looks
         // broken, so surface the master switch.
-        Some("Zcode 配置中 hooks.enabled 为 false，所有 Hook 都不会执行，请开启该选项或重新安装。".to_string())
+        Some("ZCode 配置中 hooks.enabled 为 false，所有 Hook 都不会执行，请开启该选项或重新安装。".to_string())
     } else if !installed && !managed.is_empty() {
         Some(format!(
             "{} Hook 配置不完整或命令路径已变化，可重新安装进行修复。",
-            agent_label(AgentKind::Zcode)
+            agent_label(AgentKind::ZCode)
         ))
     } else {
         None
@@ -943,7 +970,7 @@ fn zcode_render_after(
     if action == HookAction::Install {
         let hooks = root
             .as_object_mut()
-            .ok_or_else(|| "Zcode config root is not an object".to_string())?
+            .ok_or_else(|| "ZCode config root is not an object".to_string())?
             .entry("hooks".to_string())
             .or_insert_with(|| Value::Object(Map::new()))
             .as_object_mut()
@@ -955,7 +982,7 @@ fn zcode_render_after(
             .or_insert_with(|| Value::Object(Map::new()))
             .as_object_mut()
             .ok_or_else(|| "hooks.events 字段必须是 JSON 对象，已停止安装以保护原配置。".to_string())?;
-        for event in managed_events(AgentKind::Zcode) {
+        for event in managed_events(AgentKind::ZCode) {
             let groups = events
                 .entry(event.to_string())
                 .or_insert_with(|| Value::Array(Vec::new()))
@@ -974,7 +1001,7 @@ fn zcode_render_after(
         }
     }
     let mut rendered = serde_json::to_string_pretty(&root)
-        .map_err(|error| format!("unable to serialize Zcode 配置文件: {error}"))?;
+        .map_err(|error| format!("unable to serialize ZCode 配置文件: {error}"))?;
     rendered.push('\n');
     Ok(rendered)
 }
@@ -982,11 +1009,11 @@ fn zcode_render_after(
 /// Drop our managed handlers, then clean up the scaffolding that only existed
 /// for them: event keys left with no groups, an empty `events` object, and —
 /// when nothing but the master switch remains — the whole `hooks` key (which
-/// restores Zcode's default hooks-off state). When the user has other
+/// restores ZCode's default hooks-off state). When the user has other
 /// handlers, `enabled` stays exactly as it was.
 fn remove_zcode_managed_handlers(root: &mut Value) -> Result<(), String> {
     let Some(root_object) = root.as_object_mut() else {
-        return Err("Zcode config root is not an object".to_string());
+        return Err("ZCode config root is not an object".to_string());
     };
     let remove_hooks_key = {
         let Some(hooks_value) = root_object.get_mut("hooks") else {
@@ -1285,7 +1312,7 @@ mod tests {
     }
 
     #[test]
-    fn kimi_install_appends_four_managed_blocks_and_preserves_config() {
+    fn kimi_install_appends_six_managed_blocks_and_preserves_config() {
         let before = "model = \"k2\"\n\n[[hooks]]\nevent = \"Notification\"\ncommand = \"terminal-notifier -message done\"\n";
         let after = kimi_render_after(
             HookAction::Install,
@@ -1295,11 +1322,13 @@ mod tests {
         assert!(after.contains("model = \"k2\""));
         assert!(after.contains("terminal-notifier"));
         let entries = kimi_managed_entries(&after).unwrap();
-        assert_eq!(entries.len(), 4);
+        assert_eq!(entries.len(), 6);
         assert!(entries.iter().any(|(event, _)| event == USER_PROMPT_SUBMIT));
         assert!(entries.iter().any(|(event, _)| event == STOP));
         assert!(entries.iter().any(|(event, _)| event == INTERRUPT));
         assert!(entries.iter().any(|(event, _)| event == STOP_FAILURE));
+        assert!(entries.iter().any(|(event, _)| event == SUBAGENT_START));
+        assert!(entries.iter().any(|(event, _)| event == SUBAGENT_STOP));
     }
 
     #[test]
@@ -1428,7 +1457,7 @@ mod tests {
                 .unwrap();
         let after = zcode_render_after(HookAction::Uninstall, path, "agent-hub", &installed).unwrap();
         let root: Value = serde_json::from_str(&after).unwrap();
-        // Restores Zcode's default hooks-off state; unrelated keys survive.
+        // Restores ZCode's default hooks-off state; unrelated keys survive.
         assert!(root.get("hooks").is_none());
         assert_eq!(root["custom"], "keep-me");
     }

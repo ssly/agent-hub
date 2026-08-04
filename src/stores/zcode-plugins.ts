@@ -2,7 +2,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import * as api from '@/lib/api'
 
-export interface ZcodePlugin {
+export interface ZCodePlugin {
   id: string
   name: string
   marketplace: string
@@ -16,10 +16,10 @@ export interface ZcodePlugin {
   install_path: string
 }
 
-// Zcode 插件市场只读列表：只存在用户级（~/.zcode/cli/plugins），
+// ZCode 插件市场只读列表：只存在用户级（~/.zcode/cli/plugins），
 // 项目目录范围不加载。
-export const useZcodePluginsStore = defineStore('zcode-plugins', () => {
-  const plugins = ref<ZcodePlugin[]>([])
+export const useZCodePluginsStore = defineStore('zcode-plugins', () => {
+  const plugins = ref<ZCodePlugin[]>([])
   const loading = ref(false)
   const error = ref('')
 
@@ -29,7 +29,7 @@ export const useZcodePluginsStore = defineStore('zcode-plugins', () => {
     loading.value = true
     error.value = ''
     try {
-      plugins.value = await api.getZcodePlugins()
+      plugins.value = await api.getZCodePlugins()
     } catch (e: any) {
       error.value = String(e?.message || e)
       plugins.value = []

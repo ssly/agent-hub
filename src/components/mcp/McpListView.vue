@@ -57,12 +57,6 @@ function handleDetailEdit() {
   handleEditClick(name)
 }
 
-function handleDetailSync() {
-  const name = detailServerName.value
-  closeServerDetail()
-  handleSyncClick(name)
-}
-
 function handleDetailDelete() {
   const name = detailServerName.value
   closeServerDetail()
@@ -159,29 +153,6 @@ function handlePreviewCancel() {
   } else if (wasAdd) {
     // Re-open add modal with preserved inputs
     store.addModalOpen = true
-  }
-}
-
-async function handleSyncClick(serverName: string) {
-  try {
-    await store.loadSyncTargets(serverName)
-    if (store.syncTargets.length === 0) {
-      showToast(t('diff.no_other'), 'warning')
-    } else {
-      store.syncModalOpen = true
-    }
-  } catch (e: any) {
-    showToast(String(e), 'error')
-  }
-}
-
-async function handleDoSync() {
-  if (!store.syncTargetPlatformId) return
-  try {
-    await store.performSync(store.syncTargetPlatformId)
-    showToast(t('mcp.sync_done'), 'success')
-  } catch (e: any) {
-    showToast(t('mcp.sync_failed', { error: e?.message || e }), 'error')
   }
 }
 
@@ -311,7 +282,6 @@ function stripTomlHeader(text: string, name: string): string {
           <template #footer>
             <div class="flex items-center gap-2 w-full">
               <template v-if="!props.readonly">
-                <button class="btn btn-secondary" @click="handleDetailSync">{{ t('mcp.sync') }}</button>
                 <button class="btn btn-danger" @click="handleDetailDelete">{{ t('mcp.delete') }}</button>
               </template>
               <div class="flex-1" />
@@ -362,33 +332,6 @@ function stripTomlHeader(text: string, name: string): string {
           <template #footer>
             <button class="btn btn-secondary" @click="store.addModalOpen = false">{{ t('action.cancel') }}</button>
             <button class="btn btn-primary" :disabled="!newServerName.trim()" @click="handleCreateServer">{{ t('action.confirm') }}</button>
-          </template>
-        </AppModal>
-
-        <!-- Sync Server Modal -->
-        <AppModal
-          :show="store.syncModalOpen"
-          :title="t('mcp.sync_title')"
-          @close="store.syncModalOpen = false"
-          width-class="w-[30rem]"
-        >
-          <div class="space-y-4">
-            <div class="flex flex-col gap-1.5">
-              <label class="text-xs font-semibold" style="color: var(--ink-2)">{{ t('mcp.select_target') }}</label>
-              <select
-                v-model="store.syncTargetPlatformId"
-                class="ah-select w-full"
-                style="height: 36px;"
-              >
-                <option v-for="target in store.syncTargets" :key="target.id" :value="target.id">
-                  {{ target.display_name }}
-                </option>
-              </select>
-            </div>
-          </div>
-          <template #footer>
-            <button class="btn btn-secondary" @click="store.syncModalOpen = false">{{ t('action.cancel') }}</button>
-            <button class="btn btn-primary" :disabled="!store.syncTargetPlatformId" @click="handleDoSync">{{ t('action.confirm') }}</button>
           </template>
         </AppModal>
 

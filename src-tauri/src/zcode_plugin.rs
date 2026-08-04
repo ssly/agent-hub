@@ -1,6 +1,6 @@
-//! Zcode 插件市场只读列表。
+//! ZCode 插件市场只读列表。
 //!
-//! Zcode 的插件体系是 Claude Code 风格的市场制：
+//! ZCode 的插件体系是 Claude Code 风格的市场制：
 //!
 //! - 市场登记：`~/.zcode/cli/plugins/marketplaces/<marketplace-id>/marketplace.json`
 //!   （`plugins[]` 带 `name` / `version` / `cachePath` / `source`；登记版本与
@@ -12,7 +12,7 @@
 //! 只读原因：官方文档只说启停状态写在 `~/.zcode/cli/config.json` 的 plugins 键，
 //! 语义未证实；这里把 data 目录存在性作为「已安装」的推测标记，不做任何启停写操作。
 //!
-//! 所有 IO / 解析失败都降级为空列表或跳过单个条目：目录不存在视为未安装 Zcode，
+//! 所有 IO / 解析失败都降级为空列表或跳过单个条目：目录不存在视为未安装 ZCode，
 //! 绝不向前端报错。
 
 use serde::Serialize;
@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use crate::paths::{home_dir, join_relative};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct ZcodePluginView {
+pub struct ZCodePluginView {
     /// `<name>@<marketplace-id>`，前端列表 key。
     pub id: String,
     pub name: String,
@@ -43,11 +43,11 @@ fn zcode_plugins_root() -> PathBuf {
     join_relative(home_dir(), ".zcode/cli/plugins")
 }
 
-pub fn list_zcode_plugins() -> Vec<ZcodePluginView> {
+pub fn list_zcode_plugins() -> Vec<ZCodePluginView> {
     scan_plugins_root(&zcode_plugins_root())
 }
 
-fn scan_plugins_root(root: &Path) -> Vec<ZcodePluginView> {
+fn scan_plugins_root(root: &Path) -> Vec<ZCodePluginView> {
     let Ok(entries) = fs::read_dir(root.join("marketplaces")) else {
         return Vec::new();
     };
@@ -71,7 +71,7 @@ fn scan_plugins_root(root: &Path) -> Vec<ZcodePluginView> {
     plugins
 }
 
-fn scan_marketplace(root: &Path, marketplace_dir: &Path, marketplace_id: &str) -> Vec<ZcodePluginView> {
+fn scan_marketplace(root: &Path, marketplace_dir: &Path, marketplace_id: &str) -> Vec<ZCodePluginView> {
     // 损坏或缺失的 marketplace.json 只跳过这一个市场，不影响其他市场。
     let Ok(text) = fs::read_to_string(marketplace_dir.join("marketplace.json")) else {
         return Vec::new();
@@ -89,7 +89,7 @@ fn scan_marketplace(root: &Path, marketplace_dir: &Path, marketplace_id: &str) -
         .collect()
 }
 
-fn scan_plugin(root: &Path, marketplace_id: &str, item: &Value) -> Option<ZcodePluginView> {
+fn scan_plugin(root: &Path, marketplace_id: &str, item: &Value) -> Option<ZCodePluginView> {
     let name = item
         .get("name")
         .and_then(Value::as_str)
@@ -127,7 +127,7 @@ fn scan_plugin(root: &Path, marketplace_id: &str, item: &Value) -> Option<ZcodeP
         .join(format!("{name}@{marketplace_id}"))
         .is_dir();
 
-    Some(ZcodePluginView {
+    Some(ZCodePluginView {
         id: format!("{name}@{marketplace_id}"),
         name,
         marketplace: marketplace_id.to_owned(),

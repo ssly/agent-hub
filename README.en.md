@@ -7,7 +7,7 @@
 **Unified management for local AI Agent platforms**
 
 Manage plugins (Skills, MCP Servers, and Claude Code extensions), session history, live session monitoring,
-and account profiles across Claude Code · Codex CLI · Kiro · Kimi Code · Grok Build and more — in one desktop app.
+and account profiles across Claude Code · Codex CLI · Cursor · Kimi Code · Grok Build · ZCode · Kiro and more — in one desktop app.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Tauri 2.x](https://img.shields.io/badge/Tauri-2.x-blue?logo=tauri&logoColor=white)](https://v2.tauri.app/)
@@ -41,6 +41,7 @@ Agent Hub solves this. One desktop app to manage them all.
 - **One workspace** — Manage Skills, MCP Servers, and Claude Code native plugins from the same Agent page
 - **Global or project scope** — Use each Agent's global user directory or select a project folder to inspect its local configuration
 - **Claude Code plugins** — Browse installed native plugins and enable or disable user-scoped plugins; project, local, and managed scopes remain visible as read-only
+- **ZCode plugin marketplace** — Read-only browse of ZCode marketplace plugins (registry + cache + install status); enable/disable in ZCode settings
 
 #### Skill Management
 
@@ -53,19 +54,18 @@ Agent Hub solves this. One desktop app to manage them all.
 
 #### MCP Server Management
 
-- Supports **8 platforms** with JSON / TOML format auto-conversion
-- Accordion-style inline editing
-- Cross-platform sync — extracts universal fields (`command`, `args`, `env`), preserves platform-specific ones
+- Supports **8 platforms** with automatic JSON / TOML detection (including ZCode's nested `mcp.servers`, preserving unknown fields on read/write)
+- Accordion-style inline editing with a Diff preview before changes apply
 - Paste-import raw JSON / TOML config
 - Project-scoped MCP configs can be inspected alongside project Skills; project scope is read-only to avoid accidental repository changes
 
 ### 📜 Session Browser
 
-- Browse history from **Claude Code**, **Codex CLI**, **Kiro**, and **Grok CLI**
+- Browse history from **Claude Code**, **Codex CLI**, **Kiro**, **Grok CLI**, **Kimi Code**, and **ZCode**
 - Filter by project path, paginate through conversations
 - View full message history (user & assistant turns)
 - **Batch HTML export** — Export selected conversations as one searchable, self-contained HTML file that opens in any modern browser
-- **Resume sessions** in your terminal — macOS: Warp, iTerm, Ghostty, Terminal · Windows: Windows Terminal, PowerShell, CMD
+- **Resume sessions** in your terminal — supported for Claude Code / Codex / Kiro / Grok / Kimi; **ZCode is an Electron desktop app and does not support terminal resume**. Terminals: macOS Warp, iTerm, Ghostty, Terminal · Windows Windows Terminal, PowerShell, CMD
 
 ### 📡 Session Monitor
 
@@ -73,9 +73,10 @@ Watch live sessions in real time — running/ended status, the latest user promp
 
 - **Codex** — two lifecycle Hooks (`UserPromptSubmit` + `Stop`) injected into `~/.codex/hooks.json`
 - **Claude Code** — the same Hooks added to `~/.claude/settings.json` (hot-reloaded, no restart), plus `StopFailure` for turns killed by API errors
-- **Grok Build** — a standalone managed Hook file `~/.grok/hooks/agent-hub.json` (including `StopFailure`); shared configs are never touched
-- **Kimi Code** — `[[hooks]]` tables in `~/.kimi-code/config.toml` (including `Interrupt` and `StopFailure`), edited as plain text blocks so comments and formatting survive
-- **Kiro** — pure file watching on `~/.kiro/sessions/cli/` (incremental tail + lock-file pid liveness). Works out of the box on any kiro-cli version, with zero writes to Kiro configuration
+- **Cursor** — `~/.cursor/hooks.json` (shared by IDE and CLI); events `beforeSubmitPrompt` / `afterAgentResponse` / `stop`; CLI needs ≥2026-01-16 for lifecycle events
+- **Grok Build** — a standalone managed Hook file `~/.grok/hooks/agent-hub.json` (five events: `UserPromptSubmit`, `Stop`, `StopFailure`, `SubagentStart`, `SubagentStop`); shared configs are never touched
+- **Kimi Code** — `[[hooks]]` tables in `~/.kimi-code/config.toml` (six events including `Interrupt`, `StopFailure`, `SubagentStart`, `SubagentStop`), edited as plain text blocks so comments and formatting survive
+- **ZCode** — `hooks.events` in `~/.zcode/cli/config.json` (`UserPromptSubmit` + `Stop`); requires `hooks.enabled: true`
 - The "All" view shows per-agent status tags at a glance, and outdated hook installs get an upgrade prompt
 - Hook install/uninstall always shows a diff preview first and only ever touches Agent Hub's own entries
 
@@ -92,9 +93,9 @@ An always-available popup opened from the system tray icon or the sidebar's bott
 
 ### 👤 Accounts
 
-- **Claude Code** — save and switch both custom API-token accounts and official `/login` OAuth subscription accounts (OAuth credentials are written back to the Keychain / credentials file with atomic replacement)
-- **Codex CLI** — reads the current CLI login and shows account info
-- SHA-256 hash comparison auto-detects the active account
+- **Save and switch accounts on four platforms** — Codex, Claude Code, Grok Build, and Kimi Code; switches use atomic replace (tmp + rename)
+- **Claude Code** — both custom API-token accounts and official `/login` OAuth subscription accounts (OAuth credentials written back to the Keychain / credentials file)
+- **Codex** — active account detected by `account_id`; Grok / Kimi use their own stable identity signals
 - One-click clear of the active auth, with edit/delete on saved profiles
 - **Four usage panels** — quota windows for Codex, Claude Code, Grok Build, and Kimi Code, synced with the Monitor Panel
 
@@ -141,12 +142,13 @@ Download `.exe` from [Releases](https://github.com/ssly/agent-hub/releases) and 
 | Antigravity | `~/.gemini/config/skills/` |
 | Grok Build | `~/.grok/skills/` |
 | Kimi Code | `~/.kimi-code/skills/` |
+| ZCode | `~/.zcode/skills/` (also reads Shared Pool) |
 | Cursor | `~/.cursor/skills/` |
 | Hermes | `~/.hermes/skills/` |
 | Trae | `~/.trae/skills/` |
 | Kiro | `~/.kiro/skills/` |
 
-The Shared Pool (`~/.agents/skills/`) is read by default by Codex, Cursor, OpenCode, Kimi Code, and Grok Build; Antigravity reads `.agents/skills/` at project level.
+The Shared Pool (`~/.agents/skills/`) is read by default by Codex, Cursor, OpenCode, Kimi Code, Grok Build, and ZCode; Antigravity reads `.agents/skills/` at project level.
 
 ### MCP Server Management
 
@@ -159,27 +161,40 @@ The Shared Pool (`~/.agents/skills/`) is read by default by Codex, Cursor, OpenC
 | Kimi Code | `~/.kimi-code/mcp.json` | JSON |
 | Kiro | `~/.kiro/settings/mcp.json` | JSON |
 | Codex CLI | `~/.codex/config.toml` | TOML |
+| ZCode | `~/.zcode/cli/config.json` (nested `mcp.servers`) | JSON |
 
 When a project folder is selected, Agent Hub maps each platform to its repository-local layout (for example, Claude Code uses `.claude/skills/` and `.mcp.json`). Project-scoped content is shown read-only.
+
+### Session Browser
+
+| Platform | Storage | Terminal Resume |
+|----------|---------|-----------------|
+| Claude Code | `~/.claude/projects/` | ✅ |
+| Codex CLI | `~/.codex/` (threads DB) | ✅ |
+| Kiro | `~/.kiro/sessions/cli/` (kiro-cli only) | ✅ |
+| Grok Build | `~/.grok/sessions/` | ✅ |
+| Kimi Code | `~/.kimi-code/sessions/` | ✅ |
+| ZCode | `~/.zcode/v2/tasks-index.sqlite` + `~/.zcode/cli/db/db.sqlite` | ❌ (Electron desktop app) |
 
 ### Session Monitoring
 
 | Platform | Mechanism | Path |
 |----------|-----------|------|
 | Codex CLI | Lifecycle Hooks (`UserPromptSubmit` + `Stop`) | `~/.codex/hooks.json` |
-| Claude Code | Lifecycle Hooks, hot-reloaded | `~/.claude/settings.json` |
-| Grok Build | Standalone managed Hook file | `~/.grok/hooks/agent-hub.json` |
-| Kimi Code | `[[hooks]]` tables (plain-text block edits) | `~/.kimi-code/config.toml` |
-| Kiro | Session file watching (read-only, zero config) | `~/.kiro/sessions/cli/` |
+| Claude Code | Lifecycle Hooks, hot-reloaded (+ `StopFailure`) | `~/.claude/settings.json` |
+| Cursor | Lifecycle Hooks (`beforeSubmitPrompt` / `afterAgentResponse` / `stop`, CLI ≥2026-01-16) | `~/.cursor/hooks.json` |
+| Grok Build | Standalone managed Hook file (5 events) | `~/.grok/hooks/agent-hub.json` |
+| Kimi Code | `[[hooks]]` tables (6 events, plain-text block edits) | `~/.kimi-code/config.toml` |
+| ZCode | `hooks.events` (requires `hooks.enabled: true`) | `~/.zcode/cli/config.json` |
 
-### Usage Query
+### Account Switch / Usage Query
 
 | Platform | Auth Source | Content |
 |----------|-------------|---------|
-| Codex CLI | `~/.codex/auth.json` (ChatGPT login) | 5h / 7d windows + reset credits |
-| Claude Code | Official OAuth credentials (Keychain / `.credentials.json`, read-only, never refreshed) | 5h / 7d windows |
-| Grok Build | `~/.grok/auth.json` | Billing-period window |
-| Kimi Code | Coding Plan API key in `~/.kimi-code/config.toml` | 5h / 7d windows |
+| Codex CLI | `~/.codex/auth.json` (ChatGPT login, `account_id` identity) | Account switch + 5h / 7d windows + reset credits |
+| Claude Code | API Token or official OAuth (Keychain / `.credentials.json`) | Account switch + 5h / 7d windows |
+| Grok Build | `~/.grok/auth.json` | Account switch + billing-period window |
+| Kimi Code | Coding Plan API key in `~/.kimi-code/config.toml` | Account switch + 5h / 7d windows |
 
 ---
 

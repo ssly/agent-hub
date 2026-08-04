@@ -227,10 +227,19 @@ fn apply_event(snapshot: &mut MonitorSnapshot, event: HookEvent) {
         .sessions
         .iter()
         .position(|session| session.session_id == event.session_id);
-    let status = if event.hook_event_name == "UserPromptSubmit" {
-        RuntimeStatus::Running
-    } else {
-        RuntimeStatus::Ended
+    // Only the turn boundaries decide status: UserPromptSubmit → Running,
+    // Stop → Ended. Cursor's AssistantResponse (afterAgentResponse) may fire
+    // multiple times within one generation, so it must only attach the reply
+    // text, never flip the state; the generation's stop event marks the end.
+    let status = match event.hook_event_name.as_str() {
+        "UserPromptSubmit" => RuntimeStatus::Running,
+        "Stop" => RuntimeStatus::Ended,
+        _ => match index {
+            Some(index) => snapshot.sessions[index].status,
+            // A reply event without a preceding prompt (hook installed
+            // mid-session) defaults to Ended rather than a stuck Running.
+            None => RuntimeStatus::Ended,
+        },
     };
 
     if let Some(index) = index {
@@ -389,6 +398,8 @@ mod tests {
         apply_event(&mut snapshot, prompt);
         assert_eq!(snapshot.sessions[0].status, RuntimeStatus::Running);
 
+        // afterAgentResponse only attaches the reply — it may fire multiple
+        // times within one generation and must not end the turn.
         let mut response = event("AssistantResponse", None, Some("Cursor answer"));
         response.agent = AgentKind::Cursor;
         response.session_id = "cursor-conversation-1".to_string();
@@ -396,7 +407,7 @@ mod tests {
         response.source = SessionSource::Cursor;
         apply_event(&mut snapshot, response);
         assert_eq!(snapshot.sessions.len(), 1);
-        assert_eq!(snapshot.sessions[0].status, RuntimeStatus::Ended);
+        assert_eq!(snapshot.sessions[0].status, RuntimeStatus::Running);
         assert_eq!(
             snapshot.sessions[0].assistant_reply.as_deref(),
             Some("Cursor answer")
@@ -414,6 +425,16 @@ mod tests {
             snapshot.sessions[0].user_prompt.as_deref(),
             Some("Cursor question")
         );
+    }
+
+    #[test]
+    fn assistant_response_without_prompt_defaults_to_ended() {
+        // Hook installed mid-session: the reply event arrives first. The row
+        // defaults to Ended instead of a stuck "running".
+        let mut snapshot = MonitorSnapshot::default();
+        apply_event(&mut snapshot, event("AssistantResponse", None, Some("reply")));
+        assert_eq!(snapshot.sessions.len(), 1);
+        assert_eq!(snapshot.sessions[0].status, RuntimeStatus::Ended);
     }
 
     #[test]

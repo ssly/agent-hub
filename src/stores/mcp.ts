@@ -12,10 +12,6 @@ export const useMcpStore = defineStore('mcp', () => {
 
   // Modal States
   const addModalOpen = ref(false)
-  const syncModalOpen = ref(false)
-  const syncTargets = ref<any[]>([])
-  const syncTargetPlatformId = ref<string | null>(null)
-  const syncServerName = ref<string | null>(null)
   const deleteConfirmServerName = ref<string | null>(null)
 
   // Preview Modal States (for add / delete diff confirmation)
@@ -82,22 +78,6 @@ export const useMcpStore = defineStore('mcp', () => {
     await selectPlatform(selectedPlatformId.value)
   }
 
-  async function loadSyncTargets(serverName: string) {
-    if (!selectedPlatformId.value) return
-    syncServerName.value = serverName
-    syncTargets.value = await api.getMcpSyncTargets(selectedPlatformId.value, serverName)
-    if (syncTargets.value.length > 0) {
-      syncTargetPlatformId.value = syncTargets.value[0].id
-    }
-  }
-
-  async function performSync(targetPlatformId: string) {
-    if (!selectedPlatformId.value || !syncServerName.value) return
-    await api.syncMcpServer(selectedPlatformId.value, targetPlatformId, syncServerName.value)
-    await selectPlatform(selectedPlatformId.value)
-    syncModalOpen.value = false
-  }
-
   // --- Preview for Add / Delete ---
 
   async function loadAddPreview(name: string, configText: string) {
@@ -152,12 +132,11 @@ export const useMcpStore = defineStore('mcp', () => {
 
   return {
     platforms, servers, selectedPlatformId, workspaceDirectory, expandedServer, serverDetails,
-    addModalOpen, syncModalOpen, syncTargets, syncTargetPlatformId, syncServerName,
+    addModalOpen,
     deleteConfirmServerName,
     previewModalOpen, previewLoading, previewData, previewMode,
     previewAddName, previewAddConfig,
     refreshPlatforms, selectPlatform, clearPlatform, toggleServer, createServer, deleteServer,
-    loadSyncTargets, performSync,
     loadAddPreview, loadDeletePreview, confirmPreview, cancelPreview,
   }
 })
