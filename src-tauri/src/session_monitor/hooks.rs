@@ -1,10 +1,13 @@
-use super::capture::{CLAUDE_HOOK_ARG, CODEX_HOOK_ARG, GROK_HOOK_ARG, KIMI_HOOK_ARG};
+use super::capture::{
+    CLAUDE_HOOK_ARG, CODEX_HOOK_ARG, CURSOR_HOOK_ARG, GROK_HOOK_ARG, KIMI_HOOK_ARG, ZCODE_HOOK_ARG,
+};
 use super::types::{AgentKind, HookChangePreview, HookDiffLine, HookStatus};
 use serde_json::{json, Map, Value};
 use similar::{ChangeTag, TextDiff};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use uuid::Uuid;
 
 const USER_PROMPT_SUBMIT: &str = "UserPromptSubmit";
@@ -15,6 +18,9 @@ const STOP: &str = "Stop";
 // such events — its Stop covers every turn end.
 const STOP_FAILURE: &str = "StopFailure";
 const INTERRUPT: &str = "Interrupt";
+const CURSOR_BEFORE_SUBMIT_PROMPT: &str = "beforeSubmitPrompt";
+const CURSOR_AFTER_AGENT_RESPONSE: &str = "afterAgentResponse";
+const CURSOR_STOP: &str = "stop";
 
 /// The managed hook events each agent gets on install. Codex stays at two:
 /// its hook system has no StopFailure/Interrupt events at all.
@@ -22,8 +28,15 @@ fn managed_events(agent: AgentKind) -> &'static [&'static str] {
     match agent {
         AgentKind::Codex => &[USER_PROMPT_SUBMIT, STOP],
         AgentKind::Claude | AgentKind::Grok => &[USER_PROMPT_SUBMIT, STOP, STOP_FAILURE],
+        AgentKind::Cursor => &[
+            CURSOR_BEFORE_SUBMIT_PROMPT,
+            CURSOR_AFTER_AGENT_RESPONSE,
+            CURSOR_STOP,
+        ],
         AgentKind::Kimi => &[USER_PROMPT_SUBMIT, STOP, INTERRUPT, STOP_FAILURE],
-        AgentKind::Kiro => &[],
+        // Zcode snapshots hook config at session start; its two managed
+        // events take no matcher.
+        AgentKind::Zcode => &[USER_PROMPT_SUBMIT, STOP],
     }
 }
 
@@ -54,12 +67,10 @@ fn hook_arg(agent: AgentKind) -> Result<&'static str, String> {
     match agent {
         AgentKind::Codex => Ok(CODEX_HOOK_ARG),
         AgentKind::Claude => Ok(CLAUDE_HOOK_ARG),
+        AgentKind::Cursor => Ok(CURSOR_HOOK_ARG),
         AgentKind::Grok => Ok(GROK_HOOK_ARG),
         AgentKind::Kimi => Ok(KIMI_HOOK_ARG),
-        // Kiro is covered by read-only file watching: stable kiro-cli 2.x
-        // does not load hook configs at all, and injecting agent-embedded
-        // hooks would change the user's default agent.
-        AgentKind::Kiro => Err("Kiro 会话监听基于文件监听，无需安装 Hook。".to_string()),
+        AgentKind::Zcode => Ok(ZCODE_HOOK_ARG),
     }
 }
 
@@ -68,12 +79,13 @@ fn config_path(agent: AgentKind) -> Result<PathBuf, String> {
     match agent {
         AgentKind::Codex => Ok(home.join(".codex").join("hooks.json")),
         AgentKind::Claude => Ok(home.join(".claude").join("settings.json")),
+        AgentKind::Cursor => Ok(home.join(".cursor").join("hooks.json")),
         // Grok merges every ~/.grok/hooks/*.json (always trusted, no trust
         // gate), so Agent Hub gets its own managed file instead of editing a
         // shared one.
         AgentKind::Grok => Ok(home.join(".grok").join("hooks").join("agent-hub.json")),
         AgentKind::Kimi => Ok(home.join(".kimi-code").join("config.toml")),
-        AgentKind::Kiro => Err("Kiro 会话监听基于文件监听，无需安装 Hook。".to_string()),
+        AgentKind::Zcode => Ok(home.join(".zcode").join("cli").join("config.json")),
     }
 }
 
@@ -81,9 +93,10 @@ fn config_label(agent: AgentKind) -> &'static str {
     match agent {
         AgentKind::Codex => "Codex Hook 配置文件",
         AgentKind::Claude => "Claude Code 配置文件",
-        AgentKind::Kiro => "Kiro Hook 文件",
+        AgentKind::Cursor => "Cursor Hook 配置文件",
         AgentKind::Grok => "Grok Hook 文件",
         AgentKind::Kimi => "Kimi Code 配置文件",
+        AgentKind::Zcode => "Zcode 配置文件",
     }
 }
 
@@ -91,15 +104,22 @@ fn agent_label(agent: AgentKind) -> &'static str {
     match agent {
         AgentKind::Codex => "Codex",
         AgentKind::Claude => "Claude Code",
-        AgentKind::Kiro => "Kiro",
+        AgentKind::Cursor => "Cursor",
         AgentKind::Grok => "Grok Build",
         AgentKind::Kimi => "Kimi Code",
+        AgentKind::Zcode => "Zcode",
     }
 }
 
 pub fn get_hook_status(agent: AgentKind) -> Result<HookStatus, String> {
     if agent == AgentKind::Kimi {
         return kimi_hook_status();
+    }
+    if agent == AgentKind::Cursor {
+        return cursor_hook_status();
+    }
+    if agent == AgentKind::Zcode {
+        return zcode_hook_status();
     }
     let path = config_path(agent)?;
     let arg = hook_arg(agent)?;
@@ -133,7 +153,10 @@ pub fn get_hook_status(agent: AgentKind) -> Result<HookStatus, String> {
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
         {
-            Some("Claude Code 已设置 disableAllHooks，所有 Hook 都不会执行，请先关闭该选项。".to_string())
+            Some(
+                "Claude Code 已设置 disableAllHooks，所有 Hook 都不会执行，请先关闭该选项。"
+                    .to_string(),
+            )
         } else if agent == AgentKind::Codex && installed {
             // hooks.json written is not enough: Codex only runs handlers it
             // trusts. An installed-but-untrusted hook silently never fires.
@@ -169,6 +192,15 @@ pub fn preview_hook_change(
         let after = kimi_render_after(action, &command, &before);
         return Ok(build_preview(action, &path, &command, &before, &after));
     }
+    if agent == AgentKind::Cursor {
+        let after = cursor_render_after(action, &path, &command, &before)?;
+        return Ok(build_preview(action, &path, &command, &before, &after));
+    }
+    if agent == AgentKind::Zcode {
+        let executable = expected_executable()?;
+        let after = zcode_render_after(action, &path, &executable, &before)?;
+        return Ok(build_preview(action, &path, &command, &before, &after));
+    }
     let after = render_after(agent, action, &path, &command, arg, &before)?;
     Ok(build_preview(action, &path, &command, &before, &after))
 }
@@ -191,6 +223,10 @@ pub fn apply_hook_change(
 
     let after = if agent == AgentKind::Kimi {
         kimi_render_after(action, &command, &before)
+    } else if agent == AgentKind::Cursor {
+        cursor_render_after(action, &path, &command, &before)?
+    } else if agent == AgentKind::Zcode {
+        zcode_render_after(action, &path, &expected_executable()?, &before)?
     } else {
         render_after(agent, action, &path, &command, arg, &before)?
     };
@@ -385,10 +421,16 @@ fn is_managed_handler(handler: &Value, arg: &str) -> bool {
             .is_some_and(|command| command.split_whitespace().any(|part| part == arg))
 }
 
-fn expected_command(arg: &str) -> Result<String, String> {
+/// The bare Agent Hub executable path. Zcode's `process` hook executor takes
+/// the binary path and an args array instead of one shell string.
+fn expected_executable() -> Result<String, String> {
     let executable = std::env::current_exe()
         .map_err(|error| format!("unable to locate Agent Hub executable: {error}"))?;
-    let path = executable.to_string_lossy();
+    Ok(executable.to_string_lossy().into_owned())
+}
+
+fn expected_command(arg: &str) -> Result<String, String> {
+    let path = expected_executable()?;
     #[cfg(target_os = "windows")]
     {
         return Ok(format!("\"{}\" {arg}", path.replace('"', "\\\"")));
@@ -479,6 +521,185 @@ fn read_existing(path: &Path) -> Result<String, String> {
     }
 }
 
+// --- Cursor (direct JSON hook entries) ------------------------------------
+// Cursor's current user-level format is ~/.cursor/hooks.json. Unlike the
+// nested Codex / Claude groups, each lifecycle event contains command objects
+// directly. Keep this renderer separate so unrelated Cursor hooks survive.
+
+fn cursor_hook_status() -> Result<HookStatus, String> {
+    let path = config_path(AgentKind::Cursor)?;
+    let command = expected_command(CURSOR_HOOK_ARG)?;
+    if !path.exists() {
+        return Ok(HookStatus {
+            installed: false,
+            config_path: path.display().to_string(),
+            command,
+            managed_handler_count: 0,
+            issue: cursor_cli_version_issue(),
+        });
+    }
+
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("unable to read {}: {error}", path.display()))?;
+    let root = parse_root(&content, &path)?;
+    let managed = cursor_managed_entries(&root);
+    let events = managed_events(AgentKind::Cursor);
+    let installed = managed.len() == events.len()
+        && events
+            .iter()
+            .all(|event| managed.iter().filter(|(name, _)| name == event).count() == 1)
+        && managed.iter().all(|(_, cmd)| cmd == &command);
+    let issue = if !installed && !managed.is_empty() {
+        Some("Cursor Hook 配置不完整或命令路径已变化，可重新安装进行修复。".to_string())
+    } else {
+        cursor_cli_version_issue()
+    };
+
+    Ok(HookStatus {
+        installed,
+        config_path: path.display().to_string(),
+        command,
+        managed_handler_count: managed.len(),
+        issue,
+    })
+}
+
+fn cursor_render_after(
+    action: HookAction,
+    path: &Path,
+    command: &str,
+    before: &str,
+) -> Result<String, String> {
+    if action == HookAction::Uninstall && before.is_empty() {
+        return Ok(String::new());
+    }
+    let mut root = if before.is_empty() {
+        Value::Object(Map::new())
+    } else {
+        parse_root(before, path)?
+    };
+    remove_cursor_managed_handlers(&mut root)?;
+    if action == HookAction::Install {
+        let root_object = root
+            .as_object_mut()
+            .ok_or_else(|| "Cursor Hook config root is not an object".to_string())?;
+        root_object.entry("version".to_string()).or_insert(json!(1));
+        for event in managed_events(AgentKind::Cursor) {
+            append_cursor_managed_handler(&mut root, event, command)?;
+        }
+    }
+    let mut rendered = serde_json::to_string_pretty(&root)
+        .map_err(|error| format!("unable to serialize Cursor Hook 配置文件: {error}"))?;
+    rendered.push('\n');
+    Ok(rendered)
+}
+
+fn append_cursor_managed_handler(
+    root: &mut Value,
+    event_name: &str,
+    command: &str,
+) -> Result<(), String> {
+    let hooks = root
+        .as_object_mut()
+        .ok_or_else(|| "Cursor Hook config root is not an object".to_string())?
+        .entry("hooks".to_string())
+        .or_insert_with(|| Value::Object(Map::new()))
+        .as_object_mut()
+        .ok_or_else(|| "hooks 字段必须是 JSON 对象，已停止安装以保护原配置。".to_string())?;
+    let handlers = hooks
+        .entry(event_name.to_string())
+        .or_insert_with(|| Value::Array(Vec::new()))
+        .as_array_mut()
+        .ok_or_else(|| format!("hooks.{event_name} 必须是数组，已停止安装以保护原配置。"))?;
+    handlers.push(json!({ "command": command }));
+    Ok(())
+}
+
+fn remove_cursor_managed_handlers(root: &mut Value) -> Result<(), String> {
+    let Some(root_object) = root.as_object_mut() else {
+        return Err("Cursor Hook config root is not an object".to_string());
+    };
+    let Some(hooks_value) = root_object.get_mut("hooks") else {
+        return Ok(());
+    };
+    let hooks = hooks_value
+        .as_object_mut()
+        .ok_or_else(|| "hooks 字段必须是 JSON 对象，已停止变更以保护原配置。".to_string())?;
+    for (event_name, handlers_value) in hooks.iter_mut() {
+        let handlers = handlers_value
+            .as_array_mut()
+            .ok_or_else(|| format!("hooks.{event_name} 必须是数组，已停止变更以保护原配置。"))?;
+        handlers.retain(|handler| !is_cursor_managed_handler(handler));
+    }
+    Ok(())
+}
+
+fn cursor_managed_entries(root: &Value) -> Vec<(String, String)> {
+    root.get("hooks")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|hooks| hooks.iter())
+        .filter_map(|(event, handlers)| handlers.as_array().map(|handlers| (event, handlers)))
+        .flat_map(|(event, handlers)| handlers.iter().map(move |handler| (event, handler)))
+        .filter(|(_, handler)| is_cursor_managed_handler(handler))
+        .filter_map(|(event, handler)| {
+            handler
+                .get("command")
+                .and_then(Value::as_str)
+                .map(|command| (event.to_string(), command.to_string()))
+        })
+        .collect()
+}
+
+fn is_cursor_managed_handler(handler: &Value) -> bool {
+    handler
+        .get("command")
+        .and_then(Value::as_str)
+        .is_some_and(|command| {
+            command
+                .split_whitespace()
+                .any(|part| part == CURSOR_HOOK_ARG)
+        })
+}
+
+fn cursor_cli_version_issue() -> Option<String> {
+    // Cursor keeps `cursor-agent` as a backward-compatible alias. Avoid the
+    // generic `agent` name here because other installed CLIs (notably Grok)
+    // may own it and report an unrelated version.
+    let mut candidates = vec![PathBuf::from("cursor-agent")];
+    if let Some(home) = dirs::home_dir() {
+        candidates.push(home.join(".local").join("bin").join("cursor-agent"));
+    }
+    for candidate in candidates {
+        let Ok(output) = Command::new(&candidate).arg("--version").output() else {
+            continue;
+        };
+        if !output.status.success() {
+            continue;
+        }
+        let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let Some(date) = cursor_version_date(&version) else {
+            continue;
+        };
+        if date < (2026, 1, 16) {
+            return Some(format!(
+                "检测到 Cursor CLI {version}，该版本早于生命周期 Hook 支持；Cursor IDE 新版仍可监听，CLI 请升级到 2026-01-16 或更高版本。"
+            ));
+        }
+        return None;
+    }
+    None
+}
+
+fn cursor_version_date(version: &str) -> Option<(u32, u32, u32)> {
+    let date = version.split('-').next()?;
+    let mut parts = date.split('.');
+    let year = parts.next()?.parse().ok()?;
+    let month = parts.next()?.parse().ok()?;
+    let day = parts.next()?.parse().ok()?;
+    Some((year, month, day))
+}
+
 // --- Kimi Code (TOML) ------------------------------------------------------
 // Kimi reads `[[hooks]]` tables from ~/.kimi-code/config.toml — the user's
 // main settings file — so edits are text-based: only the managed blocks
@@ -534,7 +755,10 @@ fn kimi_managed_entries(content: &str) -> Result<Vec<(String, String)>, String> 
     };
     let mut entries = Vec::new();
     for table in tables {
-        let command = table.get("command").and_then(toml::Value::as_str).unwrap_or("");
+        let command = table
+            .get("command")
+            .and_then(toml::Value::as_str)
+            .unwrap_or("");
         if !command.split_whitespace().any(|part| part == KIMI_HOOK_ARG) {
             continue;
         }
@@ -604,6 +828,214 @@ fn remove_kimi_managed_blocks(before: &str) -> String {
         out.push('\n');
         out
     }
+}
+
+// --- Zcode (JSON with enabled master switch + events map) -------------------
+// Zcode reads ~/.zcode/cli/config.json and runs hooks only when
+// `hooks.enabled` is true. Its executor is `type: "process"` — binary path
+// plus an args array, no shell — and there is no trust gate. The file holds
+// other user settings (and Zcode's server schema is strict about unknown
+// keys), so edits are surgical serde_json::Value operations: only our managed
+// handlers (identified by the hook arg) are added or removed, everything else
+// survives untouched.
+
+fn zcode_hook_status() -> Result<HookStatus, String> {
+    let path = config_path(AgentKind::Zcode)?;
+    let command = expected_command(ZCODE_HOOK_ARG)?;
+    if !path.exists() {
+        return Ok(HookStatus {
+            installed: false,
+            config_path: path.display().to_string(),
+            command,
+            managed_handler_count: 0,
+            issue: None,
+        });
+    }
+
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("unable to read {}: {error}", path.display()))?;
+    let root = parse_root(&content, &path)?;
+    let executable = expected_executable()?;
+    let managed = zcode_managed_entries(&root);
+    let events = managed_events(AgentKind::Zcode);
+    let installed = managed.len() == events.len()
+        && events
+            .iter()
+            .all(|event| managed.iter().filter(|(name, _)| name == event).count() == 1)
+        && managed.iter().all(|(_, cmd)| cmd == &executable);
+    let issue = if installed && !zcode_hooks_enabled(&root) {
+        // Like Claude's disableAllHooks: an installed-but-disabled hook looks
+        // broken, so surface the master switch.
+        Some("Zcode 配置中 hooks.enabled 为 false，所有 Hook 都不会执行，请开启该选项或重新安装。".to_string())
+    } else if !installed && !managed.is_empty() {
+        Some(format!(
+            "{} Hook 配置不完整或命令路径已变化，可重新安装进行修复。",
+            agent_label(AgentKind::Zcode)
+        ))
+    } else {
+        None
+    };
+
+    Ok(HookStatus {
+        installed,
+        config_path: path.display().to_string(),
+        command,
+        managed_handler_count: managed.len(),
+        issue,
+    })
+}
+
+fn zcode_hooks_enabled(root: &Value) -> bool {
+    root.get("hooks")
+        .and_then(|hooks| hooks.get("enabled"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// (event, command) pairs of the `process` handlers we manage.
+fn zcode_managed_entries(root: &Value) -> Vec<(String, String)> {
+    root.get("hooks")
+        .and_then(|hooks| hooks.get("events"))
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|events| events.iter())
+        .filter_map(|(event, groups)| groups.as_array().map(|groups| (event, groups)))
+        .flat_map(|(event, groups)| groups.iter().map(move |group| (event, group)))
+        .filter_map(|(event, group)| group.get("hooks").and_then(Value::as_array).map(|handlers| (event, handlers)))
+        .flat_map(|(event, handlers)| handlers.iter().map(move |handler| (event, handler)))
+        .filter(|(_, handler)| is_zcode_managed_handler(handler))
+        .filter_map(|(event, handler)| {
+            handler
+                .get("command")
+                .and_then(Value::as_str)
+                .map(|command| (event.to_string(), command.to_string()))
+        })
+        .collect()
+}
+
+fn is_zcode_managed_handler(handler: &Value) -> bool {
+    let arg_in_args = handler
+        .get("args")
+        .and_then(Value::as_array)
+        .is_some_and(|args| args.iter().any(|arg| arg.as_str() == Some(ZCODE_HOOK_ARG)));
+    let arg_in_command = handler
+        .get("command")
+        .and_then(Value::as_str)
+        .is_some_and(|command| command.split_whitespace().any(|part| part == ZCODE_HOOK_ARG));
+    arg_in_args || arg_in_command
+}
+
+fn zcode_render_after(
+    action: HookAction,
+    path: &Path,
+    executable: &str,
+    before: &str,
+) -> Result<String, String> {
+    if action == HookAction::Uninstall && before.is_empty() {
+        return Ok(String::new());
+    }
+    let mut root = if before.is_empty() {
+        Value::Object(Map::new())
+    } else {
+        parse_root(before, path)?
+    };
+    remove_zcode_managed_handlers(&mut root)?;
+    if action == HookAction::Install {
+        let hooks = root
+            .as_object_mut()
+            .ok_or_else(|| "Zcode config root is not an object".to_string())?
+            .entry("hooks".to_string())
+            .or_insert_with(|| Value::Object(Map::new()))
+            .as_object_mut()
+            .ok_or_else(|| "hooks 字段必须是 JSON 对象，已停止安装以保护原配置。".to_string())?;
+        // The master switch: hooks never run while this stays false.
+        hooks.insert("enabled".to_string(), json!(true));
+        let events = hooks
+            .entry("events".to_string())
+            .or_insert_with(|| Value::Object(Map::new()))
+            .as_object_mut()
+            .ok_or_else(|| "hooks.events 字段必须是 JSON 对象，已停止安装以保护原配置。".to_string())?;
+        for event in managed_events(AgentKind::Zcode) {
+            let groups = events
+                .entry(event.to_string())
+                .or_insert_with(|| Value::Array(Vec::new()))
+                .as_array_mut()
+                .ok_or_else(|| {
+                    format!("hooks.events.{event} 必须是数组，已停止安装以保护原配置。")
+                })?;
+            groups.push(json!({
+                "hooks": [{
+                    "type": "process",
+                    "command": executable,
+                    "args": [ZCODE_HOOK_ARG],
+                    "enabled": true
+                }]
+            }));
+        }
+    }
+    let mut rendered = serde_json::to_string_pretty(&root)
+        .map_err(|error| format!("unable to serialize Zcode 配置文件: {error}"))?;
+    rendered.push('\n');
+    Ok(rendered)
+}
+
+/// Drop our managed handlers, then clean up the scaffolding that only existed
+/// for them: event keys left with no groups, an empty `events` object, and —
+/// when nothing but the master switch remains — the whole `hooks` key (which
+/// restores Zcode's default hooks-off state). When the user has other
+/// handlers, `enabled` stays exactly as it was.
+fn remove_zcode_managed_handlers(root: &mut Value) -> Result<(), String> {
+    let Some(root_object) = root.as_object_mut() else {
+        return Err("Zcode config root is not an object".to_string());
+    };
+    let remove_hooks_key = {
+        let Some(hooks_value) = root_object.get_mut("hooks") else {
+            return Ok(());
+        };
+        let hooks = hooks_value
+            .as_object_mut()
+            .ok_or_else(|| "hooks 字段必须是 JSON 对象，已停止变更以保护原配置。".to_string())?;
+        if let Some(events_value) = hooks.get_mut("events") {
+            let events = events_value.as_object_mut().ok_or_else(|| {
+                "hooks.events 字段必须是 JSON 对象，已停止变更以保护原配置。".to_string()
+            })?;
+            let mut empty_events = Vec::new();
+            for (event_name, groups_value) in events.iter_mut() {
+                let groups = groups_value.as_array_mut().ok_or_else(|| {
+                    format!("hooks.events.{event_name} 必须是数组，已停止变更以保护原配置。")
+                })?;
+                for group in groups.iter_mut() {
+                    if let Some(handlers) = group.get_mut("hooks").and_then(Value::as_array_mut) {
+                        handlers.retain(|handler| !is_zcode_managed_handler(handler));
+                    }
+                }
+                groups.retain(|group| {
+                    let Some(object) = group.as_object() else {
+                        return true;
+                    };
+                    let empty_handlers = object
+                        .get("hooks")
+                        .and_then(Value::as_array)
+                        .is_some_and(Vec::is_empty);
+                    !(empty_handlers && object.len() == 1)
+                });
+                if groups.is_empty() {
+                    empty_events.push(event_name.clone());
+                }
+            }
+            for event_name in empty_events {
+                events.remove(&event_name);
+            }
+            if events.is_empty() {
+                hooks.remove("events");
+            }
+        }
+        hooks.len() == 1 && hooks.contains_key("enabled")
+    };
+    if remove_hooks_key {
+        root_object.remove("hooks");
+    }
+    Ok(())
 }
 
 fn resolve_write_target(path: &Path) -> Result<PathBuf, String> {
@@ -807,10 +1239,49 @@ mod tests {
     }
 
     #[test]
-    fn kiro_hook_change_is_rejected() {
-        // Kiro monitoring is file-watching only; no hook target exists.
-        assert!(config_path(AgentKind::Kiro).is_err());
-        assert!(hook_arg(AgentKind::Kiro).is_err());
+    fn cursor_install_uses_direct_lifecycle_handlers_and_preserves_existing_hooks() {
+        let before = r#"{
+  "version": 1,
+  "custom": "keep-me",
+  "hooks": {
+    "beforeSubmitPrompt": [{"command": "existing-command"}],
+    "sessionEnd": [{"command": "notify-send done"}]
+  }
+}
+"#;
+        let path = Path::new("/tmp/cursor-hooks.json");
+        let command = "agent-hub --agent-hub-cursor-hook";
+        let installed = cursor_render_after(HookAction::Install, path, command, before).unwrap();
+        let root: Value = serde_json::from_str(&installed).unwrap();
+        let managed = cursor_managed_entries(&root);
+        assert_eq!(managed.len(), 3);
+        assert!(managed
+            .iter()
+            .any(|(event, _)| event == CURSOR_BEFORE_SUBMIT_PROMPT));
+        assert!(managed
+            .iter()
+            .any(|(event, _)| event == CURSOR_AFTER_AGENT_RESPONSE));
+        assert!(managed.iter().any(|(event, _)| event == CURSOR_STOP));
+        assert!(installed.contains("existing-command"));
+        assert!(installed.contains("notify-send done"));
+        assert_eq!(root["custom"], "keep-me");
+
+        let uninstalled =
+            cursor_render_after(HookAction::Uninstall, path, command, &installed).unwrap();
+        let root: Value = serde_json::from_str(&uninstalled).unwrap();
+        assert!(cursor_managed_entries(&root).is_empty());
+        assert!(uninstalled.contains("existing-command"));
+        assert!(uninstalled.contains("notify-send done"));
+    }
+
+    #[test]
+    fn cursor_version_date_reads_dated_cli_versions() {
+        assert_eq!(cursor_version_date("2026.01.16-abcd"), Some((2026, 1, 16)));
+        assert_eq!(
+            cursor_version_date("2025.10.02-bd871ac"),
+            Some((2025, 10, 2))
+        );
+        assert_eq!(cursor_version_date("unknown"), None);
     }
 
     #[test]
@@ -866,6 +1337,115 @@ mod tests {
     }
 
     #[test]
+    fn zcode_install_creates_minimal_structure_when_config_is_missing() {
+        let path = Path::new("/tmp/zcode-config.json");
+        let after = zcode_render_after(
+            HookAction::Install,
+            path,
+            "/Applications/Agent Hub.app/Contents/MacOS/agent-hub",
+            "",
+        )
+        .unwrap();
+        let root: Value = serde_json::from_str(&after).unwrap();
+        assert_eq!(root["hooks"]["enabled"], json!(true));
+        let managed = zcode_managed_entries(&root);
+        assert_eq!(managed.len(), 2);
+        assert!(managed.iter().any(|(event, _)| event == USER_PROMPT_SUBMIT));
+        assert!(managed.iter().any(|(event, _)| event == STOP));
+        assert!(managed
+            .iter()
+            .all(|(_, cmd)| cmd == "/Applications/Agent Hub.app/Contents/MacOS/agent-hub"));
+        let handler = &root["hooks"]["events"]["UserPromptSubmit"][0]["hooks"][0];
+        assert_eq!(handler["type"], "process");
+        assert_eq!(handler["args"], json!([ZCODE_HOOK_ARG]));
+        assert_eq!(handler["enabled"], json!(true));
+    }
+
+    #[test]
+    fn zcode_install_preserves_top_level_keys_and_foreign_handlers() {
+        let before = r#"{
+  "custom": "keep-me",
+  "hooks": {
+    "enabled": false,
+    "events": {
+      "UserPromptSubmit": [
+        {"hooks": [{"type": "process", "command": "other-tool", "args": ["--flag"], "enabled": true}]}
+      ],
+      "SessionStart": [
+        {"hooks": [{"type": "process", "command": "notify", "args": [], "enabled": true}]}
+      ]
+    }
+  }
+}
+"#;
+        let path = Path::new("/tmp/zcode-config.json");
+        let after = zcode_render_after(
+            HookAction::Install,
+            path,
+            "agent-hub",
+            before,
+        )
+        .unwrap();
+        let root: Value = serde_json::from_str(&after).unwrap();
+        assert_eq!(root["custom"], "keep-me");
+        // Installing flips the master switch on — hooks never run otherwise.
+        assert_eq!(root["hooks"]["enabled"], json!(true));
+        assert_eq!(zcode_managed_entries(&root).len(), 2);
+        assert!(after.contains("other-tool"));
+        assert!(after.contains("SessionStart"));
+    }
+
+    #[test]
+    fn zcode_uninstall_keeps_foreign_handlers_and_leaves_enabled_untouched() {
+        let before = r#"{
+  "custom": "keep-me",
+  "hooks": {
+    "enabled": true,
+    "events": {
+      "UserPromptSubmit": [
+        {"hooks": [{"type": "process", "command": "other-tool", "args": ["--flag"], "enabled": true}]}
+      ]
+    }
+  }
+}
+"#;
+        let path = Path::new("/tmp/zcode-config.json");
+        let installed = zcode_render_after(HookAction::Install, path, "agent-hub", before).unwrap();
+        let after = zcode_render_after(HookAction::Uninstall, path, "agent-hub", &installed).unwrap();
+        let root: Value = serde_json::from_str(&after).unwrap();
+        assert!(zcode_managed_entries(&root).is_empty());
+        assert!(after.contains("other-tool"));
+        // The user still has handlers, so the master switch stays as-is.
+        assert_eq!(root["hooks"]["enabled"], json!(true));
+        assert_eq!(root["custom"], "keep-me");
+    }
+
+    #[test]
+    fn zcode_uninstall_removes_hooks_key_when_only_the_master_switch_remains() {
+        let path = Path::new("/tmp/zcode-config.json");
+        let installed =
+            zcode_render_after(HookAction::Install, path, "agent-hub", r#"{"custom": "keep-me"}"#)
+                .unwrap();
+        let after = zcode_render_after(HookAction::Uninstall, path, "agent-hub", &installed).unwrap();
+        let root: Value = serde_json::from_str(&after).unwrap();
+        // Restores Zcode's default hooks-off state; unrelated keys survive.
+        assert!(root.get("hooks").is_none());
+        assert_eq!(root["custom"], "keep-me");
+    }
+
+    #[test]
+    fn zcode_malformed_events_shape_is_rejected_without_replacement() {
+        let error = zcode_render_after(
+            HookAction::Install,
+            Path::new("/tmp/zcode-config.json"),
+            "agent-hub",
+            r#"{"hooks":{"events":"do-not-touch"}}"#,
+        )
+        .unwrap_err();
+        assert!(error.contains("hooks.events 字段必须是 JSON 对象"));
+    }
+
+    #[test]
     fn malformed_hooks_shape_is_rejected_without_replacement() {
         let error = render_after(
             AgentKind::Codex,
@@ -912,7 +1492,10 @@ mod tests {
             resolve_write_target(&link).unwrap(),
             fs::canonicalize(target).unwrap()
         );
-        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert!(fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
     }
 
     fn codex_root_with_managed_handlers() -> Value {

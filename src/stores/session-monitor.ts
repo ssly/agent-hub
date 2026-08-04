@@ -3,23 +3,23 @@ import { computed, ref } from 'vue'
 import * as api from '@/lib/api'
 
 export type HookAction = 'install' | 'uninstall'
-export type SessionSource = 'terminal' | 'chatgpt'
+export type SessionSource = 'terminal' | 'chatgpt' | 'cursor'
 export type RuntimeStatus = 'running' | 'ended'
-export type MonitorAgent = 'codex' | 'claude' | 'kiro' | 'grok' | 'kimi'
-export const MONITOR_AGENTS: MonitorAgent[] = ['codex', 'claude', 'grok', 'kimi', 'kiro']
+export type MonitorAgent = 'codex' | 'claude' | 'cursor' | 'grok' | 'kimi' | 'zcode'
+export const MONITOR_AGENTS: MonitorAgent[] = ['codex', 'claude', 'cursor', 'grok', 'kimi', 'zcode']
 /** Sidebar tab: one of the agents, or the merged "all" view. */
 export type MonitorTab = MonitorAgent | 'all'
-/** Agents whose monitor feed is driven by installed hooks (vs file watching). */
-export type HookAgent = 'codex' | 'claude' | 'grok' | 'kimi'
-export const HOOK_AGENTS: HookAgent[] = ['codex', 'claude', 'grok', 'kimi']
+/** Agents whose monitor feed is driven by installed hooks. */
+export type HookAgent = 'codex' | 'claude' | 'cursor' | 'grok' | 'kimi' | 'zcode'
+export const HOOK_AGENTS: HookAgent[] = ['codex', 'claude', 'cursor', 'grok', 'kimi', 'zcode']
 /** Monitor agent → sessions-browser platform id, so the shared messages /
  *  resume modals can load full history through the sessions adapters. */
 export const MONITOR_AGENT_PLATFORM: Partial<Record<MonitorAgent, string>> = {
   codex: 'codex',
   claude: 'claude-code',
-  kiro: 'kiro',
   grok: 'grok',
   kimi: 'kimi',
+  zcode: 'zcode',
 }
 
 export interface SessionState {
@@ -51,12 +51,6 @@ export interface HookStatus {
   issue?: string | null
 }
 
-export interface KiroMonitorStatus {
-  available: boolean
-  sessionsDir: string
-  enabled: boolean
-}
-
 export interface HookDiffLine {
   tag: 'added' | 'removed' | 'context'
   content: string
@@ -76,25 +70,28 @@ export interface HookChangePreview {
 const CHANGED_EVENTS: Record<MonitorAgent, string> = {
   codex: 'session-monitor:codex-changed',
   claude: 'session-monitor:claude-changed',
-  kiro: 'session-monitor:kiro-changed',
+  cursor: 'session-monitor:cursor-changed',
   grok: 'session-monitor:grok-changed',
   kimi: 'session-monitor:kimi-changed',
+  zcode: 'session-monitor:zcode-changed',
 }
 
 const snapshotApi: Record<MonitorAgent, () => Promise<MonitorSnapshot>> = {
   codex: api.getCodexSessionMonitorSnapshot,
   claude: api.getClaudeSessionMonitorSnapshot,
-  kiro: api.getKiroSessionMonitorSnapshot,
+  cursor: api.getCursorSessionMonitorSnapshot,
   grok: api.getGrokSessionMonitorSnapshot,
   kimi: api.getKimiSessionMonitorSnapshot,
+  zcode: api.getZcodeSessionMonitorSnapshot,
 }
 
 const deleteSessionApi: Record<MonitorAgent, (sessionId: string) => Promise<void>> = {
   codex: api.deleteCodexSessionMonitorSession,
   claude: api.deleteClaudeSessionMonitorSession,
-  kiro: api.deleteKiroSessionMonitorSession,
+  cursor: api.deleteCursorSessionMonitorSession,
   grok: api.deleteGrokSessionMonitorSession,
   kimi: api.deleteKimiSessionMonitorSession,
+  zcode: api.deleteZcodeSessionMonitorSession,
 }
 
 const hookApi: Record<HookAgent, {
@@ -112,6 +109,11 @@ const hookApi: Record<HookAgent, {
     preview: api.previewClaudeHookChange,
     apply: api.applyClaudeHookChange,
   },
+  cursor: {
+    status: api.getCursorHookStatus,
+    preview: api.previewCursorHookChange,
+    apply: api.applyCursorHookChange,
+  },
   grok: {
     status: api.getGrokHookStatus,
     preview: api.previewGrokHookChange,
@@ -121,6 +123,11 @@ const hookApi: Record<HookAgent, {
     status: api.getKimiHookStatus,
     preview: api.previewKimiHookChange,
     apply: api.applyKimiHookChange,
+  },
+  zcode: {
+    status: api.getZcodeHookStatus,
+    preview: api.previewZcodeHookChange,
+    apply: api.applyZcodeHookChange,
   },
 }
 
@@ -137,17 +144,19 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
   const snapshots = ref<Record<MonitorAgent, MonitorSnapshot>>({
     codex: emptySnapshot(),
     claude: emptySnapshot(),
-    kiro: emptySnapshot(),
+    cursor: emptySnapshot(),
     grok: emptySnapshot(),
     kimi: emptySnapshot(),
+    zcode: emptySnapshot(),
   })
   const hookStatuses = ref<Record<HookAgent, HookStatus | null>>({
     codex: null,
     claude: null,
+    cursor: null,
     grok: null,
     kimi: null,
+    zcode: null,
   })
-  const kiroStatus = ref<KiroMonitorStatus | null>(null)
   const loading = ref(false)
   const hookLoading = ref(false)
   const error = ref('')
@@ -208,11 +217,6 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
         messages.push(errorMessage(result.reason))
       }
     })
-    try {
-      kiroStatus.value = await api.getKiroMonitorStatus()
-    } catch (cause) {
-      messages.push(errorMessage(cause))
-    }
     error.value = messages.filter(Boolean).join('；')
     loading.value = false
   }
@@ -299,14 +303,6 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     }
   }
 
-  async function setKiroEnabled(enabled: boolean) {
-    try {
-      kiroStatus.value = await api.setKiroMonitorEnabled(enabled)
-    } catch (cause) {
-      error.value = errorMessage(cause)
-    }
-  }
-
   // Shared-modal open state. The modals fetch full history / resume commands
   // through the sessions adapters (MONITOR_AGENT_PLATFORM), so the monitor
   // itself still keeps only its lightweight snapshot data.
@@ -332,7 +328,6 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     displaySessions,
     hookStatuses,
     hookStatus,
-    kiroStatus,
     loading,
     hookLoading,
     error,
@@ -348,7 +343,6 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     closeHookPreview,
     applyHookPreview,
     deleteSession,
-    setKiroEnabled,
     messagesModalOpen,
     resumeModalOpen,
     modalSession,

@@ -8,12 +8,13 @@ import {
   getClaudeUsage,
   getCodexSessionMonitorSnapshot,
   getCodexTrayUsage,
+  getCursorSessionMonitorSnapshot,
   getGrokSessionMonitorSnapshot,
   getGrokUsage,
   getKimiSessionMonitorSnapshot,
   getKimiUsage,
-  getKiroSessionMonitorSnapshot,
   getUsageProviderAvailability,
+  getZcodeSessionMonitorSnapshot,
   resizeUsageTray,
   setUsageTrayPinned,
 } from '@/lib/api'
@@ -75,27 +76,30 @@ let resizeSequence = 0
 // --- Mini monitor strip ---------------------------------------------------
 // Same data the Monitor tab shows (backend snapshots + change events), but
 // reduced to one line per session: status dot + agent + user question.
-const MONITOR_AGENTS_LIST: MonitorAgent[] = ['codex', 'claude', 'grok', 'kimi', 'kiro']
+const MONITOR_AGENTS_LIST: MonitorAgent[] = ['codex', 'claude', 'cursor', 'grok', 'kimi', 'zcode']
 const MONITOR_CHANGED_EVENTS: Record<MonitorAgent, string> = {
   codex: 'session-monitor:codex-changed',
   claude: 'session-monitor:claude-changed',
-  kiro: 'session-monitor:kiro-changed',
+  cursor: 'session-monitor:cursor-changed',
   grok: 'session-monitor:grok-changed',
   kimi: 'session-monitor:kimi-changed',
+  zcode: 'session-monitor:zcode-changed',
 }
 const MONITOR_SNAPSHOT_API: Record<MonitorAgent, () => Promise<MonitorSnapshot>> = {
   codex: getCodexSessionMonitorSnapshot,
   claude: getClaudeSessionMonitorSnapshot,
-  kiro: getKiroSessionMonitorSnapshot,
+  cursor: getCursorSessionMonitorSnapshot,
   grok: getGrokSessionMonitorSnapshot,
   kimi: getKimiSessionMonitorSnapshot,
+  zcode: getZcodeSessionMonitorSnapshot,
 }
 const monitorSnapshots = ref<Record<MonitorAgent, MonitorSnapshot>>({
   codex: { revision: 0, sessions: [] },
   claude: { revision: 0, sessions: [] },
-  kiro: { revision: 0, sessions: [] },
+  cursor: { revision: 0, sessions: [] },
   grok: { revision: 0, sessions: [] },
   kimi: { revision: 0, sessions: [] },
+  zcode: { revision: 0, sessions: [] },
 })
 
 // Merged like the Monitor tab's "all" view: running first, newest activity
@@ -111,12 +115,8 @@ const monitorRows = computed<AgentSessionState[]>(() =>
 )
 
 function monitorAgentLabel(row: AgentSessionState) {
-  // Same provenance rule as the Monitor tab: Kiro rows from the cli/ file
-  // watcher (source === 'terminal') are provably Kiro CLI; Codex rows whose
-  // hook originator marks the ChatGPT desktop/IDE client are labeled so.
-  if (row.agent === 'kiro' && row.source === 'terminal') {
-    return t('session_monitor.agent_kiro_cli')
-  }
+  // Same provenance rule as the Monitor tab: Codex rows whose hook
+  // originator marks the ChatGPT desktop/IDE client are labeled so.
   if (row.agent === 'codex' && row.source === 'chatgpt') {
     return t('session_monitor.source_chatgpt')
   }
@@ -165,7 +165,7 @@ watch(monitorRows, rows => {
     const key = monitorRowKey(row)
     visible.add(key)
     const previous = knownMonitorStatus.get(key)
-    if (!firstSeeding && !reduceMotion && !hiddenMonitors.value.includes(row.agent)) {
+    if (!firstSeeding && !reduceMotion && !monitorHidden.value) {
       // Two cases animate: an existing row flipping status, and a brand-new
       // session appearing already-running (e.g. a fresh ChatGPT desktop
       // thread — it has no prior "ended" row to flip from).
@@ -235,39 +235,51 @@ async function spawnPulse(key: string, status: MonitorPulse['status']) {
 }
 
 // --- Context menu (opacity + per-area visibility) ---------------------------
-// Right-click anywhere on the panel opens a two-level menu: window opacity,
-// per-provider usage hiding, and per-agent monitor hiding. All three persist
-// in localStorage.
+// Right-click anywhere on the panel: window opacity, per-provider usage
+// hiding (submenu), and a single toggle that hides the whole monitor strip.
+// All persist in localStorage.
 const OPACITY_OPTIONS = [80, 85, 90, 95, 100]
 const OPACITY_STORAGE_KEY = 'ah-tray-opacity'
 const storedOpacity = Number(localStorage.getItem(OPACITY_STORAGE_KEY))
 const panelOpacity = ref(OPACITY_OPTIONS.includes(storedOpacity) ? storedOpacity : 100)
 const opacityMenu = ref<{ x: number; y: number } | null>(null)
-const openSubmenu = ref<'opacity' | 'usage' | 'monitor' | null>(null)
+const openSubmenu = ref<'opacity' | 'usage' | null>(null)
 // Which side the submenus open on, recomputed per right-click: right when it
 // fits fully inside the window, left otherwise (the window clips overflow,
 // so the wrong side makes the submenu invisible).
 const submenuSide = ref<'left' | 'right'>('right')
 
 const HIDDEN_USAGE_KEY = 'ah-tray-hidden-usage'
-const HIDDEN_MONITOR_KEY = 'ah-tray-hidden-monitor'
+const MONITOR_HIDDEN_KEY = 'ah-tray-monitor-hidden'
 // Declared above the computeds that reference it: watch() eagerly evaluates
 // its source on creation, so a later const would hit the TDZ at setup time.
 const PROVIDER_ORDER: UsageProvider[] = ['codex', 'claude-code', 'grok-build', 'kimi-code']
-function loadHidden<K extends string>(key: string): K[] {
+function loadHiddenUsage(): UsageProvider[] {
   try {
-    const value = JSON.parse(localStorage.getItem(key) ?? '[]')
+    const value = JSON.parse(localStorage.getItem(HIDDEN_USAGE_KEY) ?? '[]')
     return Array.isArray(value) ? value : []
   } catch {
     return []
   }
 }
-const hiddenUsage = ref<UsageProvider[]>(loadHidden(HIDDEN_USAGE_KEY))
-const hiddenMonitors = ref<MonitorAgent[]>(loadHidden(HIDDEN_MONITOR_KEY))
+// Whole-strip kill switch. Migrates the retired per-agent list: an old
+// "everything hidden" selection counts as hidden.
+function loadMonitorHidden(): boolean {
+  const flag = localStorage.getItem(MONITOR_HIDDEN_KEY)
+  if (flag !== null) return flag === '1'
+  try {
+    const legacy = JSON.parse(localStorage.getItem('ah-tray-hidden-monitor') ?? '[]')
+    return Array.isArray(legacy) && legacy.length >= MONITOR_AGENTS_LIST.length
+  } catch {
+    return false
+  }
+}
+const hiddenUsage = ref<UsageProvider[]>(loadHiddenUsage())
+const monitorHidden = ref(loadMonitorHidden())
 
 function persistHidden() {
   localStorage.setItem(HIDDEN_USAGE_KEY, JSON.stringify(hiddenUsage.value))
-  localStorage.setItem(HIDDEN_MONITOR_KEY, JSON.stringify(hiddenMonitors.value))
+  localStorage.setItem(MONITOR_HIDDEN_KEY, monitorHidden.value ? '1' : '0')
 }
 
 // Providers the panel can actually query right now — the only ones that may
@@ -284,13 +296,6 @@ const allUsageHidden = computed(() =>
   queryableProviders.value.length > 0
   && queryableProviders.value.every(provider => hiddenUsage.value.includes(provider)),
 )
-// Monitor rows minus the agents hidden via the context menu.
-const visibleMonitorRows = computed(() =>
-  monitorRows.value.filter(row => !hiddenMonitors.value.includes(row.agent)),
-)
-const allMonitorsHidden = computed(() =>
-  MONITOR_AGENTS_LIST.every(agent => hiddenMonitors.value.includes(agent)),
-)
 
 function toggleHiddenUsage(provider: UsageProvider) {
   hiddenUsage.value = hiddenUsage.value.includes(provider)
@@ -302,15 +307,10 @@ function toggleAllUsage() {
   hiddenUsage.value = allUsageHidden.value ? [] : [...queryableProviders.value]
   persistHidden()
 }
-function toggleHiddenMonitor(agent: MonitorAgent) {
-  hiddenMonitors.value = hiddenMonitors.value.includes(agent)
-    ? hiddenMonitors.value.filter(item => item !== agent)
-    : [...hiddenMonitors.value, agent]
+function toggleMonitorHidden() {
+  monitorHidden.value = !monitorHidden.value
   persistHidden()
-}
-function toggleAllMonitors() {
-  hiddenMonitors.value = allMonitorsHidden.value ? [] : [...MONITOR_AGENTS_LIST]
-  persistHidden()
+  opacityMenu.value = null
 }
 
 // A provider that becomes hidden (or signed out) can no longer be selected.
@@ -398,12 +398,6 @@ const PROVIDER_LABELS: Record<UsageProvider, string> = {
   'claude-code': 'Claude Code',
   'grok-build': 'Grok Build',
   'kimi-code': 'Kimi Code',
-}
-
-// Context-menu labels for the monitor area (the tray strip watches the Kiro
-// CLI directory, so it gets the CLI suffix there too).
-function monitorMenuLabel(agent: MonitorAgent) {
-  return agent === 'kiro' ? t('session_monitor.agent_kiro_cli') : t(`session_monitor.agent_${agent}`)
 }
 
 function availableProvider(
@@ -554,7 +548,7 @@ watch(
 
 // The monitor strip changes the panel height when rows appear or drain.
 watch(
-  () => visibleMonitorRows.value.length,
+  () => monitorRows.value.length,
   () => {
     if (!compactLoading.value) void applyContentHeight()
   },
@@ -564,7 +558,7 @@ watch(
 // Hiding/showing a provider swaps the quota area between the orb and the
 // empty state, which changes the natural panel height.
 watch(
-  () => [visibleProviders.value.length, hiddenMonitors.value.length],
+  () => [visibleProviders.value.length, monitorHidden.value],
   () => {
     if (!compactLoading.value) void applyContentHeight()
   },
@@ -889,18 +883,19 @@ onBeforeUnmount(() => {
         </template>
 
         <!-- Mini monitor strip: one line per session (status dot + agent +
-             user question), live via session-monitor change events. Always
-             rendered — with a fixed empty state when nothing is visible. -->
-        <div class="monitor-strip">
+             user question), live via session-monitor change events. The
+             right-click menu can hide the whole module; otherwise it always
+             renders — with a fixed empty state when nothing is visible. -->
+        <div v-if="!monitorHidden" class="monitor-strip">
           <div class="monitor-strip__title">{{ t('ui.monitor_tab') }}</div>
-          <div v-if="!visibleMonitorRows.length" class="monitor-empty" role="status">
+          <div v-if="!monitorRows.length" class="monitor-empty" role="status">
             <span class="monitor-empty__icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 12h4l2.5-6 3 12 2.5-6h6"/></svg>
             </span>
             <span>{{ t('tray.no_monitor_items') }}</span>
           </div>
           <div
-            v-for="row in visibleMonitorRows"
+            v-for="row in monitorRows"
             :key="`${row.agent}-${row.sessionId}-${row.turnId}`"
             class="monitor-row"
           >
@@ -982,30 +977,9 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div class="tray-menu__parent" @mouseenter="openSubmenu = 'monitor'">
-        <span>{{ t('tray.hide_monitor') }}</span>
-        <span class="tray-menu__caret">{{ submenuSide === 'right' ? '›' : '‹' }}</span>
-        <div v-if="openSubmenu === 'monitor'" class="tray-submenu" :class="`tray-submenu--${submenuSide}`">
-          <button
-            class="tray-submenu__option"
-            :class="{ 'is-checked': allMonitorsHidden }"
-            @click="toggleAllMonitors()"
-          >
-            <span class="tray-submenu__check">{{ allMonitorsHidden ? '✓' : '' }}</span>
-            {{ t('tray.all') }}
-          </button>
-          <button
-            v-for="agent in MONITOR_AGENTS_LIST"
-            :key="agent"
-            class="tray-submenu__option"
-            :class="{ 'is-checked': hiddenMonitors.includes(agent) }"
-            @click="toggleHiddenMonitor(agent)"
-          >
-            <span class="tray-submenu__check">{{ hiddenMonitors.includes(agent) ? '✓' : '' }}</span>
-            {{ monitorMenuLabel(agent) }}
-          </button>
-        </div>
-      </div>
+      <button class="tray-menu__item" @click="toggleMonitorHidden">
+        {{ monitorHidden ? t('tray.show_monitor') : t('tray.hide_monitor') }}
+      </button>
     </div>
   </main>
 </template>
@@ -1445,6 +1419,21 @@ onBeforeUnmount(() => {
 }
 .tray-menu__parent:hover { background: var(--tray-inset); color: var(--tray-ink); }
 .tray-menu__caret { margin-left: auto; color: var(--tray-ink-3); font-size: 11px; }
+/* Direct action item (no submenu), same row look as parents. */
+.tray-menu__item {
+  display: flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--tray-ink-2);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.tray-menu__item:hover { background: var(--tray-inset); color: var(--tray-ink); }
 .tray-submenu {
   position: absolute;
   /* Default: open to the right of the parent menu. */

@@ -5,6 +5,7 @@ mod grok;
 mod kimi;
 mod kiro;
 mod models;
+mod zcode;
 
 #[cfg(target_os = "macos")]
 use std::path::PathBuf;
@@ -66,11 +67,20 @@ pub fn list_session_platforms() -> Result<Vec<SessionPlatform>, String> {
         });
     }
 
+    let zcode_count = zcode::count_zcode_sessions()?;
+    if zcode_count > 0 {
+        platforms.push(SessionPlatform {
+            id: "zcode".to_string(),
+            display_name: "Zcode".to_string(),
+            session_count: zcode_count,
+        });
+    }
+
     let kiro_count = kiro::count_kiro_sessions()?;
     if kiro_count > 0 {
         platforms.push(SessionPlatform {
             id: "kiro".to_string(),
-            display_name: "Kiro CLI".to_string(),
+            display_name: "Kiro".to_string(),
             session_count: kiro_count,
         });
     }
@@ -112,6 +122,7 @@ fn list_sessions_all(platform_id: &str) -> Result<Vec<models::SessionSummary>, S
         "kiro" => kiro::list_kiro_sessions_all(),
         "grok" => grok::list_grok_sessions_all(),
         "kimi" => kimi::list_kimi_sessions_all(),
+        "zcode" => zcode::list_zcode_sessions_all(),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
 }
@@ -551,6 +562,7 @@ pub fn get_session_messages(
         "kiro" => kiro::get_kiro_messages(session_id, offset, limit),
         "grok" => grok::get_grok_messages(session_id, offset, limit),
         "kimi" => kimi::get_kimi_messages(session_id, offset, limit),
+        "zcode" => zcode::get_zcode_messages(session_id, offset, limit),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
 }
@@ -566,6 +578,7 @@ pub fn search_session_messages(
         "kiro" => kiro::search_kiro_messages(&query_lower),
         "grok" => grok::search_grok_messages(&query_lower),
         "kimi" => kimi::search_kimi_messages(&query_lower),
+        "zcode" => zcode::search_zcode_messages(&query_lower),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
 }
@@ -577,6 +590,7 @@ pub fn delete_session(platform_id: &str, session_id: &str) -> Result<(), String>
         "kiro" => kiro::delete_kiro_session(session_id),
         "grok" => grok::delete_grok_session(session_id),
         "kimi" => kimi::delete_kimi_session(session_id),
+        "zcode" => zcode::delete_zcode_session(session_id),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
 }
@@ -663,6 +677,12 @@ fn build_resume_command(platform_id: &str, session_id: &str) -> Result<String, S
             }
             Ok(format!("kimi --session {}", shell_quote(session_id)))
         }
+        // Zcode is an Electron desktop app: sessions have no terminal resume
+        // command. The resume modal surfaces this error instead of a command.
+        "zcode" => Err(
+            "Zcode is a desktop application and does not support terminal session resume."
+                .to_string(),
+        ),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
 }
@@ -794,6 +814,26 @@ mod tests {
         let command = build_resume_command("kimi", "abc-123").expect("command should build");
         assert!(command.contains("kimi --session"));
         assert!(command.contains("'abc-123'"));
+    }
+
+    #[test]
+    fn zcode_sessions_real_data_smoke_test() {
+        let sessions = zcode::list_zcode_sessions_all().expect("zcode scan should not fail");
+        if sessions.is_empty() {
+            return;
+        }
+        let first = &sessions[0];
+        let page = zcode::get_zcode_messages(&first.id, 0, 50);
+        if let Ok(messages) = page {
+            assert!(messages.len() <= 50);
+        }
+    }
+
+    #[test]
+    fn build_resume_command_for_zcode_reports_desktop_app() {
+        let err = build_resume_command("zcode", "sess_abc")
+            .expect_err("zcode resume should be rejected");
+        assert!(err.contains("desktop application"));
     }
 
     #[test]

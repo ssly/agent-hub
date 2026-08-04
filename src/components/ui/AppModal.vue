@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, watch } from 'vue'
+import { X } from 'lucide-vue-next'
 
 const props = defineProps<{
   show: boolean
@@ -7,6 +8,7 @@ const props = defineProps<{
   widthClass?: string // e.g. 'w-[48rem]'
   bare?: boolean // omit header/footer chrome; render only the body slot (edge-to-edge)
   closeOnOutside?: boolean // whether clicking the backdrop closes the modal (default true)
+  fillHeight?: boolean // fixed 88vh height; body stops scrolling so a slotted region can own the single scrollbar
 }>()
 
 const emit = defineEmits<{
@@ -51,20 +53,12 @@ onUnmounted(() => {
       class="ah-modal-overlay"
       @click="handleBackdropClick"
     >
-      <div :class="['ah-modal', bare ? 'ah-modal--bare' : '', widthClass || 'w-[48rem]']">
+      <div :class="['ah-modal', bare ? 'ah-modal--bare' : '', fillHeight ? 'ah-modal--fill' : '', widthClass || 'w-[48rem]']">
         <!-- Header (hidden in bare mode; caller renders its own) -->
-        <div
-          v-if="!bare"
-          class="ah-modal__header flex items-center justify-between border-b pb-4"
-          style="border-color: var(--hairline)"
-        >
+        <div v-if="!bare" class="ah-modal__header">
           <h3 class="ah-modal__title truncate min-w-0">{{ title }}</h3>
-          <button
-            class="text-xl leading-none cursor-pointer transition-colors shrink-0"
-            style="color: var(--ink-3)"
-            @click="emit('close')"
-          >
-            &times;
+          <button class="ah-modal__close" @click="emit('close')">
+            <X :size="15" />
           </button>
         </div>
 

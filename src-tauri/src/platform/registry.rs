@@ -41,6 +41,13 @@ pub fn builtin_platforms() -> Vec<PlatformDef> {
             skill_dir: join_relative(home.clone(), ".claude/skills"),
         },
         PlatformDef {
+            id: "cursor".into(),
+            display_name: "Cursor".into(),
+            description: "Cursor IDE custom skills".into(),
+            presence_path: home.join(".cursor"),
+            skill_dir: join_relative(home.clone(), ".cursor/skills"),
+        },
+        PlatformDef {
             id: "antigravity".into(),
             display_name: "Antigravity".into(),
             description: "Google Antigravity (agy CLI / 2.0) agent skills".into(),
@@ -62,11 +69,11 @@ pub fn builtin_platforms() -> Vec<PlatformDef> {
             skill_dir: join_relative(home.clone(), ".kimi-code/skills"),
         },
         PlatformDef {
-            id: "cursor".into(),
-            display_name: "Cursor".into(),
-            description: "Cursor IDE custom skills".into(),
-            presence_path: home.join(".cursor"),
-            skill_dir: join_relative(home.clone(), ".cursor/skills"),
+            id: "zcode".into(),
+            display_name: "Zcode".into(),
+            description: "Z.ai Zcode agent skills".into(),
+            presence_path: home.join(".zcode"),
+            skill_dir: join_relative(home.clone(), ".zcode/skills"),
         },
         PlatformDef {
             id: "hermes".into(),
@@ -138,6 +145,10 @@ mod tests {
             workspace_skill_dir("kimi-code", &root),
             Some(root.join(".kimi-code").join("skills"))
         );
+        assert_eq!(
+            workspace_skill_dir("zcode", &root),
+            Some(root.join(".zcode").join("skills"))
+        );
     }
 
     #[test]
@@ -170,14 +181,16 @@ mod tests {
             .map(|platform| platform.id.as_str())
             .collect();
         assert_eq!(
-            &ids[..6],
+            &ids[..8],
             [
                 "shared-pool",
                 "codex",
                 "claude-code",
+                "cursor",
                 "antigravity",
                 "grok-build",
-                "kimi-code"
+                "kimi-code",
+                "zcode"
             ]
         );
     }

@@ -93,9 +93,10 @@ function getSidebarItems() {
     { id: 'all', display_name: t('session_monitor.agent_all') },
     { id: 'codex', display_name: 'Codex' },
     { id: 'claude', display_name: 'Claude Code' },
+    { id: 'cursor', display_name: 'Cursor' },
     { id: 'grok', display_name: 'Grok Build' },
     { id: 'kimi', display_name: 'Kimi Code' },
-    { id: 'kiro', display_name: 'Kiro' },
+    { id: 'zcode', display_name: 'Zcode' },
   ]
   if (appStore.currentTab === 'accounts') return [
     { id: 'codex', display_name: 'Codex' },

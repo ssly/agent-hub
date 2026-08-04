@@ -64,10 +64,11 @@ watch(() => props.show, open => {
   <AppModal
     :show="show"
     :title="title || t('session.untitled')"
-    width-class="w-[80rem]"
+    width-class="w-[94vw]"
+    fill-height
     @close="emit('close')"
   >
-    <div class="space-y-4">
+    <div class="flex flex-col flex-1 min-h-0 gap-3">
       <div class="text-xs pb-3 border-b flex gap-3 flex-wrap" style="color: var(--ink-3); border-color: var(--hairline)">
         <span v-if="projectPath">{{ projectPath }}</span>
         <span v-if="model" style="color: var(--accent)">{{ model }}</span>
@@ -77,7 +78,7 @@ watch(() => props.show, open => {
         <span v-if="startedAt">{{ t('session.started_at', { time: formatSessionTime(startedAt, locale) }) }}</span>
       </div>
 
-      <div class="ah-msg-list">
+      <div class="ah-msg-list flex-1 min-h-0">
         <AppLoading v-if="loading" class="py-8">{{ t('session.loading_messages') }}</AppLoading>
         <div v-else-if="loadError" class="text-center py-8" style="color: var(--danger)">
           {{ loadError }}
@@ -124,9 +125,6 @@ watch(() => props.show, open => {
 </template>
 
 <style scoped>
-/* Conversation reading benefits from area: stretch the message well beyond
-   the default 55vh cap so the modal fills close to its 85vh ceiling. */
-.ah-msg-list {
-  max-height: 68vh;
-}
+/* The modal runs in fill mode (fixed height, non-scrolling body); the
+   message list flexes into the remaining space and owns the only scrollbar. */
 </style>

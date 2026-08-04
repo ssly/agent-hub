@@ -57,7 +57,15 @@ pub fn read_workspace_mcp_server(
 
 fn parse_json_servers(content: &str, mcp_key: &str) -> Result<Vec<McpServer>, String> {
     let mut doc: Value = serde_json::from_str(content).map_err(|e| e.to_string())?;
-    let servers_obj = match doc.get_mut(mcp_key).and_then(|v| v.as_object_mut()) {
+    // Dotted keys (e.g. Zcode's "mcp.servers") address a nested servers map.
+    let mut node = &mut doc;
+    for key in mcp_key.split('.') {
+        node = match node.get_mut(key) {
+            Some(value) => value,
+            None => return Ok(Vec::new()),
+        };
+    }
+    let servers_obj = match node.as_object_mut() {
         Some(obj) => obj,
         None => return Ok(Vec::new()),
     };
@@ -137,8 +145,7 @@ pub fn parse_input_config(text: &str) -> Result<Value, String> {
 
 pub fn parse_server_config_input(text: &str, mcp_key: &str, name: &str) -> Result<Value, String> {
     let config = parse_input_config(text)?;
-    if let Some(wrapped) = config
-        .get(mcp_key)
+    if let Some(wrapped) = value_at_key_path(&config, mcp_key)
         .and_then(|servers| servers.get(name))
         .cloned()
     {
@@ -150,6 +157,14 @@ pub fn parse_server_config_input(text: &str, mcp_key: &str, name: &str) -> Resul
         }
     }
     Ok(config)
+}
+
+/// Follow a dotted key path (e.g. "mcp.servers") into a JSON value.
+fn value_at_key_path<'a>(mut value: &'a Value, key_path: &str) -> Option<&'a Value> {
+    for key in key_path.split('.') {
+        value = value.get(key)?;
+    }
+    Some(value)
 }
 
 /// Parse server config with format enforcement.
@@ -351,8 +366,10 @@ pub(crate) fn apply_json_server(
     name: &str,
     config: &Value,
 ) -> Result<String, String> {
+    // Dotted keys (e.g. Zcode's "mcp.servers") address a nested servers map.
+    let key_path: Vec<&str> = mcp_key.split('.').collect();
     if before.trim().is_empty() || before.trim() == "{}" {
-        let result = format_new_json_doc(mcp_key, name, config)?;
+        let result = format_new_json_doc(&key_path, name, config)?;
         serde_json::from_str::<Value>(&result).map_err(|e| e.to_string())?;
         return Ok(result);
     }
@@ -367,39 +384,51 @@ pub(crate) fn apply_json_server(
         return Err("Not a JSON object".into());
     }
 
-    if let Some(mcp_field) = find_json_object_field(before, root_open, mcp_key)? {
-        let servers_open = skip_json_ws(before, mcp_field.value_start);
-        if before.as_bytes().get(servers_open) != Some(&b'{') {
-            return Err(format!("'{}' is not an object", mcp_key));
+    let result = apply_json_at_path(before, root_open, &key_path, name, config)?;
+    serde_json::from_str::<Value>(&result).map_err(|e| e.to_string())?;
+    Ok(result)
+}
+
+/// Walk `key_path` down from the object at `object_open`, creating any missing
+/// intermediate objects, then upsert `name: config` inside the innermost one.
+/// Splices into `before` and returns the full rewritten document; every key
+/// outside the edited member keeps its original text, order, and formatting.
+fn apply_json_at_path(
+    before: &str,
+    object_open: usize,
+    key_path: &[&str],
+    name: &str,
+    config: &Value,
+) -> Result<String, String> {
+    let key = key_path[0];
+    if let Some(field) = find_json_object_field(before, object_open, key)? {
+        let value_open = skip_json_ws(before, field.value_start);
+        if before.as_bytes().get(value_open) != Some(&b'{') {
+            return Err(format!("'{}' is not an object", key));
+        }
+        if key_path.len() > 1 {
+            return apply_json_at_path(before, value_open, &key_path[1..], name, config);
         }
 
-        let mcp_indent = line_indent_before(before, mcp_field.key_start);
-        let server_indent = infer_json_child_indent(before, servers_open, &mcp_indent);
-        let closing_indent = line_indent_before(before, servers_open);
-        let result = if let Some(server_field) = find_json_object_field(before, servers_open, name)?
-        {
+        let key_indent = line_indent_before(before, field.key_start);
+        let server_indent = infer_json_child_indent(before, value_open, &key_indent);
+        let closing_indent = line_indent_before(before, value_open);
+        if let Some(server_field) = find_json_object_field(before, value_open, name)? {
             let property = format_json_property(name, config, &server_indent, false)?;
             let mut result = String::with_capacity(before.len() + property.len());
             result.push_str(&before[..server_field.key_start]);
             result.push_str(&property);
             result.push_str(&before[server_field.value_end..]);
-            result
+            Ok(result)
         } else {
             let property = format_json_property(name, config, &server_indent, true)?;
-            insert_json_property(before, servers_open, &property, &closing_indent)?
-        };
-
-        serde_json::from_str::<Value>(&result).map_err(|e| e.to_string())?;
-        Ok(result)
+            insert_json_property(before, value_open, &property, &closing_indent)
+        }
     } else {
-        let root_indent = line_indent_before(before, root_open);
-        let field_indent = infer_json_child_indent(before, root_open, &root_indent);
-        let server_indent = format!("{}  ", field_indent);
-        let property =
-            format_json_mcp_property(mcp_key, name, config, &field_indent, &server_indent, true)?;
-        let result = insert_json_property(before, root_open, &property, &root_indent)?;
-        serde_json::from_str::<Value>(&result).map_err(|e| e.to_string())?;
-        Ok(result)
+        let parent_indent = line_indent_before(before, object_open);
+        let field_indent = infer_json_child_indent(before, object_open, &parent_indent);
+        let property = format_nested_json_property(key_path, name, config, &field_indent, true)?;
+        insert_json_property(before, object_open, &property, &parent_indent)
     }
 }
 
@@ -428,7 +457,21 @@ pub(crate) fn remove_json_server(
         return Err("Not a JSON object".into());
     }
 
-    let mcp_field = find_json_object_field(before, root_open, mcp_key)?
+    // Walk any intermediate objects of a dotted key (e.g. "mcp.servers").
+    let key_path: Vec<&str> = mcp_key.split('.').collect();
+    let mut parent_open = root_open;
+    for key in &key_path[..key_path.len() - 1] {
+        let field = find_json_object_field(before, parent_open, key)?.ok_or_else(|| {
+            format!("'{}' section not found, cannot delete '{}'", mcp_key, name)
+        })?;
+        let value_open = skip_json_ws(before, field.value_start);
+        if before.as_bytes().get(value_open) != Some(&b'{') {
+            return Err(format!("'{}' is not an object", key));
+        }
+        parent_open = value_open;
+    }
+
+    let mcp_field = find_json_object_field(before, parent_open, key_path[key_path.len() - 1])?
         .ok_or_else(|| format!("'{}' section not found, cannot delete '{}'", mcp_key, name))?;
 
     let servers_open = skip_json_ws(before, mcp_field.value_start);
@@ -525,30 +568,36 @@ fn remove_json_member(
     result
 }
 
-fn format_new_json_doc(mcp_key: &str, name: &str, config: &Value) -> Result<String, String> {
-    let property = format_json_mcp_property(mcp_key, name, config, "  ", "    ", true)?;
+fn format_new_json_doc(key_path: &[&str], name: &str, config: &Value) -> Result<String, String> {
+    let property = format_nested_json_property(key_path, name, config, "  ", true)?;
     Ok(format!("{{\n{}\n}}", property))
 }
 
-fn format_json_mcp_property(
-    mcp_key: &str,
+/// Render `"a": { "b": { … "name": <config> } }` for a dotted key path,
+/// indenting each nesting level two spaces deeper than `indent`.
+fn format_nested_json_property(
+    key_path: &[&str],
     name: &str,
     config: &Value,
-    field_indent: &str,
-    server_indent: &str,
+    indent: &str,
     include_first_indent: bool,
 ) -> Result<String, String> {
-    let key = serde_json::to_string(mcp_key).map_err(|e| e.to_string())?;
-    let server = format_json_property(name, config, server_indent, true)?;
+    let key = serde_json::to_string(key_path[0]).map_err(|e| e.to_string())?;
+    let child_indent = format!("{}  ", indent);
+    let inner = if key_path.len() == 1 {
+        format_json_property(name, config, &child_indent, true)?
+    } else {
+        format_nested_json_property(&key_path[1..], name, config, &child_indent, true)?
+    };
     let mut out = String::new();
     if include_first_indent {
-        out.push_str(field_indent);
+        out.push_str(indent);
     }
     out.push_str(&key);
     out.push_str(": {\n");
-    out.push_str(&server);
+    out.push_str(&inner);
     out.push('\n');
-    out.push_str(field_indent);
+    out.push_str(indent);
     out.push('}');
     Ok(out)
 }
@@ -1911,6 +1960,148 @@ command = \"b\"
         let parsed: Value = serde_json::from_str(&after).unwrap();
         assert_eq!(parsed["mcpServers"]["b"]["command"], "y");
         assert!(!parsed["mcpServers"].as_object().unwrap().contains_key("a"));
+    }
+
+    // --- Nested mcp_key (Zcode "mcp.servers") tests ---
+
+    #[test]
+    fn test_parse_json_servers_nested_key() {
+        let content = r#"{
+  "theme": "dark",
+  "mcp": {
+    "otherSetting": true,
+    "servers": {
+      "ctx7": {
+        "type": "stdio",
+        "command": "npx",
+        "args": ["-y", "ctx7"],
+        "timeoutMs": 30000
+      }
+    }
+  }
+}"#;
+        let servers = parse_json_servers(content, "mcp.servers").unwrap();
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].name, "ctx7");
+        // Unknown keys (timeoutMs etc.) must survive the round trip — Zcode
+        // drops servers carrying keys it does not recognize.
+        assert_eq!(servers[0].config["timeoutMs"], 30000);
+        assert_eq!(servers[0].config["type"], "stdio");
+    }
+
+    #[test]
+    fn test_parse_json_servers_nested_key_missing_returns_empty() {
+        let content = r#"{ "theme": "dark" }"#;
+        let servers = parse_json_servers(content, "mcp.servers").unwrap();
+        assert!(servers.is_empty());
+    }
+
+    #[test]
+    fn test_apply_json_server_nested_empty_doc() {
+        let config = serde_json::json!({"type": "stdio", "command": "npx"});
+        let result = apply_json_server("{}", "mcp.servers", "ctx7", &config).unwrap();
+        let parsed: Value = serde_json::from_str(&result).expect("must be valid JSON");
+        assert_eq!(parsed["mcp"]["servers"]["ctx7"]["command"], "npx");
+        assert_eq!(parsed["mcp"]["servers"]["ctx7"]["type"], "stdio");
+    }
+
+    #[test]
+    fn test_apply_json_server_nested_creates_servers_under_existing_mcp() {
+        let before = r#"{
+  "theme": "dark",
+  "mcp": {
+    "otherSetting": true
+  },
+  "tail": 1
+}"#;
+        let config = serde_json::json!({"command": "npx", "args": ["-y", "pkg"]});
+        let result = apply_json_server(before, "mcp.servers", "ctx7", &config).unwrap();
+        // Sibling keys keep their original text untouched.
+        assert!(result.contains(r#"  "theme": "dark","#));
+        assert!(result.contains(r#"    "otherSetting": true"#));
+        assert!(result.contains(r#"  "tail": 1"#));
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["mcp"]["servers"]["ctx7"]["command"], "npx");
+        assert_eq!(parsed["mcp"]["otherSetting"], true);
+    }
+
+    #[test]
+    fn test_apply_json_server_nested_updates_and_preserves_siblings() {
+        let before = r#"{
+  "mcp": {
+    "servers": {
+      "ctx7": {
+        "command": "old",
+        "timeoutMs": 1000
+      },
+      "other": {
+        "command": "keep"
+      }
+    }
+  }
+}"#;
+        // Zcode disable flow: rewrite the server with "enabled": false while
+        // its unknown keys stay intact.
+        let config = serde_json::json!({"command": "old", "timeoutMs": 1000, "enabled": false});
+        let result = apply_json_server(before, "mcp.servers", "ctx7", &config).unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["mcp"]["servers"]["ctx7"]["enabled"], false);
+        assert_eq!(parsed["mcp"]["servers"]["ctx7"]["timeoutMs"], 1000);
+        assert_eq!(parsed["mcp"]["servers"]["other"]["command"], "keep");
+        // Round-trip through the reader yields exactly what was written.
+        let servers = parse_json_servers(&result, "mcp.servers").unwrap();
+        assert_eq!(servers.len(), 2);
+    }
+
+    #[test]
+    fn test_apply_json_server_nested_appends_second_server() {
+        let before = r#"{
+  "mcp": {
+    "servers": {
+      "first": { "command": "a" }
+    }
+  }
+}"#;
+        let config = serde_json::json!({"command": "b"});
+        let result = apply_json_server(before, "mcp.servers", "second", &config).unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["mcp"]["servers"]["first"]["command"], "a");
+        assert_eq!(parsed["mcp"]["servers"]["second"]["command"], "b");
+    }
+
+    #[test]
+    fn test_remove_json_server_nested() {
+        let before = r#"{
+  "mcp": {
+    "otherSetting": true,
+    "servers": {
+      "alpha": { "command": "a" },
+      "beta": { "command": "b" }
+    }
+  },
+  "tail": 1
+}"#;
+        let after = remove_json_server(before, "mcp.servers", "alpha").unwrap();
+        let parsed: Value = serde_json::from_str(&after).unwrap();
+        let servers = parsed["mcp"]["servers"].as_object().unwrap();
+        assert!(!servers.contains_key("alpha"));
+        assert_eq!(servers["beta"]["command"], "b");
+        assert_eq!(parsed["mcp"]["otherSetting"], true);
+        assert_eq!(parsed["tail"], 1);
+    }
+
+    #[test]
+    fn test_remove_json_server_nested_missing_section_errors() {
+        let before = r#"{ "other": 1 }"#;
+        let res = remove_json_server(before, "mcp.servers", "alpha");
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_parse_server_config_input_unwraps_nested_wrapper() {
+        let text = r#"{"mcp": {"servers": {"ctx7": {"command": "npx"}}}}"#;
+        let parsed = parse_server_config_input(text, "mcp.servers", "ctx7").unwrap();
+        assert_eq!(parsed["command"], Value::String("npx".into()));
     }
 }
 

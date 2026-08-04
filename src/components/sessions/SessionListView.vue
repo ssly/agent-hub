@@ -83,11 +83,16 @@ function platformName(platformId: string | undefined): string {
 
 /** Badge with client-source refinement: Codex threads recorded as created by
  *  the ChatGPT desktop/IDE client (threads.source = "vscode") are marked as
- *  such; anything else keeps the plain platform name. */
+ *  such; Kiro sessions all come from the kiro-cli transcript directory, so
+ *  they are marked "Kiro CLI" (an IDE-sourced adapter could mark its own);
+ *  anything else keeps the plain platform name. */
 function sessionBadge(session: { platform_id?: string; source?: string | null }): string {
   const id = session.platform_id || store.selectedPlatformId || ''
   if (id === 'codex' && session.source === 'chatgpt') {
     return t('session_monitor.source_chatgpt')
+  }
+  if (id === 'kiro' && session.source === 'terminal') {
+    return t('session.source_kiro_cli')
   }
   return platformName(session.platform_id)
 }

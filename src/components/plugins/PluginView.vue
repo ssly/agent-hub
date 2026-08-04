@@ -5,24 +5,30 @@ import { usePluginsStore } from '@/stores/plugins'
 import { useSkillsStore } from '@/stores/skills'
 import { useMcpStore } from '@/stores/mcp'
 import { useClaudePluginsStore } from '@/stores/claude-plugins'
+import { useZcodePluginsStore } from '@/stores/zcode-plugins'
 import SkillListView from '@/components/skills/SkillListView.vue'
 import McpListView from '@/components/mcp/McpListView.vue'
 import ClaudePluginList from '@/components/plugins/ClaudePluginList.vue'
+import ZcodePluginList from '@/components/plugins/ZcodePluginList.vue'
 
 const { t, te } = useI18n()
 const pluginsStore = usePluginsStore()
 const skillsStore = useSkillsStore()
 const mcpStore = useMcpStore()
 const claudePluginsStore = useClaudePluginsStore()
+const zcodePluginsStore = useZcodePluginsStore()
 
 const skillCount = computed(() => skillsStore.skills.length)
 const serverCount = computed(() => mcpStore.servers.length)
 const isClaudeCode = computed(() => pluginsStore.selectedPlatformId === 'claude-code')
 const isCodex = computed(() => pluginsStore.selectedPlatformId === 'codex')
+const isZcode = computed(() => pluginsStore.selectedPlatformId === 'zcode')
 const showMcpSection = computed(() => Boolean(pluginsStore.selectedPlatform?.supports_mcp)
   && (pluginsStore.isGlobalScope || serverCount.value > 0))
 const showClaudeSection = computed(() => isClaudeCode.value
   && (pluginsStore.isGlobalScope || claudePluginsStore.plugins.length > 0))
+// Zcode 插件市场只有用户级数据，项目目录范围不展示该区块。
+const showZcodeSection = computed(() => isZcode.value && pluginsStore.isGlobalScope)
 // Codex officially keeps user-level skills in the Shared Pool; show a jump
 // note instead of a duplicated skills section.
 const showSkillsSection = computed(() => !isCodex.value
@@ -99,6 +105,22 @@ function jumpToSharedPool() {
           </div>
           <div class="ah-plugin-pane__body">
             <ClaudePluginList />
+          </div>
+        </section>
+
+        <section v-if="showZcodeSection" class="ah-plugin-pane" aria-labelledby="plugin-zcode-heading">
+          <div class="ah-plugin-pane__header">
+            <div>
+              <h2 id="plugin-zcode-heading">{{ t('plugin.zcode_plugins') }}</h2>
+              <p>{{ t('plugin.zcode_plugins_hint') }}</p>
+            </div>
+            <span
+              class="ah-plugin-count"
+              :title="t('plugin.zcode_installed_count', { installed: zcodePluginsStore.installedCount, total: zcodePluginsStore.plugins.length })"
+            >{{ zcodePluginsStore.installedCount }}/{{ zcodePluginsStore.plugins.length }}</span>
+          </div>
+          <div class="ah-plugin-pane__body">
+            <ZcodePluginList />
           </div>
         </section>
 

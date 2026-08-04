@@ -186,7 +186,9 @@ fn parse_kiro_summary(
         message_count: None,
         tokens_used: None,
         platform_id: PLATFORM_ID.to_string(),
-        source: None,
+        // Every session this adapter reads comes from ~/.kiro/sessions/cli,
+        // which only kiro-cli writes — provably the CLI client.
+        source: Some("terminal".to_string()),
     })
 }
 

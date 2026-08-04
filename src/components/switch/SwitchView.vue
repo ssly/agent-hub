@@ -232,6 +232,8 @@ async function handleRefreshClaudeUsage() {
   await store.refreshClaudeUsage(true)
   if (store.claudeUsageError) {
     showToast(t('switch.usage_failed'), 'error')
+  } else if (store.claudeUsageAvailable === false) {
+    showToast(t('switch.claude_usage_login_required'), 'info')
   } else {
     showToast(t('switch.usage_refresh_toast'), 'success')
   }
@@ -443,9 +445,8 @@ async function handleConfirmClear() {
                 {{ t('switch.grok_usage_loading') }}
               </div>
 
-              <div v-else-if="store.grokUsageError" class="text-sm py-2 flex items-center justify-between gap-3" style="color: var(--danger)">
-                <span>{{ t('switch.usage_failed') }}: {{ store.grokUsageError }}</span>
-                <button class="btn btn-danger btn-sm" @click="handleRefreshGrokUsage">{{ t('switch.usage_retry') }}</button>
+              <div v-else-if="store.grokUsageError" class="ah-notice ah-notice--warning" style="margin: 0">
+                {{ t('switch.usage_failed') }}: {{ store.grokUsageError }}
               </div>
 
               <div v-else-if="store.grokUsage" class="space-y-3 text-sm">
@@ -463,8 +464,8 @@ async function handleConfirmClear() {
 
                 <div
                   v-if="store.grokUsage.stale"
-                  class="p-3 rounded-lg text-xs"
-                  style="background: var(--warning-soft); color: var(--warning)"
+                  class="ah-notice ah-notice--warning"
+                  style="margin: 0"
                 >
                   {{ t('switch.grok_stale_warning') }}
                 </div>
@@ -546,9 +547,8 @@ async function handleConfirmClear() {
                 {{ t('switch.kimi_usage_loading') }}
               </div>
 
-              <div v-else-if="store.kimiUsageError" class="text-sm py-2 flex items-center justify-between gap-3" style="color: var(--danger)">
-                <span>{{ t('switch.usage_failed') }}: {{ store.kimiUsageError }}</span>
-                <button class="btn btn-danger btn-sm" @click="handleRefreshKimiUsage">{{ t('switch.usage_retry') }}</button>
+              <div v-else-if="store.kimiUsageError" class="ah-notice ah-notice--warning" style="margin: 0">
+                {{ t('switch.usage_failed') }}: {{ store.kimiUsageError }}
               </div>
 
               <div v-else-if="store.kimiUsage" class="space-y-3 text-sm">
@@ -618,9 +618,14 @@ async function handleConfirmClear() {
               {{ t('switch.claude_usage_loading') }}
             </div>
 
-            <div v-else-if="store.claudeUsageError" class="text-sm py-2 flex items-center justify-between gap-3" style="color: var(--danger)">
-              <span>{{ t('switch.usage_failed') }}: {{ store.claudeUsageError }}</span>
-              <button class="btn btn-danger btn-sm" @click="handleRefreshClaudeUsage">{{ t('switch.usage_retry') }}</button>
+            <!-- No local OAuth credentials: expected sign-out state, shown as
+                 a quiet hint; no query was fired. -->
+            <div v-else-if="store.claudeUsageAvailable === false" class="ah-notice" style="margin: 0">
+              {{ t('switch.claude_usage_login_required') }}
+            </div>
+
+            <div v-else-if="store.claudeUsageError" class="ah-notice ah-notice--warning" style="margin: 0">
+              {{ t('switch.usage_failed') }}: {{ store.claudeUsageError }}
             </div>
 
             <div v-else-if="store.claudeUsage" class="space-y-3 text-sm">
@@ -803,9 +808,8 @@ async function handleConfirmClear() {
             </div>
 
             <!-- Error -->
-            <div v-else-if="store.codexUsageError" class="text-sm py-2 flex items-center justify-between gap-3" style="color: var(--danger)">
-              <span>{{ t('switch.usage_failed') }}: {{ store.codexUsageError }}</span>
-              <button class="btn btn-danger btn-sm" @click="handleRefreshUsage">{{ t('switch.usage_retry') }}</button>
+            <div v-else-if="store.codexUsageError" class="ah-notice ah-notice--warning" style="margin: 0">
+              {{ t('switch.usage_failed') }}: {{ store.codexUsageError }}
             </div>
 
             <!-- Empty hint (before first fetch) -->

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Activity, CheckCircle2, CircleStop, Radar } from 'lucide-vue-next'
+import { Activity, CheckCircle2, CircleStop } from 'lucide-vue-next'
 import AppModal from '@/components/ui/AppModal.vue'
 import SessionCard from '@/components/sessions/SessionCard.vue'
 import SessionMessagesModal from '@/components/sessions/SessionMessagesModal.vue'
@@ -13,6 +13,7 @@ import {
   MONITOR_AGENTS,
   MONITOR_AGENT_PLATFORM,
   type MonitorAgent,
+  type HookAgent,
   type AgentSessionState,
   type SessionState,
 } from '@/stores/session-monitor'
@@ -22,14 +23,15 @@ const store = useSessionMonitorStore()
 const { showToast } = useToast()
 
 const supportsHooks = computed(() => (HOOK_AGENTS as string[]).includes(store.activeAgent))
-const isKiro = computed(() => store.activeAgent === 'kiro')
 const isAll = computed(() => store.activeAgent === 'all')
 const hookAction = computed(() => store.hookStatus?.installed ? 'uninstall' : 'install')
 const HOOK_CONFIG_PATHS: Record<string, string> = {
   codex: '~/.codex/hooks.json',
   claude: '~/.claude/settings.json',
+  cursor: '~/.cursor/hooks.json',
   grok: '~/.grok/hooks/agent-hub.json',
   kimi: '~/.kimi-code/config.toml',
+  zcode: '~/.zcode/cli/config.json',
 }
 const defaultConfigPath = computed(() => HOOK_CONFIG_PATHS[store.activeAgent] ?? '')
 const runningCount = computed(
@@ -52,16 +54,32 @@ const outdatedHookAgentNames = computed(() =>
     .join(locale.value === 'en' ? ', ' : '、'),
 )
 
-// One-line enablement tags for the merged view: green when the agent's
-// channel is live (hook installed / Kiro watcher on), gray otherwise — a
-// quiet reminder that hook agents only report after a proper install.
-// Clicking a tag jumps to that agent's tab for install/repair.
+/** One banner per page, highest priority first — warnings never stack.
+ *  Priority: query errors > hook-detected issues > outdated installs >
+ *  Codex trust reminder > new-session reload note. */
+const primaryNotice = computed<{ kind: 'info' | 'warning' | 'error'; text: string } | null>(() => {
+  if (store.error) return { kind: 'error', text: store.error }
+  if (store.hookStatus?.issue) return { kind: 'warning', text: store.hookStatus.issue }
+  if (outdatedHookAgents.value.length) {
+    return { kind: 'warning', text: t('session_monitor.hook_upgrade_hint', { agents: outdatedHookAgentNames.value }) }
+  }
+  if (store.activeAgent === 'codex' && store.hookStatus?.installed) {
+    return { kind: 'warning', text: t('session_monitor.trust_hint') }
+  }
+  if ((['cursor', 'grok', 'kimi', 'zcode'] as string[]).includes(store.activeAgent) && store.hookStatus?.installed) {
+    return { kind: 'info', text: t('session_monitor.hook_reload_hint') }
+  }
+  return null
+})
+
+// One-line enablement tags for the merged view: green when the agent's hook
+// is installed, gray otherwise — a quiet reminder that agents only report
+// after a proper install. Clicking a tag jumps to that agent's tab for
+// install/repair.
 const agentTags = computed(() =>
   MONITOR_AGENTS.map(agent => ({
     agent,
-    enabled: agent === 'kiro'
-      ? !!(store.kiroStatus?.enabled && store.kiroStatus?.available)
-      : !!store.hookStatuses[agent as 'codex' | 'claude' | 'grok' | 'kimi']?.installed,
+    enabled: !!store.hookStatuses[agent as HookAgent]?.installed,
   })),
 )
 
@@ -70,14 +88,9 @@ function agentLabel(agent: MonitorAgent): string {
 }
 
 /** Card badge: mark the concrete client when the capture channel proves it.
- *  Every Kiro row today comes from the ~/.kiro/sessions/cli file watcher
- *  (source === 'terminal'), which is kiro-cli only — the IDE does not write
- *  there. Codex rows carry hook-detected provenance: the ChatGPT desktop /
- *  IDE client is marked as such, everything else stays "Codex". */
+ *  Codex rows carry hook-detected provenance: the ChatGPT desktop / IDE
+ *  client is marked as such, everything else stays "Codex". */
 function agentBadgeLabel(session: AgentSessionState): string {
-  if (session.agent === 'kiro' && session.source === 'terminal') {
-    return t('session_monitor.agent_kiro_cli')
-  }
   if (session.agent === 'codex' && session.source === 'chatgpt') {
     return t('session_monitor.source_chatgpt')
   }
@@ -104,9 +117,9 @@ function formatTime(timestamp: number): string {
 }
 
 function sourceLabel(session: SessionState): string {
-  return session.source === 'chatgpt'
-    ? t('session_monitor.source_chatgpt')
-    : t('session_monitor.source_terminal')
+  if (session.source === 'chatgpt') return t('session_monitor.source_chatgpt')
+  if (session.source === 'cursor') return t('session_monitor.source_cursor')
+  return t('session_monitor.source_terminal')
 }
 
 /** Platform id of the sessions adapter backing a monitor row's full history.
@@ -118,11 +131,6 @@ function sessionPlatform(session: { agent: MonitorAgent } | null): string | null
 function emptyHint(): string {
   if (isAll.value) {
     return t('session_monitor.empty_all_hint')
-  }
-  if (isKiro.value) {
-    return store.kiroStatus?.enabled
-      ? t('session_monitor.empty_installed_hint', { agent: agentLabel('kiro') })
-      : t('session_monitor.empty_monitor_hint')
   }
   return store.hookStatus?.installed
     ? t('session_monitor.empty_installed_hint', { agent: agentLabel(store.activeAgent as MonitorAgent) })
@@ -150,19 +158,6 @@ async function handleApplyHook() {
   }
 }
 
-async function handleToggleKiroMonitor() {
-  const next = !store.kiroStatus?.enabled
-  await store.setKiroEnabled(next)
-  if (!store.error) {
-    showToast(
-      next
-        ? t('session_monitor.monitor_enabled_toast')
-        : t('session_monitor.monitor_disabled_toast'),
-      'success',
-    )
-  }
-}
-
 onMounted(() => store.initialize())
 onUnmounted(() => store.dispose())
 </script>
@@ -179,17 +174,9 @@ onUnmounted(() => store.dispose())
         class="btn"
         :class="hookAction === 'uninstall' ? 'btn-danger' : 'btn-primary'"
         :disabled="store.previewLoading || store.hookLoading"
-        @click="store.openHookPreview(store.activeAgent as 'codex' | 'claude' | 'grok' | 'kimi', hookAction)"
+        @click="store.openHookPreview(store.activeAgent as HookAgent, hookAction)"
       >
         {{ hookAction === 'uninstall' ? t('session_monitor.uninstall_hook') : t('session_monitor.install_hook') }}
-      </button>
-      <button
-        v-else-if="isKiro"
-        class="btn"
-        :class="store.kiroStatus?.enabled ? 'btn-danger' : 'btn-primary'"
-        @click="handleToggleKiroMonitor"
-      >
-        {{ store.kiroStatus?.enabled ? t('session_monitor.disable_monitor') : t('session_monitor.enable_monitor') }}
       </button>
     </div>
 
@@ -206,10 +193,6 @@ onUnmounted(() => store.dispose())
         {{ agentLabel(tag.agent) }}
       </button>
     </div>
-
-    <p v-if="outdatedHookAgents.length" class="monitor-notice monitor-notice--warning">
-      {{ t('session_monitor.hook_upgrade_hint', { agents: outdatedHookAgentNames }) }}
-    </p>
 
     <section v-if="supportsHooks" class="hook-card ah-card">
       <div class="hook-card__status">
@@ -232,41 +215,15 @@ onUnmounted(() => store.dispose())
       </div>
     </section>
 
-    <section v-else-if="isKiro" class="hook-card ah-card">
-      <div class="hook-card__status">
-        <Radar v-if="store.kiroStatus?.enabled && store.kiroStatus?.available" :size="18" class="hook-card__ok" />
-        <CircleStop v-else :size="18" class="hook-card__missing" />
-        <div class="min-w-0">
-          <div class="hook-card__title">
-            {{ store.kiroStatus?.enabled
-              ? (store.kiroStatus?.available ? t('session_monitor.kiro_watch_active') : t('session_monitor.kiro_watch_unavailable'))
-              : t('session_monitor.kiro_watch_off') }}
-          </div>
-          <div class="hook-card__path">
-            {{ store.kiroStatus?.sessionsDir || '~/.kiro/sessions/cli' }}
-          </div>
-        </div>
-      </div>
-      <div class="hook-card__meta">
-        <span>{{ t('session_monitor.running_summary', { count: runningCount }) }}</span>
-        <span>{{ t('session_monitor.total_summary', { count: store.snapshot.sessions.length }) }}</span>
-      </div>
-    </section>
-
-    <p v-if="isKiro" class="monitor-notice">
-      {{ t('session_monitor.kiro_thread_note') }}
-    </p>
-    <p v-if="store.activeAgent === 'codex' && store.hookStatus?.installed" class="monitor-notice monitor-notice--warning">
-      {{ t('session_monitor.trust_hint') }}
-    </p>
-    <p v-if="(store.activeAgent === 'grok' || store.activeAgent === 'kimi') && store.hookStatus?.installed" class="monitor-notice">
-      {{ t('session_monitor.hook_reload_hint') }}
-    </p>
-    <p v-if="store.hookStatus?.issue" class="monitor-notice monitor-notice--warning">
-      {{ store.hookStatus.issue }}
-    </p>
-    <p v-if="store.error" class="monitor-notice monitor-notice--error">
-      {{ store.error }}
+    <p
+      v-if="primaryNotice"
+      class="ah-notice"
+      :class="{
+        'ah-notice--warning': primaryNotice.kind === 'warning',
+        'ah-notice--error': primaryNotice.kind === 'error',
+      }"
+    >
+      {{ primaryNotice.text }}
     </p>
 
     <div class="session-list-header">
@@ -339,7 +296,7 @@ onUnmounted(() => store.dispose())
       <div v-if="store.previewLoading" class="preview-loading">
         {{ t('session_monitor.preview_loading') }}
       </div>
-      <div v-else-if="store.previewError" class="monitor-notice monitor-notice--error">
+      <div v-else-if="store.previewError" class="ah-notice ah-notice--error">
         {{ store.previewError }}
       </div>
       <template v-else-if="store.preview">
@@ -358,7 +315,7 @@ onUnmounted(() => store.dispose())
           </div>
         </dl>
 
-        <p v-if="store.preview.action === 'install' && store.previewAgent === 'codex'" class="monitor-notice monitor-notice--warning">
+        <p v-if="store.preview.action === 'install' && store.previewAgent === 'codex'" class="ah-notice ah-notice--warning">
           {{ t('session_monitor.trust_hint') }}
         </p>
 
@@ -401,9 +358,6 @@ onUnmounted(() => store.dispose())
 .hook-card__title { color: var(--ink); font-size: 14px; font-weight: 600; }
 .hook-card__path { margin-top: 2px; color: var(--ink-4); font: 11px/1.4 var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hook-card__meta { display: flex; gap: 14px; flex: none; color: var(--ink-3); font-size: 12px; }
-.monitor-notice { margin: 10px 0 14px; padding: 9px 11px; border-radius: var(--radius-sm); font-size: 12px; line-height: 1.5; color: var(--ink-3); background: var(--sunken); }
-.monitor-notice--warning { color: var(--warning); background: color-mix(in srgb, var(--warning) 10%, transparent); }
-.monitor-notice--error { color: var(--danger); background: var(--danger-soft); }
 
 /* Enablement tags under the merged view header: one quiet line showing which
    agents are live (green dot) and which still need a hook install (gray). */

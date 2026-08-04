@@ -45,6 +45,8 @@ export const useSwitchStore = defineStore('switch', () => {
   const claudeUsageLoading = ref(false)
   const claudeUsageError = ref<string | null>(null)
   const claudeUsageLastQuery = ref<number>(0)
+  /** Local OAuth credential presence; null until the first check runs. */
+  const claudeUsageAvailable = ref<boolean | null>(null)
 
   // Edit modal state
   const editModalOpen = ref(false)
@@ -133,6 +135,16 @@ export const useSwitchStore = defineStore('switch', () => {
     claudeUsageLoading.value = true
     claudeUsageError.value = null
     try {
+      // Local credential check first (no network): without OAuth credentials
+      // the query would only fail, so skip it and let the panel show a quiet
+      // sign-in hint instead of an error banner.
+      const availability = await api.getUsageProviderAvailability()
+      claudeUsageAvailable.value = availability.claude_code
+      if (!availability.claude_code) {
+        claudeUsage.value = null
+        claudeUsageLastQuery.value = 0
+        return
+      }
       claudeUsage.value = await api.getClaudeUsage(force)
       claudeUsageLastQuery.value = (claudeUsage.value.fetched_at || Math.floor(Date.now() / 1000)) * 1000
     } catch (reason: any) {
@@ -274,7 +286,7 @@ export const useSwitchStore = defineStore('switch', () => {
     codexUsage, codexUsageLoading, codexUsageError, codexUsageLastQuery, codexResetCredits,
     grokUsage, grokUsageLoading, grokUsageError, grokUsageLastQuery,
     kimiUsage, kimiUsageLoading, kimiUsageError, kimiUsageLastQuery,
-    claudeUsage, claudeUsageLoading, claudeUsageError, claudeUsageLastQuery,
+    claudeUsage, claudeUsageLoading, claudeUsageError, claudeUsageLastQuery, claudeUsageAvailable,
     selectAgent, loadProfiles, loadSelectedAgent, openEditModal, closeEditModal, resetState,
     refreshCodexUsage, refreshGrokUsage, refreshKimiUsage, refreshClaudeUsage,
     openClearActiveModal, closeClearActiveModal, deleteActiveAuth,

@@ -38,6 +38,14 @@ pub fn builtin_mcp_platforms() -> Vec<McpPlatformDef> {
             mcp_key: "mcpServers".into(),
         },
         McpPlatformDef {
+            id: "cursor".into(),
+            display_name: "Cursor".into(),
+            presence_path: home.join(".cursor"),
+            config_path: join_relative(home.clone(), ".cursor/mcp.json"),
+            format: McpFormat::Json,
+            mcp_key: "mcpServers".into(),
+        },
+        McpPlatformDef {
             id: "antigravity".into(),
             display_name: "Antigravity".into(),
             presence_path: join_relative(home.clone(), ".gemini/config"),
@@ -62,12 +70,13 @@ pub fn builtin_mcp_platforms() -> Vec<McpPlatformDef> {
             mcp_key: "mcpServers".into(),
         },
         McpPlatformDef {
-            id: "cursor".into(),
-            display_name: "Cursor".into(),
-            presence_path: home.join(".cursor"),
-            config_path: join_relative(home.clone(), ".cursor/mcp.json"),
+            id: "zcode".into(),
+            display_name: "Zcode".into(),
+            presence_path: home.join(".zcode"),
+            config_path: join_relative(home.clone(), ".zcode/cli/config.json"),
             format: McpFormat::Json,
-            mcp_key: "mcpServers".into(),
+            // Zcode nests its name→server map one level down: mcp.servers.
+            mcp_key: "mcp.servers".into(),
         },
         McpPlatformDef {
             id: "kiro".into(),
@@ -150,5 +159,24 @@ mod tests {
         let codex = find_mcp_platform("codex").expect("codex MCP platform");
         assert_eq!(grok.format, McpFormat::Toml);
         assert_eq!(grok.mcp_key, codex.mcp_key);
+    }
+
+    #[test]
+    fn zcode_uses_nested_mcp_servers_key() {
+        let zcode = find_mcp_platform("zcode").expect("zcode MCP platform");
+        assert_eq!(zcode.format, McpFormat::Json);
+        assert_eq!(zcode.mcp_key, "mcp.servers");
+        assert!(zcode
+            .config_path
+            .ends_with(".zcode/cli/config.json".replace('/', std::path::MAIN_SEPARATOR_STR)));
+    }
+
+    #[test]
+    fn builtin_order_puts_cursor_after_claude_code() {
+        let ids = builtin_mcp_platforms()
+            .into_iter()
+            .map(|platform| platform.id)
+            .collect::<Vec<_>>();
+        assert_eq!(&ids[..3], ["codex", "claude-code", "cursor"]);
     }
 }

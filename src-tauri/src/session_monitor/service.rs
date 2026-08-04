@@ -1,11 +1,9 @@
-use super::kiro::KiroWatcher;
-use super::types::{AgentKind, HookEvent, KiroMonitorStatus, MonitorSnapshot, RuntimeStatus, SessionState};
+use super::types::{AgentKind, HookEvent, MonitorSnapshot, RuntimeStatus, SessionState};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Runtime};
 use uuid::Uuid;
@@ -13,9 +11,6 @@ use uuid::Uuid;
 const MAX_SESSIONS: usize = 100;
 /// Sessions older than this are pruned on every snapshot query.
 const SESSION_TTL_MILLIS: i64 = 24 * 60 * 60 * 1000;
-/// Kiro running/ended status comes from lock-file pid liveness, which
-/// produces no file events — re-check it on this interval and push changes.
-const KIRO_STATUS_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 
 struct AgentSlot {
     snapshot: Mutex<MonitorSnapshot>,
@@ -26,10 +21,6 @@ type Slots = Arc<HashMap<AgentKind, AgentSlot>>;
 
 pub struct SessionMonitorService<R: Runtime> {
     slots: Slots,
-    kiro_sessions_dir: PathBuf,
-    kiro_toggle_path: PathBuf,
-    kiro_enabled: Arc<AtomicBool>,
-    kiro_watcher: Mutex<Option<KiroWatcher>>,
     _inbox_watcher: Option<RecommendedWatcher>,
     _app: AppHandle<R>,
 }
@@ -60,46 +51,8 @@ impl<R: Runtime> SessionMonitorService<R> {
         let inbox_watcher = init_watcher(&inbox, slots.clone(), app.clone());
         process_pending_events(&inbox, &slots, &app);
 
-        // Kiro: stable kiro-cli 2.x does not load hook configs, so
-        // ~/.kiro/sessions/cli is watched directly (read-only). The watcher
-        // and the status thread can be toggled by the user; the choice
-        // persists in kiro-monitor.json.
-        let kiro_sessions_dir = dirs::home_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join(".kiro")
-            .join("sessions")
-            .join("cli");
-        let kiro_toggle_path = root.join("kiro-monitor.json");
-        let kiro_enabled = Arc::new(AtomicBool::new(load_kiro_enabled(&kiro_toggle_path)));
-        let kiro_watcher = Mutex::new(if kiro_enabled.load(Ordering::Acquire) {
-            create_kiro_watcher(&kiro_sessions_dir, &slots, &app)
-        } else {
-            None
-        });
-        // Kiro sessions going idle produce no file event (the CLI just exits
-        // and its lock pid dies), so poll pid liveness on a slow interval and
-        // emit only when a status actually flips. Without this the UI would
-        // show "running" until a manual refresh. While monitoring is off the
-        // thread just sleeps — a few nanoseconds every interval.
-        {
-            let slots = slots.clone();
-            let dir = kiro_sessions_dir.clone();
-            let app = app.clone();
-            let enabled = kiro_enabled.clone();
-            std::thread::spawn(move || loop {
-                std::thread::sleep(KIRO_STATUS_REFRESH_INTERVAL);
-                if enabled.load(Ordering::Acquire) {
-                    refresh_kiro_statuses(&slots, &dir, &app);
-                }
-            });
-        }
-
         Self {
             slots,
-            kiro_sessions_dir,
-            kiro_toggle_path,
-            kiro_enabled,
-            kiro_watcher,
             _inbox_watcher: inbox_watcher,
             _app: app,
         }
@@ -107,41 +60,10 @@ impl<R: Runtime> SessionMonitorService<R> {
 
     pub fn snapshot(&self, agent: AgentKind) -> MonitorSnapshot {
         self.prune_expired(agent);
-        if agent == AgentKind::Kiro && self.kiro_enabled.load(Ordering::Acquire) {
-            refresh_kiro_statuses(&self.slots, &self.kiro_sessions_dir, &self._app);
-        }
         self.slots
             .get(&agent)
             .and_then(|slot| slot.snapshot.lock().ok().map(|snapshot| snapshot.clone()))
             .unwrap_or_default()
-    }
-
-    pub fn kiro_status(&self) -> KiroMonitorStatus {
-        KiroMonitorStatus {
-            available: self.kiro_sessions_dir.is_dir(),
-            sessions_dir: self.kiro_sessions_dir.display().to_string(),
-            enabled: self.kiro_enabled.load(Ordering::Acquire),
-        }
-    }
-
-    /// Toggle the Kiro file watcher + status thread. Persisted so the choice
-    /// survives restarts.
-    pub fn set_kiro_enabled(&self, enabled: bool) -> Result<KiroMonitorStatus, String> {
-        self.kiro_enabled.store(enabled, Ordering::Release);
-        if let Ok(mut watcher) = self.kiro_watcher.lock() {
-            match (enabled, watcher.is_some()) {
-                (true, false) => {
-                    *watcher = create_kiro_watcher(&self.kiro_sessions_dir, &self.slots, &self._app);
-                }
-                (false, true) => {
-                    // Dropping the watcher unregisters it from the OS.
-                    *watcher = None;
-                }
-                _ => {}
-            }
-        }
-        persist_kiro_enabled(&self.kiro_toggle_path, enabled)?;
-        Ok(self.kiro_status())
     }
 
     /// Manually delete one session row. No-op when the id is unknown.
@@ -185,115 +107,6 @@ impl<R: Runtime> SessionMonitorService<R> {
             let _ = self._app.emit(agent.changed_event(), &next_snapshot);
         }
     }
-}
-
-/// Turn-level status comes from the event stream (Prompt → running,
-/// AssistantMessage → ended), same as Codex/Claude. The lock pid is only a
-/// one-way safety net: a session whose CLI process died mid-turn is flipped
-/// running → ended. A live-but-idle chat process (sitting at the prompt)
-/// must NOT flip a finished turn back to running. Called on snapshot queries
-/// and on a slow background interval; emits only when a status flips.
-fn refresh_kiro_statuses<R: Runtime>(slots: &Slots, sessions_dir: &Path, app: &AppHandle<R>) {
-    let Some(slot) = slots.get(&AgentKind::Kiro) else {
-        return;
-    };
-    let next_snapshot = {
-        let Ok(mut current) = slot.snapshot.lock() else {
-            return;
-        };
-        if current.sessions.is_empty() {
-            return;
-        }
-        let mut changed = false;
-        for session in &mut current.sessions {
-            if session.status != RuntimeStatus::Running {
-                continue;
-            }
-            if kiro_session_status(sessions_dir, &session.session_id) == RuntimeStatus::Ended {
-                session.status = RuntimeStatus::Ended;
-                changed = true;
-            }
-        }
-        if !changed {
-            return;
-        }
-        current.revision = current.revision.saturating_add(1);
-        current.clone()
-    };
-    if persist_snapshot(&slot.state_path, &next_snapshot).is_ok() {
-        let _ = app.emit(AgentKind::Kiro.changed_event(), &next_snapshot);
-    }
-}
-
-fn kiro_session_status(sessions_dir: &Path, session_id: &str) -> RuntimeStatus {
-    let lock_path = sessions_dir.join(format!("{session_id}.lock"));
-    // kiro-cli holds an OS-level exclusive lock on this file for its whole
-    // lifetime (q_cli `PidLock`). On Unix that lock is advisory (flock), so
-    // the read below still succeeds and we can inspect the pid. On Windows
-    // it is a mandatory LockFileEx byte-range lock, so the read FAILS with
-    // a lock/sharing violation while the CLI is alive. An existing-but-
-    // unreadable lock therefore means "CLI still running", not "ended" —
-    // only a missing lock file means the process exited cleanly.
-    let content = match fs::read_to_string(&lock_path) {
-        Ok(content) => content,
-        Err(_) => {
-            return if lock_path.exists() {
-                RuntimeStatus::Running
-            } else {
-                RuntimeStatus::Ended
-            };
-        }
-    };
-    let pid = serde_json::from_str::<serde_json::Value>(&content)
-        .ok()
-        .and_then(|value| value.get("pid").and_then(serde_json::Value::as_u64))
-        .map(|pid| pid as u32);
-    match pid {
-        Some(pid) if pid_alive(pid) => RuntimeStatus::Running,
-        _ => RuntimeStatus::Ended,
-    }
-}
-
-fn pid_alive(pid: u32) -> bool {
-    let mut system = sysinfo::System::new();
-    system.refresh_processes(
-        sysinfo::ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(pid)]),
-        true,
-    ) > 0
-}
-
-fn create_kiro_watcher<R: Runtime>(
-    sessions_dir: &Path,
-    slots: &Slots,
-    app: &AppHandle<R>,
-) -> Option<KiroWatcher> {
-    let slots = slots.clone();
-    let app = app.clone();
-    KiroWatcher::new(sessions_dir.to_path_buf(), move |event| {
-        apply_and_emit(&slots, &app, event);
-    })
-}
-
-fn load_kiro_enabled(path: &Path) -> bool {
-    fs::read(path)
-        .ok()
-        .and_then(|content| serde_json::from_slice::<serde_json::Value>(&content).ok())
-        .and_then(|value| value.get("enabled").and_then(serde_json::Value::as_bool))
-        .unwrap_or(true)
-}
-
-fn persist_kiro_enabled(path: &Path, enabled: bool) -> Result<(), String> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| "kiro monitor toggle has no parent directory".to_string())?;
-    fs::create_dir_all(parent)
-        .map_err(|error| format!("unable to create toggle directory: {error}"))?;
-    let temp_path = parent.join(format!(".kiro-monitor-{}.tmp", Uuid::new_v4()));
-    let payload = serde_json::json!({ "enabled": enabled }).to_string();
-    fs::write(&temp_path, payload)
-        .map_err(|error| format!("unable to persist monitor toggle: {error}"))?;
-    crate::paths::replace_file(&temp_path, path)
-        .map_err(|error| format!("unable to persist monitor toggle: {error}"))
 }
 
 fn init_watcher<R: Runtime>(
@@ -566,6 +379,44 @@ mod tests {
     }
 
     #[test]
+    fn cursor_three_event_lifecycle_forms_one_session_row() {
+        let mut snapshot = MonitorSnapshot::default();
+        let mut prompt = event("UserPromptSubmit", Some("Cursor question"), None);
+        prompt.agent = AgentKind::Cursor;
+        prompt.session_id = "cursor-conversation-1".to_string();
+        prompt.turn_id = "cursor-generation-1".to_string();
+        prompt.source = SessionSource::Cursor;
+        apply_event(&mut snapshot, prompt);
+        assert_eq!(snapshot.sessions[0].status, RuntimeStatus::Running);
+
+        let mut response = event("AssistantResponse", None, Some("Cursor answer"));
+        response.agent = AgentKind::Cursor;
+        response.session_id = "cursor-conversation-1".to_string();
+        response.turn_id = "cursor-generation-1".to_string();
+        response.source = SessionSource::Cursor;
+        apply_event(&mut snapshot, response);
+        assert_eq!(snapshot.sessions.len(), 1);
+        assert_eq!(snapshot.sessions[0].status, RuntimeStatus::Ended);
+        assert_eq!(
+            snapshot.sessions[0].assistant_reply.as_deref(),
+            Some("Cursor answer")
+        );
+
+        let mut stop = event("Stop", None, None);
+        stop.agent = AgentKind::Cursor;
+        stop.session_id = "cursor-conversation-1".to_string();
+        stop.turn_id = "cursor-generation-1".to_string();
+        stop.source = SessionSource::Cursor;
+        apply_event(&mut snapshot, stop);
+        assert_eq!(snapshot.sessions.len(), 1);
+        assert_eq!(snapshot.sessions[0].status, RuntimeStatus::Ended);
+        assert_eq!(
+            snapshot.sessions[0].user_prompt.as_deref(),
+            Some("Cursor question")
+        );
+    }
+
+    #[test]
     fn internal_system_prompt_creates_no_session_row() {
         let mut snapshot = MonitorSnapshot::default();
         apply_event(
@@ -624,62 +475,5 @@ mod tests {
         assert!(snapshot.sessions.is_empty());
         // Unknown id is a no-op and reports no change.
         assert!(!remove_session_from(&mut snapshot, "session-1"));
-    }
-
-    #[test]
-    fn kiro_session_status_missing_lock_is_ended() {
-        let directory = tempfile::tempdir().expect("temp dir should create");
-        assert_eq!(
-            kiro_session_status(directory.path(), "no-such-session"),
-            RuntimeStatus::Ended
-        );
-    }
-
-    #[test]
-    fn kiro_session_status_dead_pid_is_ended() {
-        let directory = tempfile::tempdir().expect("temp dir should create");
-        // pid 2^22 + 12345 is practically never live on the test machine.
-        fs::write(
-            directory.path().join("s1.lock"),
-            r#"{"pid":4206649,"started_at":"2026-01-01T00:00:00Z"}"#,
-        )
-        .expect("lock file should write");
-        assert_eq!(
-            kiro_session_status(directory.path(), "s1"),
-            RuntimeStatus::Ended
-        );
-    }
-
-    #[test]
-    fn kiro_session_status_live_pid_is_running() {
-        let directory = tempfile::tempdir().expect("temp dir should create");
-        let pid = std::process::id();
-        fs::write(
-            directory.path().join("s2.lock"),
-            format!(r#"{{"pid":{pid},"started_at":"2026-01-01T00:00:00Z"}}"#),
-        )
-        .expect("lock file should write");
-        assert_eq!(
-            kiro_session_status(directory.path(), "s2"),
-            RuntimeStatus::Running
-        );
-    }
-
-    /// Windows keeps the CLI's LockFileEx byte-range lock mandatory, so the
-    /// lock file of a LIVE session is unreadable there. An existing lock we
-    /// cannot read must stay Running. Simulated on Unix via permissions.
-    #[cfg(unix)]
-    #[test]
-    fn kiro_session_status_unreadable_lock_is_running() {
-        use std::os::unix::fs::PermissionsExt;
-        let directory = tempfile::tempdir().expect("temp dir should create");
-        let lock = directory.path().join("s3.lock");
-        fs::write(&lock, r#"{"pid":1}"#).expect("lock file should write");
-        fs::set_permissions(&lock, fs::Permissions::from_mode(0o000))
-            .expect("permissions should change");
-        assert_eq!(
-            kiro_session_status(directory.path(), "s3"),
-            RuntimeStatus::Running
-        );
     }
 }

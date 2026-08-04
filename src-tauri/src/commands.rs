@@ -1645,27 +1645,46 @@ pub fn apply_claude_hook_change(
 }
 
 #[tauri::command]
-pub fn get_kiro_session_monitor_snapshot(
+pub fn get_cursor_session_monitor_snapshot(
     monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
 ) -> MonitorSnapshot {
-    monitor.snapshot(AgentKind::Kiro)
+    monitor.snapshot(AgentKind::Cursor)
 }
 
 #[tauri::command]
-pub fn delete_kiro_session_monitor_session(
+pub fn delete_cursor_session_monitor_session(
     monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
     session_id: String,
 ) -> Result<(), CommandError> {
     monitor
-        .remove_session(AgentKind::Kiro, &session_id)
+        .remove_session(AgentKind::Cursor, &session_id)
         .map_err(CommandError::General)
 }
 
 #[tauri::command]
-pub fn get_kiro_monitor_status(
-    monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
-) -> crate::session_monitor::KiroMonitorStatus {
-    monitor.kiro_status()
+pub fn get_cursor_hook_status() -> Result<crate::session_monitor::HookStatus, CommandError> {
+    crate::session_monitor::get_hook_status(AgentKind::Cursor).map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn preview_cursor_hook_change(
+    action: String,
+) -> Result<crate::session_monitor::HookChangePreview, CommandError> {
+    crate::session_monitor::preview_hook_change(AgentKind::Cursor, parse_hook_action(&action)?)
+        .map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn apply_cursor_hook_change(
+    action: String,
+    expected_before_hash: String,
+) -> Result<crate::session_monitor::HookStatus, CommandError> {
+    crate::session_monitor::apply_hook_change(
+        AgentKind::Cursor,
+        parse_hook_action(&action)?,
+        &expected_before_hash,
+    )
+    .map_err(CommandError::General)
 }
 
 #[tauri::command]
@@ -1755,11 +1774,50 @@ pub fn apply_kimi_hook_change(
 }
 
 #[tauri::command]
-pub fn set_kiro_monitor_enabled(
+pub fn get_zcode_session_monitor_snapshot(
     monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
-    enabled: bool,
-) -> Result<crate::session_monitor::KiroMonitorStatus, CommandError> {
+) -> MonitorSnapshot {
+    monitor.snapshot(AgentKind::Zcode)
+}
+
+#[tauri::command]
+pub fn delete_zcode_session_monitor_session(
+    monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
+    session_id: String,
+) -> Result<(), CommandError> {
     monitor
-        .set_kiro_enabled(enabled)
+        .remove_session(AgentKind::Zcode, &session_id)
         .map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn get_zcode_hook_status() -> Result<crate::session_monitor::HookStatus, CommandError> {
+    crate::session_monitor::get_hook_status(AgentKind::Zcode).map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn preview_zcode_hook_change(
+    action: String,
+) -> Result<crate::session_monitor::HookChangePreview, CommandError> {
+    crate::session_monitor::preview_hook_change(AgentKind::Zcode, parse_hook_action(&action)?)
+        .map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn apply_zcode_hook_change(
+    action: String,
+    expected_before_hash: String,
+) -> Result<crate::session_monitor::HookStatus, CommandError> {
+    crate::session_monitor::apply_hook_change(
+        AgentKind::Zcode,
+        parse_hook_action(&action)?,
+        &expected_before_hash,
+    )
+    .map_err(CommandError::General)
+}
+
+/// Zcode 插件市场只读列表。目录不存在（未安装 Zcode）时返回空列表，不报错。
+#[tauri::command]
+pub fn get_zcode_plugins() -> Vec<crate::zcode_plugin::ZcodePluginView> {
+    crate::zcode_plugin::list_zcode_plugins()
 }

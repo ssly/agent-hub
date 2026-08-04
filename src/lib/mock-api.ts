@@ -26,6 +26,12 @@ const PLATFORMS = [
     skill_count: 12,
   },
   {
+    id: 'cursor',
+    display_name: 'Cursor',
+    skill_dir: '~/.cursor/skills',
+    skill_count: 3,
+  },
+  {
     id: 'antigravity',
     display_name: 'Antigravity',
     skill_dir: '~/.gemini/config/skills',
@@ -44,10 +50,10 @@ const PLATFORMS = [
     skill_count: 6,
   },
   {
-    id: 'cursor',
-    display_name: 'Cursor',
-    skill_dir: '~/.cursor/skills',
-    skill_count: 3,
+    id: 'zcode',
+    display_name: 'Zcode',
+    skill_dir: '~/.zcode/skills',
+    skill_count: 2,
   },
 ]
 
@@ -82,10 +88,11 @@ function makeSkillDetail(name: string) {
 const MCP_PLATFORMS = [
   { id: 'codex', display_name: 'Codex', server_count: 3, config_path: '~/.codex/config.toml', format: 'toml' },
   { id: 'claude-code', display_name: 'Claude Code', server_count: 4, config_path: '~/.claude.json', format: 'json' },
+  { id: 'cursor', display_name: 'Cursor', server_count: 2, config_path: '~/.cursor/mcp.json', format: 'json' },
   { id: 'antigravity', display_name: 'Antigravity', server_count: 2, config_path: '~/.gemini/config/mcp_config.json', format: 'json' },
   { id: 'grok-build', display_name: 'Grok Build', server_count: 1, config_path: '~/.grok/config.toml', format: 'toml' },
   { id: 'kimi-code', display_name: 'Kimi Code', server_count: 2, config_path: '~/.kimi-code/mcp.json', format: 'json' },
-  { id: 'cursor', display_name: 'Cursor', server_count: 2, config_path: '~/.cursor/mcp.json', format: 'json' },
+  { id: 'zcode', display_name: 'Zcode', server_count: 1, config_path: '~/.zcode/cli/config.json', format: 'json' },
 ]
 
 const CLAUDE_PLUGINS = [
@@ -98,6 +105,11 @@ const CLAUDE_PLUGINS = [
 
 const PROJECT_CLAUDE_PLUGINS = [
   { id: 'review-workflow@team-tools', name: 'review-workflow', marketplace: 'team-tools', version: '1.1.0', scope: 'project', enabled: true, manageable: false, description: 'Project-specific review commands and hooks', install_path: '/Users/demo/.claude/plugins/review-workflow' },
+]
+
+const ZCODE_PLUGINS = [
+  { id: 'superpowers@zcode-plugins-official', name: 'superpowers', marketplace: 'zcode-plugins-official', version: '0.1.0', description: 'A collection of agentic skills and workflows for Zcode.', author: 'z.ai', installed: true, skill_count: 14, command_count: 3, hook_count: 1, install_path: '/Users/demo/.zcode/cli/plugins/cache/zcode-plugins-official/superpowers/0.1.0' },
+  { id: 'frontend-design@zcode-plugins-official', name: 'frontend-design', marketplace: 'zcode-plugins-official', version: '1.2.0', description: 'Frontend design skill for UI/UX implementation.', author: 'z.ai', installed: false, skill_count: 2, command_count: 0, hook_count: 0, install_path: '/Users/demo/.zcode/cli/plugins/cache/zcode-plugins-official/frontend-design/1.2.0' },
 ]
 
 function makeMcpServers(platformId: string) {
@@ -115,7 +127,8 @@ const SESSION_PLATFORMS = [
   { id: 'claude-code', display_name: 'Claude Code', session_count: 28 },
   { id: 'grok', display_name: 'Grok Build', session_count: 2 },
   { id: 'kimi', display_name: 'Kimi Code', session_count: 4 },
-  { id: 'kiro', display_name: 'Kiro CLI', session_count: 3 },
+  { id: 'zcode', display_name: 'Zcode', session_count: 3 },
+  { id: 'kiro', display_name: 'Kiro', session_count: 3 },
 ]
 
 function makeSessions(offset: number, limit: number) {
@@ -238,6 +251,12 @@ export async function setClaudePluginEnabled(pluginId: string, scope: string, en
   const plugin = CLAUDE_PLUGINS.find(item => item.id === pluginId && item.scope === scope)
   if (!plugin || !plugin.manageable) throw new Error('Plugin scope is read-only')
   plugin.enabled = enabled
+}
+
+// Zcode marketplace plugins (read-only)
+export async function getZcodePlugins() {
+  await delay()
+  return ZCODE_PLUGINS.map(plugin => ({ ...plugin }))
 }
 
 // Sessions
@@ -554,8 +573,10 @@ export async function getKimiUsage(force = false) {
 // Session monitor
 let codexHookInstalled = false
 let claudeHookInstalled = false
+let cursorHookInstalled = false
 let grokHookInstalled = false
 let kimiHookInstalled = false
+let zcodeHookInstalled = false
 
 let codexMonitorSessions = [
   {
@@ -593,20 +614,18 @@ let claudeMonitorSessions = [
   },
 ]
 
-let kiroMonitorSessions = [
+let cursorMonitorSessions = [
   {
-    sessionId: 'kiro-7d21',
-    turnId: 'turn-1',
-    source: 'terminal',
+    sessionId: 'cursor-conversation-28c1',
+    turnId: 'cursor-generation-1',
+    source: 'cursor',
     status: 'ended',
-    cwd: '/Users/demo/projects/data-pipeline',
-    userPrompt: '优化定时任务的失败重试逻辑。',
-    assistantReply: '已把固定间隔重试改成指数退避，并加了最大重试次数上限。',
-    updatedAt: Date.now() - 600_000,
+    cwd: '/Users/demo/projects/desktop-app',
+    userPrompt: '检查设置页的键盘导航并修复焦点顺序。',
+    assistantReply: '已调整焦点顺序，并补充了键盘导航回归测试。',
+    updatedAt: Date.now() - 90_000,
   },
 ]
-
-let kiroMonitorEnabled = true
 
 let grokMonitorSessions = [
   {
@@ -634,12 +653,25 @@ let kimiMonitorSessions = [
   },
 ]
 
-function makeHookStatus(installed: boolean, configPath: string, command: string) {
+let zcodeMonitorSessions = [
+  {
+    sessionId: 'sess-7d2e',
+    turnId: 'turn-1',
+    source: 'terminal',
+    status: 'running',
+    cwd: '/Users/demo/projects/zcode-app',
+    userPrompt: '把设置页的主题切换改成跟随系统。',
+    assistantReply: null,
+    updatedAt: Date.now() - 60_000,
+  },
+]
+
+function makeHookStatus(installed: boolean, configPath: string, command: string, count = 2) {
   return {
     installed,
     configPath,
     command,
-    managedHandlerCount: installed ? 2 : 0,
+    managedHandlerCount: installed ? count : 0,
     issue: null,
   }
 }
@@ -666,6 +698,30 @@ function makeHookPreview(action: 'install' | 'uninstall', configPath: string, co
   }
 }
 
+function makeCursorHookPreview(action: 'install' | 'uninstall') {
+  const adding = action === 'install'
+  const tag = adding ? 'added' : 'removed'
+  return {
+    action,
+    configPath: '~/.cursor/hooks.json',
+    command: CURSOR_HOOK_COMMAND,
+    beforeHash: 'mock-before-hash',
+    added: adding ? 8 : 0,
+    removed: adding ? 0 : 8,
+    changed: true,
+    diffLines: [
+      { tag: 'context', content: '{' },
+      { tag: 'context', content: '  "version": 1,' },
+      { tag: 'context', content: '  "hooks": {' },
+      { tag, content: '    "beforeSubmitPrompt": [{ "command": "… --agent-hub-cursor-hook" }],' },
+      { tag, content: '    "afterAgentResponse": [{ "command": "… --agent-hub-cursor-hook" }],' },
+      { tag, content: '    "stop": [{ "command": "… --agent-hub-cursor-hook" }]' },
+      { tag: 'context', content: '  }' },
+      { tag: 'context', content: '}' },
+    ],
+  }
+}
+
 export async function getCodexSessionMonitorSnapshot() {
   await delay()
   return {
@@ -683,6 +739,7 @@ export async function deleteCodexSessionMonitorSession(sessionId: string) {
 
 const CODEX_HOOK_COMMAND = "'/Applications/AGENT HUB.app/Contents/MacOS/agent-hub' --agent-hub-codex-hook"
 const CLAUDE_HOOK_COMMAND = "'/Applications/AGENT HUB.app/Contents/MacOS/agent-hub' --agent-hub-claude-hook"
+const CURSOR_HOOK_COMMAND = "'/Applications/AGENT HUB.app/Contents/MacOS/agent-hub' --agent-hub-cursor-hook"
 
 export async function getCodexHookStatus() {
   await delay()
@@ -731,34 +788,35 @@ export async function applyClaudeHookChange(action: 'install' | 'uninstall', _ex
   return getClaudeHookStatus()
 }
 
-export async function getKiroSessionMonitorSnapshot() {
+export async function getCursorSessionMonitorSnapshot() {
   await delay()
   return {
     revision: 1,
-    sessions: kiroMonitorSessions,
+    sessions: cursorMonitorSessions,
   }
 }
 
-export async function deleteKiroSessionMonitorSession(sessionId: string) {
+export async function deleteCursorSessionMonitorSession(sessionId: string) {
   await delay()
-  kiroMonitorSessions = kiroMonitorSessions.filter(
+  cursorMonitorSessions = cursorMonitorSessions.filter(
     session => session.sessionId !== sessionId,
   )
 }
 
-export async function getKiroMonitorStatus() {
+export async function getCursorHookStatus() {
   await delay()
-  return {
-    available: true,
-    sessionsDir: '~/.kiro/sessions/cli',
-    enabled: kiroMonitorEnabled,
-  }
+  return makeHookStatus(cursorHookInstalled, '~/.cursor/hooks.json', CURSOR_HOOK_COMMAND, 3)
 }
 
-export async function setKiroMonitorEnabled(enabled: boolean) {
-  await delay(200)
-  kiroMonitorEnabled = enabled
-  return getKiroMonitorStatus()
+export async function previewCursorHookChange(action: 'install' | 'uninstall') {
+  await delay()
+  return makeCursorHookPreview(action)
+}
+
+export async function applyCursorHookChange(action: 'install' | 'uninstall', _expectedBeforeHash: string) {
+  await delay(300)
+  cursorHookInstalled = action === 'install'
+  return getCursorHookStatus()
 }
 
 const GROK_HOOK_COMMAND = "'/Applications/AGENT HUB.app/Contents/MacOS/agent-hub' --agent-hub-grok-hook"
@@ -824,6 +882,39 @@ export async function applyKimiHookChange(action: 'install' | 'uninstall', _expe
   await delay(300)
   kimiHookInstalled = action === 'install'
   return getKimiHookStatus()
+}
+
+const ZCODE_HOOK_COMMAND = "'/Applications/AGENT HUB.app/Contents/MacOS/agent-hub' --agent-hub-zcode-hook"
+
+export async function getZcodeSessionMonitorSnapshot() {
+  await delay()
+  return {
+    revision: 1,
+    sessions: zcodeMonitorSessions,
+  }
+}
+
+export async function deleteZcodeSessionMonitorSession(sessionId: string) {
+  await delay()
+  zcodeMonitorSessions = zcodeMonitorSessions.filter(
+    session => session.sessionId !== sessionId,
+  )
+}
+
+export async function getZcodeHookStatus() {
+  await delay()
+  return makeHookStatus(zcodeHookInstalled, '~/.zcode/cli/config.json', ZCODE_HOOK_COMMAND)
+}
+
+export async function previewZcodeHookChange(action: 'install' | 'uninstall') {
+  await delay()
+  return makeHookPreview(action, '~/.zcode/cli/config.json', ZCODE_HOOK_COMMAND)
+}
+
+export async function applyZcodeHookChange(action: 'install' | 'uninstall', _expectedBeforeHash: string) {
+  await delay(300)
+  zcodeHookInstalled = action === 'install'
+  return getZcodeHookStatus()
 }
 
 // App

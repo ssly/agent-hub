@@ -2,12 +2,12 @@
 import { computed, type Component } from 'vue'
 import {
   Bot,
-  MousePointer2,
   Network,
   PanelsTopLeft,
   Route,
   Send,
   Triangle,
+  Zap,
 } from 'lucide-vue-next'
 import kimiCodeMask from '@/assets/agent-icons/kimi-code.png'
 import kiroMask from '@/assets/agent-icons/kiro.png'
@@ -15,6 +15,7 @@ import kiroDetailMask from '@/assets/agent-icons/kiro-detail.png'
 import antigravityMask from '@/assets/agent-icons/antigravity.png'
 import claudeCodeMask from '@/assets/agent-icons/claude-code.png'
 import codexMask from '@/assets/agent-icons/codex.png'
+import cursorMask from '@/assets/agent-icons/cursor.png'
 import grokBuildMask from '@/assets/agent-icons/grok-build.png'
 
 const props = withDefaults(defineProps<{
@@ -41,6 +42,7 @@ const brandMasks: Record<string, string> = {
   antigravity: antigravityMask,
   claude: claudeCodeMask,
   codex: codexMask,
+  cursor: cursorMask,
   grok: grokBuildMask,
 }
 
@@ -52,10 +54,10 @@ const icons: Record<string, Component> = {
   // Shared Pool is a shared capability directory, not a branded Agent.
   'shared-pool': Network,
   all: PanelsTopLeft,
-  cursor: MousePointer2,
   hermes: Send,
   trae: Route,
   opencode: Triangle,
+  zcode: Zap,
 }
 
 const agentKey = computed(() => aliases[props.agentId] ?? props.agentId)

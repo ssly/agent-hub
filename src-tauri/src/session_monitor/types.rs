@@ -5,27 +5,30 @@ use serde::{Deserialize, Serialize};
 pub enum AgentKind {
     Codex,
     Claude,
-    Kiro,
+    Cursor,
     Grok,
     Kimi,
+    Zcode,
 }
 
 impl AgentKind {
-    pub const ALL: [AgentKind; 5] = [
+    pub const ALL: [AgentKind; 6] = [
         Self::Codex,
         Self::Claude,
-        Self::Kiro,
+        Self::Cursor,
         Self::Grok,
         Self::Kimi,
+        Self::Zcode,
     ];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Codex => "codex",
             Self::Claude => "claude",
-            Self::Kiro => "kiro",
+            Self::Cursor => "cursor",
             Self::Grok => "grok",
             Self::Kimi => "kimi",
+            Self::Zcode => "zcode",
         }
     }
 
@@ -33,9 +36,10 @@ impl AgentKind {
         match self {
             Self::Codex => "codex-state.json",
             Self::Claude => "claude-state.json",
-            Self::Kiro => "kiro-state.json",
+            Self::Cursor => "cursor-state.json",
             Self::Grok => "grok-state.json",
             Self::Kimi => "kimi-state.json",
+            Self::Zcode => "zcode-state.json",
         }
     }
 
@@ -43,9 +47,10 @@ impl AgentKind {
         match self {
             Self::Codex => "session-monitor:codex-changed",
             Self::Claude => "session-monitor:claude-changed",
-            Self::Kiro => "session-monitor:kiro-changed",
+            Self::Cursor => "session-monitor:cursor-changed",
             Self::Grok => "session-monitor:grok-changed",
             Self::Kimi => "session-monitor:kimi-changed",
+            Self::Zcode => "session-monitor:zcode-changed",
         }
     }
 }
@@ -55,6 +60,7 @@ impl AgentKind {
 pub enum SessionSource {
     Terminal,
     Chatgpt,
+    Cursor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -115,14 +121,6 @@ pub struct HookStatus {
     pub command: String,
     pub managed_handler_count: usize,
     pub issue: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct KiroMonitorStatus {
-    pub available: bool,
-    pub sessions_dir: String,
-    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

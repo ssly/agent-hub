@@ -94,6 +94,9 @@ export const listClaudePlugins = (workspaceDir = '') =>
 export const setClaudePluginEnabled = (pluginId: string, scope: string, enabled: boolean) =>
   invoke<void>('set_claude_plugin_enabled', { pluginId, scope, enabled })
 
+// Zcode marketplace plugins (read-only)
+export const getZcodePlugins = () => invoke<any[]>('get_zcode_plugins')
+
 export async function pickPluginDirectory(): Promise<string | null> {
   if (!isTauri) return '/Users/demo/projects/agent-hub'
   const { open } = await import('@tauri-apps/plugin-dialog')
@@ -194,13 +197,15 @@ export const previewClaudeHookChange = (action: 'install' | 'uninstall') =>
 export const applyClaudeHookChange = (action: 'install' | 'uninstall', expectedBeforeHash: string) =>
   invoke<any>('apply_claude_hook_change', { action, expectedBeforeHash })
 
-export const getKiroSessionMonitorSnapshot = () =>
-  invoke<any>('get_kiro_session_monitor_snapshot')
-export const deleteKiroSessionMonitorSession = (sessionId: string) =>
-  invoke<void>('delete_kiro_session_monitor_session', { sessionId })
-export const getKiroMonitorStatus = () => invoke<any>('get_kiro_monitor_status')
-export const setKiroMonitorEnabled = (enabled: boolean) =>
-  invoke<any>('set_kiro_monitor_enabled', { enabled })
+export const getCursorSessionMonitorSnapshot = () =>
+  invoke<any>('get_cursor_session_monitor_snapshot')
+export const deleteCursorSessionMonitorSession = (sessionId: string) =>
+  invoke<void>('delete_cursor_session_monitor_session', { sessionId })
+export const getCursorHookStatus = () => invoke<any>('get_cursor_hook_status')
+export const previewCursorHookChange = (action: 'install' | 'uninstall') =>
+  invoke<any>('preview_cursor_hook_change', { action })
+export const applyCursorHookChange = (action: 'install' | 'uninstall', expectedBeforeHash: string) =>
+  invoke<any>('apply_cursor_hook_change', { action, expectedBeforeHash })
 
 export const getGrokSessionMonitorSnapshot = () =>
   invoke<any>('get_grok_session_monitor_snapshot')
@@ -221,6 +226,16 @@ export const previewKimiHookChange = (action: 'install' | 'uninstall') =>
   invoke<any>('preview_kimi_hook_change', { action })
 export const applyKimiHookChange = (action: 'install' | 'uninstall', expectedBeforeHash: string) =>
   invoke<any>('apply_kimi_hook_change', { action, expectedBeforeHash })
+
+export const getZcodeSessionMonitorSnapshot = () =>
+  invoke<any>('get_zcode_session_monitor_snapshot')
+export const deleteZcodeSessionMonitorSession = (sessionId: string) =>
+  invoke<void>('delete_zcode_session_monitor_session', { sessionId })
+export const getZcodeHookStatus = () => invoke<any>('get_zcode_hook_status')
+export const previewZcodeHookChange = (action: 'install' | 'uninstall') =>
+  invoke<any>('preview_zcode_hook_change', { action })
+export const applyZcodeHookChange = (action: 'install' | 'uninstall', expectedBeforeHash: string) =>
+  invoke<any>('apply_zcode_hook_change', { action, expectedBeforeHash })
 
 // Switch
 export const listSwitchProfiles = (agentType: string) => invoke<any>('list_switch_profiles', { agentType })

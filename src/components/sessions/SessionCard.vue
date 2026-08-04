@@ -15,7 +15,7 @@ import { formatInt } from '@/lib/utils'
 // mode emits `toggleSelect` instead.
 const props = withDefaults(defineProps<{
   badge?: string
-  source?: 'terminal' | 'chatgpt' | null
+  source?: 'terminal' | 'chatgpt' | 'cursor' | null
   sourceLabel?: string
   status?: 'running' | 'ended' | null
   time?: string

@@ -7,8 +7,10 @@ use uuid::Uuid;
 
 pub const CODEX_HOOK_ARG: &str = "--agent-hub-codex-hook";
 pub const CLAUDE_HOOK_ARG: &str = "--agent-hub-claude-hook";
+pub const CURSOR_HOOK_ARG: &str = "--agent-hub-cursor-hook";
 pub const GROK_HOOK_ARG: &str = "--agent-hub-grok-hook";
 pub const KIMI_HOOK_ARG: &str = "--agent-hub-kimi-hook";
+pub const ZCODE_HOOK_ARG: &str = "--agent-hub-zcode-hook";
 const MAX_HOOK_INPUT_BYTES: u64 = 256 * 1024;
 const MAX_IGNORED_SESSIONS: usize = 200;
 
@@ -41,10 +43,14 @@ pub fn try_capture_hook_event() -> bool {
         AgentKind::Codex
     } else if std::env::args().any(|arg| arg == CLAUDE_HOOK_ARG) {
         AgentKind::Claude
+    } else if std::env::args().any(|arg| arg == CURSOR_HOOK_ARG) {
+        AgentKind::Cursor
     } else if std::env::args().any(|arg| arg == GROK_HOOK_ARG) {
         AgentKind::Grok
     } else if std::env::args().any(|arg| arg == KIMI_HOOK_ARG) {
         AgentKind::Kimi
+    } else if std::env::args().any(|arg| arg == ZCODE_HOOK_ARG) {
+        AgentKind::Zcode
     } else {
         return false;
     };
@@ -70,7 +76,7 @@ fn capture_stdin_event(agent: AgentKind) -> Result<(), String> {
 
     let input: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|error| format!("invalid hook JSON: {error}"))?;
-    // Codex/Claude/Kimi wrap events in snake_case, Grok in camelCase.
+    // Codex/Claude/Kimi/Zcode wrap events in snake_case, Grok in camelCase.
     let event_name = string_field_any(&input, &["hook_event_name", "hookEventName"])
         .ok_or_else(|| "hook_event_name is missing".to_string())?;
     let Some(event_name) = canonical_event_name(&event_name) else {
@@ -78,7 +84,7 @@ fn capture_stdin_event(agent: AgentKind) -> Result<(), String> {
     };
 
     let event_id = Uuid::new_v4().to_string();
-    let session_id = string_field_any(&input, &["session_id", "sessionId"])
+    let session_id = string_field_any(&input, &["session_id", "sessionId", "conversation_id"])
         .or_else(|| std::env::var("CODEX_THREAD_ID").ok())
         .unwrap_or_else(|| format!("unknown-{event_id}"));
     let user_prompt = prompt_field(&input);
@@ -101,14 +107,16 @@ fn capture_stdin_event(agent: AgentKind) -> Result<(), String> {
         }
     }
 
-    // Codex provides `turn_id`, Claude Code provides `prompt_id` (v2.1.196+);
-    // Grok and Kimi carry no turn id and fall back to the event id.
+    // Codex provides `turn_id`, Claude Code provides `prompt_id` (v2.1.196+),
+    // and Cursor provides `generation_id` for one user-message lifecycle.
     let turn_id = resolve_turn_id(&input, &event_id);
     let source = match agent {
         AgentKind::Codex => detect_source(),
+        AgentKind::Cursor => SessionSource::Cursor,
         // Claude Desktop is intentionally out of scope; the Claude Code hook
-        // only fires for terminal sessions. Kiro events come from the file
-        // watcher, not from hooks. Grok Build and Kimi Code are terminal CLIs.
+        // only fires for terminal sessions. Grok Build and Kimi Code are
+        // terminal CLIs, and the Zcode hook payload carries no client
+        // discriminator.
         _ => SessionSource::Terminal,
     };
     let event = HookEvent {
@@ -118,9 +126,9 @@ fn capture_stdin_event(agent: AgentKind) -> Result<(), String> {
         session_id,
         turn_id,
         source,
-        cwd: string_field(&input, "cwd"),
+        cwd: cwd_field(&input),
         user_prompt,
-        assistant_reply: string_field_any(&input, &["last_assistant_message", "lastAssistantMessage"]),
+        assistant_reply: assistant_reply_field(agent, &input),
         occurred_at: now_millis(),
     };
 
@@ -145,14 +153,19 @@ fn capture_stdin_event(agent: AgentKind) -> Result<(), String> {
 }
 
 /// Normalize the hook event value across agents: Codex/Claude/Kimi use
-/// PascalCase, Grok uses snake_case. Returns None for events we ignore.
+/// PascalCase, Grok uses snake_case, and Cursor uses camelCase lifecycle
+/// names. Returns None for events we ignore.
 /// Kimi Code fires Interrupt (never Stop) when the user aborts a turn, and
 /// Claude/Grok/Kimi fire StopFailure when a turn dies on an API error — both
 /// are normalized to Stop because the turn is over either way.
 fn canonical_event_name(name: &str) -> Option<&'static str> {
     match name {
         "UserPromptSubmit" | "user_prompt_submit" => Some("UserPromptSubmit"),
-        "Stop" | "stop" | "Interrupt" | "interrupt" | "StopFailure" | "stop_failure" => Some("Stop"),
+        "beforeSubmitPrompt" => Some("UserPromptSubmit"),
+        "afterAgentResponse" => Some("AssistantResponse"),
+        "Stop" | "stop" | "Interrupt" | "interrupt" | "StopFailure" | "stop_failure" => {
+            Some("Stop")
+        }
         _ => None,
     }
 }
@@ -192,10 +205,34 @@ fn prompt_field(input: &serde_json::Value) -> Option<String> {
 fn resolve_turn_id(input: &serde_json::Value, fallback: &str) -> String {
     string_field(input, "turn_id")
         .or_else(|| string_field(input, "prompt_id"))
+        .or_else(|| string_field(input, "generation_id"))
         .unwrap_or_else(|| fallback.to_string())
 }
 
-fn string_field(input: &serde_json::Value, key: &str) -> Option<String> {    input
+fn cwd_field(input: &serde_json::Value) -> Option<String> {
+    string_field(input, "cwd").or_else(|| {
+        input
+            .get("workspace_roots")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|roots| roots.first())
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+fn assistant_reply_field(agent: AgentKind, input: &serde_json::Value) -> Option<String> {
+    let reply = string_field_any(input, &["last_assistant_message", "lastAssistantMessage"]);
+    if agent == AgentKind::Cursor {
+        reply.or_else(|| string_field(input, "text"))
+    } else {
+        reply
+    }
+}
+
+fn string_field(input: &serde_json::Value, key: &str) -> Option<String> {
+    input
         .get(key)
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
@@ -329,8 +366,22 @@ mod tests {
 
     #[test]
     fn event_names_are_normalized_across_agents() {
-        assert_eq!(canonical_event_name("UserPromptSubmit"), Some("UserPromptSubmit"));
-        assert_eq!(canonical_event_name("user_prompt_submit"), Some("UserPromptSubmit"));
+        assert_eq!(
+            canonical_event_name("UserPromptSubmit"),
+            Some("UserPromptSubmit")
+        );
+        assert_eq!(
+            canonical_event_name("user_prompt_submit"),
+            Some("UserPromptSubmit")
+        );
+        assert_eq!(
+            canonical_event_name("beforeSubmitPrompt"),
+            Some("UserPromptSubmit")
+        );
+        assert_eq!(
+            canonical_event_name("afterAgentResponse"),
+            Some("AssistantResponse")
+        );
         assert_eq!(canonical_event_name("Stop"), Some("Stop"));
         assert_eq!(canonical_event_name("stop"), Some("Stop"));
         // Kimi Code fires Interrupt instead of Stop on user abort (Esc/Ctrl+C);
@@ -351,8 +402,78 @@ mod tests {
         assert_eq!(resolve_turn_id(&with_turn, "event-1"), "turn-1");
         let claude_style = serde_json::json!({"prompt_id": "prompt-1"});
         assert_eq!(resolve_turn_id(&claude_style, "event-1"), "prompt-1");
+        let cursor_style = serde_json::json!({"generation_id": "generation-1"});
+        assert_eq!(resolve_turn_id(&cursor_style, "event-1"), "generation-1");
         let bare = serde_json::json!({});
         assert_eq!(resolve_turn_id(&bare, "event-1"), "event-1");
+    }
+
+    #[test]
+    fn cursor_payload_fields_are_extracted() {
+        let input = serde_json::json!({
+            "conversation_id": "conversation-1",
+            "generation_id": "generation-1",
+            "workspace_roots": ["/tmp/cursor-project"],
+            "text": "Cursor reply"
+        });
+        assert_eq!(
+            string_field_any(&input, &["session_id", "sessionId", "conversation_id"]).as_deref(),
+            Some("conversation-1")
+        );
+        assert_eq!(cwd_field(&input).as_deref(), Some("/tmp/cursor-project"));
+        assert_eq!(
+            assistant_reply_field(AgentKind::Cursor, &input).as_deref(),
+            Some("Cursor reply")
+        );
+        assert_eq!(assistant_reply_field(AgentKind::Claude, &input), None);
+    }
+
+    #[test]
+    fn zcode_payload_fields_are_extracted() {
+        // Zcode wraps hook payloads in snake_case (with camelCase aliases):
+        // session_id is `sess_<uuid>`, Stop carries last_assistant_message.
+        let prompt_input = serde_json::json!({
+            "session_id": "sess-9f2c",
+            "hook_event_name": "UserPromptSubmit",
+            "cwd": "/Users/demo/projects/zcode-app",
+            "transcript_path": "/Users/demo/.zcode/cli/sessions/sess-9f2c.jsonl",
+            "prompt": "把设置页改成暗色主题"
+        });
+        assert_eq!(
+            string_field_any(&prompt_input, &["session_id", "sessionId", "conversation_id"])
+                .as_deref(),
+            Some("sess-9f2c")
+        );
+        assert_eq!(prompt_field(&prompt_input).as_deref(), Some("把设置页改成暗色主题"));
+        assert_eq!(cwd_field(&prompt_input).as_deref(), Some("/Users/demo/projects/zcode-app"));
+        assert_eq!(resolve_turn_id(&prompt_input, "event-1"), "event-1");
+
+        let stop_input = serde_json::json!({
+            "session_id": "sess-9f2c",
+            "hook_event_name": "Stop",
+            "last_assistant_message": "已切换为暗色主题。",
+            "stop_hook_active": false
+        });
+        assert_eq!(
+            assistant_reply_field(AgentKind::Zcode, &stop_input).as_deref(),
+            Some("已切换为暗色主题。")
+        );
+
+        // camelCase aliases read the same values.
+        let aliased = serde_json::json!({
+            "sessionId": "sess-7a1b",
+            "hookEventName": "Stop",
+            "lastAssistantMessage": "done"
+        });
+        assert_eq!(
+            string_field_any(&aliased, &["session_id", "sessionId", "conversation_id"])
+                .as_deref(),
+            Some("sess-7a1b")
+        );
+        assert_eq!(
+            assistant_reply_field(AgentKind::Zcode, &aliased).as_deref(),
+            Some("done")
+        );
     }
 
     #[test]
@@ -369,7 +490,8 @@ mod tests {
 
     #[test]
     fn internal_prompt_matches_memory_writing_agent() {
-        let prompt = "## Memory Writing Agent: Phase 2 (Consolidation)\n\nYou are a Memory Writing Agent.";
+        let prompt =
+            "## Memory Writing Agent: Phase 2 (Consolidation)\n\nYou are a Memory Writing Agent.";
         assert!(is_internal_system_prompt(prompt));
     }
 
@@ -379,6 +501,8 @@ mod tests {
         let automation = "Automation: 吾日三省\nAutomation ID: automation\nAutomation memory: $CODEX_HOME/automations/automation/memory.md\n\n扮演一名心理咨询师…";
         assert!(!is_internal_system_prompt(automation));
         assert!(!is_internal_system_prompt("帮我修一下这个 bug"));
-        assert!(!is_internal_system_prompt("# Overview of my project\n\n请写一份项目概览"));
+        assert!(!is_internal_system_prompt(
+            "# Overview of my project\n\n请写一份项目概览"
+        ));
     }
 }
