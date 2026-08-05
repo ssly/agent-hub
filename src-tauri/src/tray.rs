@@ -5,6 +5,8 @@ use tauri::{App, AppHandle};
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 const TRAY_ID: &str = "codex-usage-tray";
 const TRAY_WINDOW_WIDTH: f64 = 400.0;
+/// Mini mode floor: one usage-orb wide (orb 132 + same panel/shell padding as normal).
+const TRAY_MINI_WIDTH: f64 = 160.0;
 const TRAY_LOADING_HEIGHT: f64 = 120.0;
 const TRAY_MAX_HEIGHT: f64 = 620.0;
 
@@ -73,14 +75,18 @@ struct TrayMenuHandles {
 }
 
 #[tauri::command]
-pub fn resize_usage_tray(app: AppHandle, height: f64) {
+pub fn resize_usage_tray(app: AppHandle, height: f64, width: Option<f64>) {
     let height = height.clamp(TRAY_LOADING_HEIGHT, TRAY_MAX_HEIGHT);
+    // None → normal 400; mini mode passes ~orb width. Never exceed normal width.
+    let width = width
+        .unwrap_or(TRAY_WINDOW_WIDTH)
+        .clamp(TRAY_MINI_WIDTH, TRAY_WINDOW_WIDTH);
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
-    resize_centered_on_current_monitor(&app, height);
+    resize_centered_on_current_monitor(&app, width, height);
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let _ = app;
+    let _ = (app, width);
 }
 
 /// Open the usage popup from the main window (sidebar button). Same window,
@@ -102,7 +108,7 @@ pub fn open_usage_tray(app: AppHandle) {
                     .and_then(|main| main.current_monitor().ok().flatten())
                     .or_else(|| window.current_monitor().ok().flatten());
                 if let Some(monitor) = monitor {
-                    position_on_monitor(&window, &monitor, TRAY_LOADING_HEIGHT);
+                    position_on_monitor(&window, &monitor, TRAY_WINDOW_WIDTH, TRAY_LOADING_HEIGHT);
                 }
             }
             let _ = window.show();
@@ -309,12 +315,12 @@ fn resize_and_position_window(
         .flatten()
         .or_else(|| window.current_monitor().ok().flatten());
     if let Some(monitor) = monitor {
-        position_on_monitor(window, &monitor, height);
+        position_on_monitor(window, &monitor, TRAY_WINDOW_WIDTH, height);
     }
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-fn resize_centered_on_current_monitor(app: &AppHandle, height: f64) {
+fn resize_centered_on_current_monitor(app: &AppHandle, width: f64, height: f64) {
     use tauri::LogicalSize;
 
     let Some(window) = app.get_webview_window("codex-usage") else {
@@ -325,20 +331,25 @@ fn resize_centered_on_current_monitor(app: &AppHandle, height: f64) {
     // is secondary and may legitimately be unavailable during a window resize.
     // A remembered position (dragged or previously centered) wins over
     // re-centering so resizing never yanks the popup back to screen center.
-    let _ = window.set_size(LogicalSize::new(TRAY_WINDOW_WIDTH, height));
+    let _ = window.set_size(LogicalSize::new(width, height));
     if remembered_position().is_none() {
         if let Ok(Some(monitor)) = window.current_monitor() {
-            position_on_monitor(&window, &monitor, height);
+            position_on_monitor(&window, &monitor, width, height);
         }
     }
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-fn position_on_monitor(window: &tauri::WebviewWindow, monitor: &tauri::Monitor, height: f64) {
+fn position_on_monitor(
+    window: &tauri::WebviewWindow,
+    monitor: &tauri::Monitor,
+    width: f64,
+    height: f64,
+) {
     use tauri::{PhysicalPosition, Position};
 
     let scale = monitor.scale_factor();
-    let window_width = TRAY_WINDOW_WIDTH * scale;
+    let window_width = width * scale;
     let window_height = height * scale;
     let (x, y) = centered_window_position(
         window_width,

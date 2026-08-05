@@ -122,9 +122,11 @@ function makeMcpServers(platformId: string) {
   return platformId === 'cursor' ? servers.slice(0, 2) : servers
 }
 
+// Order mirrors platform/registry.rs (session subset).
 const SESSION_PLATFORMS = [
   { id: 'codex', display_name: 'Codex', session_count: 5 },
   { id: 'claude-code', display_name: 'Claude Code', session_count: 28 },
+  { id: 'antigravity', display_name: 'Antigravity', session_count: 6 },
   { id: 'grok', display_name: 'Grok Build', session_count: 2 },
   { id: 'kimi', display_name: 'Kimi Code', session_count: 4 },
   { id: 'zcode', display_name: 'ZCode', session_count: 3 },
@@ -574,6 +576,7 @@ let cursorHookInstalled = false
 let grokHookInstalled = false
 let kimiHookInstalled = false
 let zcodeHookInstalled = false
+let antigravityHookInstalled = false
 
 let codexMonitorSessions = [
   {
@@ -912,6 +915,55 @@ export async function applyZCodeHookChange(action: 'install' | 'uninstall', _exp
   await delay(300)
   zcodeHookInstalled = action === 'install'
   return getZCodeHookStatus()
+}
+
+const ANTIGRAVITY_HOOK_COMMAND = "'/Applications/AGENT HUB.app/Contents/MacOS/agent-hub' --agent-hub-antigravity-hook"
+let antigravityMonitorSessions = [
+  {
+    sessionId: 'agy-mock-1',
+    turnId: 'turn-1',
+    source: 'terminal',
+    status: 'running',
+    cwd: '/Users/demo/projects/agent-hub',
+    userPrompt: '给 Antigravity 加上会话监听与会话浏览。',
+    assistantReply: null,
+    updatedAt: Date.now() - 20_000,
+  },
+]
+
+export async function getAntigravitySessionMonitorSnapshot() {
+  await delay()
+  return {
+    revision: 1,
+    sessions: antigravityMonitorSessions,
+  }
+}
+
+export async function deleteAntigravitySessionMonitorSession(sessionId: string) {
+  await delay()
+  antigravityMonitorSessions = antigravityMonitorSessions.filter(
+    session => session.sessionId !== sessionId,
+  )
+}
+
+export async function getAntigravityHookStatus() {
+  await delay()
+  return makeHookStatus(
+    antigravityHookInstalled,
+    '~/.gemini/config/hooks.json',
+    ANTIGRAVITY_HOOK_COMMAND,
+  )
+}
+
+export async function previewAntigravityHookChange(action: 'install' | 'uninstall') {
+  await delay()
+  return makeHookPreview(action, '~/.gemini/config/hooks.json', ANTIGRAVITY_HOOK_COMMAND)
+}
+
+export async function applyAntigravityHookChange(action: 'install' | 'uninstall', _expectedBeforeHash: string) {
+  await delay(300)
+  antigravityHookInstalled = action === 'install'
+  return getAntigravityHookStatus()
 }
 
 // App

@@ -1,21 +1,30 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Monitor, Play, Terminal, Trash2 } from 'lucide-vue-next'
 import { useHoverResetBool } from '@/composables/useHoverReset'
 import { formatInt } from '@/lib/utils'
+import AgentIcon from '@/components/agents/AgentIcon.vue'
+import SessionClientIcon from '@/components/sessions/SessionClientIcon.vue'
 
 // Shared session card used by both the Sessions browser and the live Monitor.
 // Purely presentational: parents map their own data shapes onto these props and
 // keep their own stores — no session data crosses between the two views.
 //
 // Layout contract:
-//   head:  [agent badge] [model] [tokens] [source badge] [status]   [note?] [time] [actions]
+//   head:  [agent/client badge + icon] [model] [tokens] [source?] [status]  [time] [actions]
 //   body:  title / subtitle / default slot (e.g. monitor Q&A lines)
+// Source is only shown when it adds info the badge does not already carry
+// (e.g. "终端" under Grok). ChatGPT-as-badge never doubles with a source chip.
 // Whole card is clickable: normal mode emits `open` (view messages), selection
 // mode emits `toggleSelect` instead.
 const props = withDefaults(defineProps<{
   badge?: string
-  source?: 'terminal' | 'chatgpt' | 'cursor' | null
+  /** Platform/agent id for AgentIcon (codex, claude, grok, …). */
+  badgeAgentId?: string | null
+  /** Client-source icon key when the badge itself is a client (e.g. chatgpt). */
+  badgeIcon?: string | null
+  source?: 'terminal' | 'chatgpt' | 'cursor' | 'antigravity' | 'antigravity-ide' | null
   sourceLabel?: string
   status?: 'running' | 'ended' | null
   time?: string
@@ -31,6 +40,8 @@ const props = withDefaults(defineProps<{
   resumable?: boolean
   deletable?: boolean
 }>(), {
+  badgeAgentId: null,
+  badgeIcon: null,
   source: null,
   status: null,
   model: null,
@@ -48,6 +59,15 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const { armed: confirmDelete, arm: armDelete, reset: resetDelete } = useHoverResetBool()
+
+/** Hide source when the primary badge already names the same client/source. */
+const showSource = computed(() => {
+  if (!props.source || !props.sourceLabel) return false
+  // Badge already is "ChatGPT 客户端" — do not paint a second identical chip.
+  if (props.badgeIcon === 'chatgpt' && props.source === 'chatgpt') return false
+  if (props.badge && props.sourceLabel === props.badge) return false
+  return true
+})
 
 function handleClick() {
   if (props.selecting) emit('toggleSelect')
@@ -87,13 +107,19 @@ function handleDelete() {
 
     <div class="session-card__head">
       <div class="session-card__badges">
-        <span v-if="badge" class="session-card__badge">{{ badge }}</span>
+        <span v-if="badge" class="session-card__badge">
+          <SessionClientIcon v-if="badgeIcon === 'chatgpt'" client-id="chatgpt" :size="12" />
+          <AgentIcon v-else-if="badgeAgentId" :agent-id="badgeAgentId" :size="12" />
+          {{ badge }}
+        </span>
         <span v-if="model" class="ah-session-card__model">{{ model }}</span>
         <span v-if="tokens != null" class="ah-session-card__tokens">
           {{ t('session.tokens_value', { count: formatInt(tokens) }) }}
         </span>
-        <span v-if="source" class="session-card__source">
-          <Monitor v-if="source === 'chatgpt'" :size="13" />
+        <span v-if="showSource" class="session-card__source">
+          <SessionClientIcon v-if="source === 'chatgpt'" client-id="chatgpt" :size="13" />
+          <Monitor v-else-if="source === 'cursor'" :size="13" />
+          <AgentIcon v-else-if="source === 'antigravity' || source === 'antigravity-ide'" agent-id="antigravity" :size="13" />
           <Terminal v-else :size="13" />
           <span>{{ sourceLabel }}</span>
         </span>
@@ -173,6 +199,7 @@ function handleDelete() {
   font-size: 11px;
   font-weight: 600;
   white-space: nowrap;
+  gap: 5px;
 }
 .session-card__source {
   display: inline-flex;

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, watch, computed } from 'vue'
+import { onMounted, onBeforeUnmount, watch, computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { invoke, Channel } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
@@ -29,6 +29,17 @@ const appStore = useAppStore()
 const skillsStore = useSkillsStore()
 const { showToast } = useToast()
 const { t, locale } = useI18n()
+
+// Keep the Monitor view alive after the first visit so re-entry is a cheap
+// v-show toggle (no remount / no re-fetch critical path). First visit still
+// paints a loading shell before any IPC.
+const monitorVisited = ref(appStore.currentTab === 'monitor')
+watch(
+  () => appStore.currentTab,
+  tab => {
+    if (tab === 'monitor') monitorVisited.value = true
+  },
+)
 
 async function handleDoSync() {
   if (!skillsStore.syncTargetPlatformId) return
@@ -351,8 +362,10 @@ onBeforeUnmount(() => {
           <SearchResults v-else-if="appStore.currentView === 'search'" />
         </template>
         <SessionListView v-else-if="appStore.currentTab === 'sessions'" />
-        <SessionMonitorView v-else-if="appStore.currentTab === 'monitor'" />
         <SwitchView v-else-if="appStore.currentTab === 'accounts'" />
+        <!-- Monitor stays mounted after first visit (v-show) so re-entry is free;
+             first visit still paints a loader shell before any IPC. -->
+        <SessionMonitorView v-if="monitorVisited" v-show="appStore.currentTab === 'monitor'" />
       </div>
     </main>
     <AppToast />

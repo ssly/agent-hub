@@ -6,16 +6,20 @@ pub enum AgentKind {
     Codex,
     Claude,
     Cursor,
+    Antigravity,
     Grok,
     Kimi,
     ZCode,
 }
 
 impl AgentKind {
-    pub const ALL: [AgentKind; 6] = [
+    /// Same relative order as `platform/registry.rs` builtin platforms
+    /// (monitor subset: no Shared Pool / Hermes / Trae / Kiro).
+    pub const ALL: [AgentKind; 7] = [
         Self::Codex,
         Self::Claude,
         Self::Cursor,
+        Self::Antigravity,
         Self::Grok,
         Self::Kimi,
         Self::ZCode,
@@ -26,6 +30,7 @@ impl AgentKind {
             Self::Codex => "codex",
             Self::Claude => "claude",
             Self::Cursor => "cursor",
+            Self::Antigravity => "antigravity",
             Self::Grok => "grok",
             Self::Kimi => "kimi",
             Self::ZCode => "zcode",
@@ -37,6 +42,7 @@ impl AgentKind {
             Self::Codex => "codex-state.json",
             Self::Claude => "claude-state.json",
             Self::Cursor => "cursor-state.json",
+            Self::Antigravity => "antigravity-state.json",
             Self::Grok => "grok-state.json",
             Self::Kimi => "kimi-state.json",
             Self::ZCode => "zcode-state.json",
@@ -48,6 +54,7 @@ impl AgentKind {
             Self::Codex => "session-monitor:codex-changed",
             Self::Claude => "session-monitor:claude-changed",
             Self::Cursor => "session-monitor:cursor-changed",
+            Self::Antigravity => "session-monitor:antigravity-changed",
             Self::Grok => "session-monitor:grok-changed",
             Self::Kimi => "session-monitor:kimi-changed",
             Self::ZCode => "session-monitor:zcode-changed",
@@ -61,6 +68,11 @@ pub enum SessionSource {
     Terminal,
     Chatgpt,
     Cursor,
+    /// Antigravity 2.0 desktop app (`~/.gemini/antigravity/`).
+    Antigravity,
+    /// Antigravity IDE surface (`~/.gemini/antigravity-ide/`).
+    #[serde(rename = "antigravity-ide")]
+    AntigravityIde,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

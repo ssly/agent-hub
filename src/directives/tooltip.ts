@@ -3,11 +3,11 @@ import type { Directive } from 'vue'
 /**
  * v-tooltip — styled replacement for the native `title` attribute.
  *
- * Usage: `v-tooltip="text"` (below the anchor, flipping above at the bottom
- * edge), `v-tooltip:top="text"` (above the anchor, flipping below at the top
- * edge), or `v-tooltip:left` / `v-tooltip:right` (beside the anchor on the
- * preferred side, flipping at the screen edge). Nothing shows when the value
- * is empty.
+ * Usage: `v-tooltip="text"` / `v-tooltip:bottom` (below the anchor, flipping
+ * above at the bottom edge), `v-tooltip:top="text"` (above the anchor, flipping
+ * below at the top edge), or `v-tooltip:left` / `v-tooltip:right` (beside the
+ * anchor on the preferred side, flipping at the screen edge). Dynamic args
+ * work (`v-tooltip:[side]="text"`). Nothing shows when the value is empty.
  * A single tooltip element is shared app-wide (appended to <body>); its
  * colors invert with the theme via --ink / --canvas (styles live in
  * theme.css under § Tooltip).
@@ -112,14 +112,25 @@ function show(el: HTMLElement, text: string, placement: 'bottom' | 'left' | 'rig
   tip.style.top = `${top}px`
 }
 
+type TooltipPlacement = 'bottom' | 'left' | 'right' | 'top'
 type TooltipElement = HTMLElement & { __ahTooltip__?: { onEnter: () => void; onLeave: () => void } }
+
+function parsePlacement(arg: string | undefined): TooltipPlacement {
+  if (arg === 'left' || arg === 'right' || arg === 'top' || arg === 'bottom') return arg
+  return 'bottom'
+}
 
 export const vTooltip: Directive<TooltipElement, string | undefined> = {
   mounted(el, binding) {
     el.dataset.ahTooltip = binding.value ?? ''
-    const placement = binding.arg === 'left' ? 'left' : binding.arg === 'right' ? 'right' : binding.arg === 'top' ? 'top' : 'bottom'
+    el.dataset.ahTooltipPlacement = parsePlacement(binding.arg)
     const handlers = {
-      onEnter: () => show(el, el.dataset.ahTooltip || '', placement),
+      // Read placement on enter so dynamic args (e.g. monitor row index) stay fresh.
+      onEnter: () => show(
+        el,
+        el.dataset.ahTooltip || '',
+        parsePlacement(el.dataset.ahTooltipPlacement),
+      ),
       onLeave: hide,
     }
     el.__ahTooltip__ = handlers
@@ -128,6 +139,7 @@ export const vTooltip: Directive<TooltipElement, string | undefined> = {
   },
   updated(el, binding) {
     el.dataset.ahTooltip = binding.value ?? ''
+    el.dataset.ahTooltipPlacement = parsePlacement(binding.arg)
   },
   unmounted(el) {
     const handlers = el.__ahTooltip__

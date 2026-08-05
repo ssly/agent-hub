@@ -231,6 +231,16 @@ export const previewZCodeHookChange = (action: 'install' | 'uninstall') =>
 export const applyZCodeHookChange = (action: 'install' | 'uninstall', expectedBeforeHash: string) =>
   invoke<any>('apply_zcode_hook_change', { action, expectedBeforeHash })
 
+export const getAntigravitySessionMonitorSnapshot = () =>
+  invoke<any>('get_antigravity_session_monitor_snapshot')
+export const deleteAntigravitySessionMonitorSession = (sessionId: string) =>
+  invoke<void>('delete_antigravity_session_monitor_session', { sessionId })
+export const getAntigravityHookStatus = () => invoke<any>('get_antigravity_hook_status')
+export const previewAntigravityHookChange = (action: 'install' | 'uninstall') =>
+  invoke<any>('preview_antigravity_hook_change', { action })
+export const applyAntigravityHookChange = (action: 'install' | 'uninstall', expectedBeforeHash: string) =>
+  invoke<any>('apply_antigravity_hook_change', { action, expectedBeforeHash })
+
 // Switch
 export const listSwitchProfiles = (agentType: string) => invoke<any>('list_switch_profiles', { agentType })
 export const saveCurrentAuthProfile = (agentType: string, note: string) =>
@@ -308,8 +318,8 @@ export interface CodexTraySnapshot {
 }
 export const getCodexTrayUsage = (force = false) =>
   invoke<CodexTraySnapshot>('get_codex_tray_usage', { force })
-export const resizeUsageTray = (height: number) =>
-  invoke<void>('resize_usage_tray', { height })
+export const resizeUsageTray = (height: number, width?: number) =>
+  invoke<void>('resize_usage_tray', { height, width: width ?? null })
 export const setUsageTrayPinned = (pinned: boolean) =>
   invoke<void>('set_usage_tray_pinned', { pinned })
 export const openUsageTray = () => invoke<void>('open_usage_tray')

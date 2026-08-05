@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { Pin, PinOff, RefreshCw } from 'lucide-vue-next'
+import { Activity, BarChart3, Blend, CircleAlert, Maximize2, Minimize2, Pin, PinOff, RefreshCw } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
+import { useToast } from '@/composables/useToast'
+import AppToast from '@/components/layout/AppToast.vue'
 import {
+  getAntigravitySessionMonitorSnapshot,
   getClaudeSessionMonitorSnapshot,
   getClaudeUsage,
   getCodexSessionMonitorSnapshot,
@@ -28,10 +31,13 @@ import type {
   UsageWindow,
 } from '@/lib/api'
 import type { AgentSessionState, MonitorAgent, MonitorSnapshot } from '@/stores/session-monitor'
+import AgentIcon from '@/components/agents/AgentIcon.vue'
+import SessionClientIcon from '@/components/sessions/SessionClientIcon.vue'
 import UsageOrb, { type OrbTone, type OrbWindow } from './UsageOrb.vue'
 import TrayWaveLoader from './TrayWaveLoader.vue'
 
 const { t, locale } = useI18n()
+const { showToast } = useToast()
 type UsageProvider = 'codex' | 'claude-code' | 'grok-build' | 'kimi-code'
 const selectedProvider = ref<UsageProvider>(preferredProviderFromAccounts())
 const availability = ref<UsageProviderAvailability | null>(null)
@@ -70,17 +76,28 @@ const initialLoading = computed(() => compactLoading.value)
 // Pin: the popup hides on blur by default; pinning keeps it visible until the
 // user unpins and clicks elsewhere. Flag lives in backend memory only.
 const pinned = ref(false)
+// Compact tray layout: ring-only usage, short labels, no opacity control.
+const MINI_STORAGE_KEY = 'ah-tray-mini'
+const miniMode = ref(localStorage.getItem(MINI_STORAGE_KEY) === '1')
+const opacityOpen = ref(false)
+function setMiniMode(next: boolean) {
+  miniMode.value = next
+  localStorage.setItem(MINI_STORAGE_KEY, next ? '1' : '0')
+  opacityOpen.value = false
+}
 let refreshSequence = 0
 let resizeSequence = 0
 
 // --- Mini monitor strip ---------------------------------------------------
 // Same data the Monitor tab shows (backend snapshots + change events), but
 // reduced to one line per session: status dot + agent + user question.
-const MONITOR_AGENTS_LIST: MonitorAgent[] = ['codex', 'claude', 'cursor', 'grok', 'kimi', 'zcode']
+// Same order as MONITOR_AGENTS / platform registry (monitor subset).
+const MONITOR_AGENTS_LIST: MonitorAgent[] = ['codex', 'claude', 'cursor', 'antigravity', 'grok', 'kimi', 'zcode']
 const MONITOR_CHANGED_EVENTS: Record<MonitorAgent, string> = {
   codex: 'session-monitor:codex-changed',
   claude: 'session-monitor:claude-changed',
   cursor: 'session-monitor:cursor-changed',
+  antigravity: 'session-monitor:antigravity-changed',
   grok: 'session-monitor:grok-changed',
   kimi: 'session-monitor:kimi-changed',
   zcode: 'session-monitor:zcode-changed',
@@ -89,6 +106,7 @@ const MONITOR_SNAPSHOT_API: Record<MonitorAgent, () => Promise<MonitorSnapshot>>
   codex: getCodexSessionMonitorSnapshot,
   claude: getClaudeSessionMonitorSnapshot,
   cursor: getCursorSessionMonitorSnapshot,
+  antigravity: getAntigravitySessionMonitorSnapshot,
   grok: getGrokSessionMonitorSnapshot,
   kimi: getKimiSessionMonitorSnapshot,
   zcode: getZCodeSessionMonitorSnapshot,
@@ -97,6 +115,7 @@ const monitorSnapshots = ref<Record<MonitorAgent, MonitorSnapshot>>({
   codex: { revision: 0, sessions: [] },
   claude: { revision: 0, sessions: [] },
   cursor: { revision: 0, sessions: [] },
+  antigravity: { revision: 0, sessions: [] },
   grok: { revision: 0, sessions: [] },
   kimi: { revision: 0, sessions: [] },
   zcode: { revision: 0, sessions: [] },
@@ -104,6 +123,10 @@ const monitorSnapshots = ref<Record<MonitorAgent, MonitorSnapshot>>({
 
 // Merged like the Monitor tab's "all" view: running first, newest activity
 // first within each group, capped so the strip never dominates the panel.
+/** Tray strip shows at most 6 sessions; tip placement splits at the midpoint. */
+const MONITOR_STRIP_LIMIT = 6
+const MONITOR_TIP_SPLIT = 3
+
 const monitorRows = computed<AgentSessionState[]>(() =>
   MONITOR_AGENTS_LIST
     .flatMap(agent => monitorSnapshots.value[agent].sessions.map(session => ({ ...session, agent })))
@@ -111,16 +134,30 @@ const monitorRows = computed<AgentSessionState[]>(() =>
       if (a.status !== b.status) return a.status === 'running' ? -1 : 1
       return b.updatedAt - a.updatedAt
     })
-    .slice(0, 5),
+    .slice(0, MONITOR_STRIP_LIMIT),
 )
 
+/** Top 3 rows: tip below; bottom 3: tip above — keeps long prompts inside the panel. */
+function monitorTipPlacement(index: number): 'top' | 'bottom' {
+  return index < MONITOR_TIP_SPLIT ? 'bottom' : 'top'
+}
+
+/** Full-mode text label (mini uses icons only). */
 function monitorAgentLabel(row: AgentSessionState) {
-  // Same provenance rule as the Monitor tab: Codex rows whose hook
-  // originator marks the ChatGPT desktop/IDE client are labeled so.
   if (row.agent === 'codex' && row.source === 'chatgpt') {
     return t('session_monitor.source_chatgpt')
   }
+  if (row.agent === 'antigravity') {
+    if (row.source === 'terminal') return t('session.source_antigravity_cli')
+    if (row.source === 'antigravity-ide') return t('session_monitor.source_antigravity_ide')
+    if (row.source === 'antigravity') return t('session_monitor.source_antigravity')
+  }
   return t(`session_monitor.agent_${row.agent}`)
+}
+
+/** Mini strip: ChatGPT client icon vs platform AgentIcon. */
+function monitorIsChatgpt(row: AgentSessionState) {
+  return row.agent === 'codex' && row.source === 'chatgpt'
 }
 
 async function loadMonitorSnapshots() {
@@ -234,36 +271,36 @@ async function spawnPulse(key: string, status: MonitorPulse['status']) {
   )
 }
 
-// --- Context menu (opacity + per-area visibility) ---------------------------
-// Right-click anywhere on the panel: window opacity, per-provider usage
-// hiding (submenu), and a single toggle that hides the whole monitor strip.
-// All persist in localStorage.
-const OPACITY_OPTIONS = [80, 85, 90, 95, 100]
+// --- Top-left controls (opacity / hide usage / hide monitor / mini) ---------
+// Opacity: compact slider (normal mode only). Usage / monitor: whole-section
+// toggles — the two sections cannot both be hidden. Mini mode drops the
+// opacity control and simplifies labels / orb layout.
+const OPACITY_MIN = 70
+const OPACITY_MAX = 100
 const OPACITY_STORAGE_KEY = 'ah-tray-opacity'
 const storedOpacity = Number(localStorage.getItem(OPACITY_STORAGE_KEY))
-const panelOpacity = ref(OPACITY_OPTIONS.includes(storedOpacity) ? storedOpacity : 100)
-const opacityMenu = ref<{ x: number; y: number } | null>(null)
-const openSubmenu = ref<'opacity' | 'usage' | null>(null)
-// Which side the submenus open on, recomputed per right-click: right when it
-// fits fully inside the window, left otherwise (the window clips overflow,
-// so the wrong side makes the submenu invisible).
-const submenuSide = ref<'left' | 'right'>('right')
+const panelOpacity = ref(
+  Number.isFinite(storedOpacity)
+    ? Math.min(OPACITY_MAX, Math.max(OPACITY_MIN, Math.round(storedOpacity)))
+    : 100,
+)
 
-const HIDDEN_USAGE_KEY = 'ah-tray-hidden-usage'
+const USAGE_HIDDEN_KEY = 'ah-tray-usage-hidden'
 const MONITOR_HIDDEN_KEY = 'ah-tray-monitor-hidden'
 // Declared above the computeds that reference it: watch() eagerly evaluates
 // its source on creation, so a later const would hit the TDZ at setup time.
 const PROVIDER_ORDER: UsageProvider[] = ['codex', 'claude-code', 'grok-build', 'kimi-code']
-function loadHiddenUsage(): UsageProvider[] {
+
+function loadUsageHidden(): boolean {
+  const flag = localStorage.getItem(USAGE_HIDDEN_KEY)
+  if (flag !== null) return flag === '1'
   try {
-    const value = JSON.parse(localStorage.getItem(HIDDEN_USAGE_KEY) ?? '[]')
-    return Array.isArray(value) ? value : []
+    const legacy = JSON.parse(localStorage.getItem('ah-tray-hidden-usage') ?? '[]')
+    return Array.isArray(legacy) && legacy.length >= PROVIDER_ORDER.length
   } catch {
-    return []
+    return false
   }
 }
-// Whole-strip kill switch. Migrates the retired per-agent list: an old
-// "everything hidden" selection counts as hidden.
 function loadMonitorHidden(): boolean {
   const flag = localStorage.getItem(MONITOR_HIDDEN_KEY)
   if (flag !== null) return flag === '1'
@@ -274,71 +311,71 @@ function loadMonitorHidden(): boolean {
     return false
   }
 }
-const hiddenUsage = ref<UsageProvider[]>(loadHiddenUsage())
+const usageHidden = ref(loadUsageHidden())
 const monitorHidden = ref(loadMonitorHidden())
+// Legacy dual-hide is invalid under the new rule — force both visible.
+if (usageHidden.value && monitorHidden.value) {
+  usageHidden.value = false
+  monitorHidden.value = false
+  localStorage.setItem(USAGE_HIDDEN_KEY, '0')
+  localStorage.setItem(MONITOR_HIDDEN_KEY, '0')
+}
 
-function persistHidden() {
-  localStorage.setItem(HIDDEN_USAGE_KEY, JSON.stringify(hiddenUsage.value))
+function persistSectionVisibility() {
+  localStorage.setItem(USAGE_HIDDEN_KEY, usageHidden.value ? '1' : '0')
   localStorage.setItem(MONITOR_HIDDEN_KEY, monitorHidden.value ? '1' : '0')
 }
 
-// Providers the panel can actually query right now — the only ones that may
-// appear as tabs or in the hide menu.
+function toggleUsageHidden() {
+  opacityOpen.value = false
+  // Hiding usage while monitor is already hidden would leave the panel empty.
+  if (!usageHidden.value && monitorHidden.value) {
+    showToast(t('tray.cannot_hide_both'), 'warning')
+    return
+  }
+  usageHidden.value = !usageHidden.value
+  persistSectionVisibility()
+}
+
+function toggleMonitorHidden() {
+  opacityOpen.value = false
+  if (!monitorHidden.value && usageHidden.value) {
+    showToast(t('tray.cannot_hide_both'), 'warning')
+    return
+  }
+  monitorHidden.value = !monitorHidden.value
+  persistSectionVisibility()
+}
+
+function toggleOpacityOpen() {
+  opacityOpen.value = !opacityOpen.value
+}
+
+function onOpacityInput(event: Event) {
+  const value = Number((event.target as HTMLInputElement).value)
+  if (!Number.isFinite(value)) return
+  panelOpacity.value = Math.min(OPACITY_MAX, Math.max(OPACITY_MIN, Math.round(value)))
+}
+
+function persistOpacity() {
+  localStorage.setItem(OPACITY_STORAGE_KEY, String(panelOpacity.value))
+}
+
+// Providers the panel can actually query right now — only these appear as tabs.
 const queryableProviders = computed<UsageProvider[]>(() =>
   PROVIDER_ORDER.filter(provider =>
     availability.value ? providerAvailable(provider, availability.value) : false,
   ),
 )
-const visibleProviders = computed<UsageProvider[]>(() =>
-  queryableProviders.value.filter(provider => !hiddenUsage.value.includes(provider)),
-)
-const allUsageHidden = computed(() =>
-  queryableProviders.value.length > 0
-  && queryableProviders.value.every(provider => hiddenUsage.value.includes(provider)),
-)
+// Whole usage section is either shown or gone; no per-provider hide list.
+const visibleProviders = computed<UsageProvider[]>(() => queryableProviders.value)
 
-function toggleHiddenUsage(provider: UsageProvider) {
-  hiddenUsage.value = hiddenUsage.value.includes(provider)
-    ? hiddenUsage.value.filter(item => item !== provider)
-    : [...hiddenUsage.value, provider]
-  persistHidden()
-}
-function toggleAllUsage() {
-  hiddenUsage.value = allUsageHidden.value ? [] : [...queryableProviders.value]
-  persistHidden()
-}
-function toggleMonitorHidden() {
-  monitorHidden.value = !monitorHidden.value
-  persistHidden()
-  opacityMenu.value = null
-}
-
-// A provider that becomes hidden (or signed out) can no longer be selected.
+// A provider that becomes unavailable can no longer be selected.
 watch(visibleProviders, list => {
   if (list.length && !list.includes(selectedProvider.value)) {
     selectedProvider.value = list[0]
   }
 })
-
-function openOpacityMenu(event: MouseEvent) {
-  openSubmenu.value = null
-  const MENU_W = 118
-  const SUBMENU_W = 120
-  const fitsRight = event.clientX + MENU_W + 4 + SUBMENU_W + 8 <= window.innerWidth
-  submenuSide.value = fitsRight ? 'right' : 'left'
-  // Keep the menu (and its submenu) inside the 400px-wide window.
-  const minX = fitsRight ? 8 : SUBMENU_W + 8
-  opacityMenu.value = {
-    x: Math.max(minX, Math.min(event.clientX, window.innerWidth - MENU_W - 12)),
-    y: Math.min(event.clientY, window.innerHeight - 190),
-  }
-}
-
-function selectOpacity(value: number) {
-  panelOpacity.value = value
-  localStorage.setItem(OPACITY_STORAGE_KEY, String(value))
-  opacityMenu.value = null
-}
 
 // While pinned, re-query the quota every 5 minutes (force=true bypasses the
 // shared 10-minute backend cache). Monitor rows stay event-driven real-time.
@@ -398,6 +435,9 @@ const PROVIDER_LABELS: Record<UsageProvider, string> = {
   'claude-code': 'Claude Code',
   'grok-build': 'Grok Build',
   'kimi-code': 'Kimi Code',
+}
+function providerLabel(provider: UsageProvider) {
+  return PROVIDER_LABELS[provider]
 }
 
 function availableProvider(
@@ -512,11 +552,16 @@ function clampHeight(height: number) {
   return Math.min(620, Math.max(120, height))
 }
 
+// Mini width ≈ one usage orb (132, same as normal) + panel/shell pad. Normal is 400.
+const TRAY_NORMAL_WIDTH = 400
+const TRAY_MINI_WIDTH = 160
+
 const panelRef = ref<HTMLElement | null>(null)
 
 // Measure the rendered panel instead of maintaining per-state height
 // constants: the window always fits the content exactly, so footer rows
 // (e.g. last-query time) can never be clipped by the sections above.
+// Mini mode also shrinks the native window width to roughly one orb.
 async function applyContentHeight() {
   const sequence = ++resizeSequence
   await nextTick()
@@ -528,8 +573,10 @@ async function applyContentHeight() {
   panel.style.height = 'auto'
   const measured = panel.offsetHeight
   panel.style.height = ''
+  const width = miniMode.value ? TRAY_MINI_WIDTH : TRAY_NORMAL_WIDTH
   try {
-    await resizeUsageTray(clampHeight(measured + 16)) // + shell padding 8×2
+    // + shell padding 8×2 on height
+    await resizeUsageTray(clampHeight(measured + 16), width)
   } catch {
     // Browser preview and unsupported platforms may not own a native tray window.
   }
@@ -555,10 +602,10 @@ watch(
   { flush: 'post' },
 )
 
-// Hiding/showing a provider swaps the quota area between the orb and the
-// empty state, which changes the natural panel height.
+// Hiding/showing a whole section (usage or monitor) or toggling mini mode
+// changes panel height.
 watch(
-  () => [visibleProviders.value.length, monitorHidden.value],
+  () => [visibleProviders.value.length, usageHidden.value, monitorHidden.value, miniMode.value],
   () => {
     if (!compactLoading.value) void applyContentHeight()
   },
@@ -576,6 +623,17 @@ function formatDate(value: number | string, withSeconds = false) {
     second: withSeconds ? '2-digit' : undefined,
     hour12: false,
   }).format(date)
+}
+
+/** Mini mode last-query: "查询: MM/DD HH:mm" (no year, no "上次"). */
+function formatLastQuery(value: number | string) {
+  if (miniMode.value) {
+    const date = typeof value === 'number' ? new Date(value * 1000) : new Date(value)
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const time = `${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+    return t('tray.last_query_mini', { time })
+  }
+  return t('tray.last_query', { time: formatDate(value) })
 }
 
 // Reset-credit chips show the expiry date by default; hovering floats the
@@ -662,6 +720,7 @@ async function refresh(compact = false, syncWithAccounts = false, force = false)
 /// the Accounts view, then load the shared backend snapshot (force=false so
 /// we reuse data younger than 10 minutes instead of hitting the network again).
 async function handleTrayOpened() {
+  opacityOpen.value = false
   void loadMonitorSnapshots()
   const status = await getUsageProviderAvailability()
   availability.value = status
@@ -739,155 +798,217 @@ onBeforeUnmount(() => {
   <main
     class="tray-shell"
     data-tauri-drag-region="deep"
-    @contextmenu.prevent="openOpacityMenu"
-    @click="opacityMenu = null"
+    @click="opacityOpen = false"
   >
     <section
       ref="panelRef"
       class="tray-panel"
-      :class="{ 'tray-panel--loading': initialLoading }"
+      :class="{
+        'tray-panel--loading': initialLoading,
+        'tray-panel--mini': miniMode && !initialLoading,
+      }"
       :style="{ opacity: panelOpacity / 100 }"
     >
-      <span v-if="!initialLoading && lastQueryAt" class="tray-last-query">
-        {{ t('tray.last_query', { time: formatDate(lastQueryAt) }) }}
-      </span>
-      <button
-        v-if="!initialLoading"
-        v-tooltip:top="t('tray.refresh')"
-        class="tray-refresh"
-        :disabled="loading"
-        @click="refresh(false, false, true)"
-      >
-        <RefreshCw :size="13" :class="{ 'is-spinning': loading }" />
-      </button>
-      <button
-        v-if="!initialLoading"
-        v-tooltip:top="pinned ? t('tray.unpin') : t('tray.pin')"
-        class="tray-pin"
-        :class="{ 'is-pinned': pinned }"
-        @click="togglePinned"
-      >
-        <PinOff v-if="pinned" :size="13" />
-        <Pin v-else :size="13" />
-      </button>
+      <!-- Top chrome: same absolute top/left band in mini and normal so the
+           top-left corner does not jump when the window shrinks. Mini only
+           drops opacity + last-query; ephemeral icons hide until the title
+           band is hovered (pin stays always visible). -->
+      <div v-if="!initialLoading" class="tray-titlebar" @click.stop>
+        <div class="tray-controls tray-chrome-ephemeral">
+          <div v-if="!miniMode" class="tray-control">
+            <button
+              v-tooltip:top="t('tray.opacity')"
+              class="tray-control-btn"
+              :class="{ 'is-active': opacityOpen }"
+              @click="toggleOpacityOpen"
+            >
+              <Blend :size="13" />
+            </button>
+            <div v-if="opacityOpen" class="tray-opacity-popover" @click.stop>
+              <span class="tray-opacity-popover__value">{{ panelOpacity }}%</span>
+              <input
+                class="tray-opacity-slider"
+                type="range"
+                :min="OPACITY_MIN"
+                :max="OPACITY_MAX"
+                step="1"
+                :value="panelOpacity"
+                :aria-label="t('tray.opacity')"
+                @input="onOpacityInput"
+                @change="persistOpacity"
+              >
+            </div>
+          </div>
+          <button
+            v-tooltip:top="usageHidden ? t('tray.show_usage') : t('tray.hide_usage')"
+            class="tray-control-btn"
+            :class="{ 'is-muted': usageHidden }"
+            @click="toggleUsageHidden"
+          >
+            <BarChart3 :size="13" />
+          </button>
+          <button
+            v-tooltip:top="monitorHidden ? t('tray.show_monitor') : t('tray.hide_monitor')"
+            class="tray-control-btn"
+            :class="{ 'is-muted': monitorHidden }"
+            @click="toggleMonitorHidden"
+          >
+            <Activity :size="13" />
+          </button>
+          <button
+            v-tooltip:top="miniMode ? t('tray.expand') : t('tray.mini')"
+            class="tray-control-btn"
+            @click="setMiniMode(!miniMode)"
+          >
+            <Maximize2 v-if="miniMode" :size="13" />
+            <Minimize2 v-else :size="13" />
+          </button>
+        </div>
+
+        <span v-if="lastQueryAt && !miniMode" class="tray-last-query tray-chrome-ephemeral">
+          {{ formatLastQuery(lastQueryAt) }}
+        </span>
+        <button
+          v-tooltip:top="t('tray.refresh')"
+          class="tray-refresh tray-chrome-ephemeral"
+          :disabled="loading"
+          @click="refresh(false, false, true)"
+        >
+          <RefreshCw :size="13" :class="{ 'is-spinning': loading }" />
+        </button>
+        <!-- Pin stays visible in mini even when other title icons are hidden. -->
+        <button
+          v-tooltip:top="pinned ? t('tray.unpin') : t('tray.pin')"
+          class="tray-pin"
+          :class="{ 'is-pinned': pinned }"
+          @click="togglePinned"
+        >
+          <Pin v-if="pinned" :size="13" />
+          <PinOff v-else :size="13" />
+        </button>
+      </div>
 
       <div v-if="initialLoading" class="initial-loading" role="status">
         <span class="loading-spinner" aria-hidden="true" />
       </div>
 
       <template v-else>
-        <template v-if="visibleProviders.length">
-          <div class="provider-switch" role="tablist" :aria-label="t('tray.provider')">
-            <button
-              v-for="provider in visibleProviders"
-              :key="provider"
-              class="provider-option"
-              :class="{ 'is-active': selectedProvider === provider }"
-              role="tab"
-              :aria-selected="selectedProvider === provider"
-              :disabled="loading"
-              @click="selectProvider(provider)"
+        <!-- Usage section: whole block gone when hidden (not an empty placeholder). -->
+        <template v-if="!usageHidden">
+          <template v-if="visibleProviders.length">
+            <div
+              class="provider-switch"
+              :class="{ 'provider-switch--icons': miniMode }"
+              role="tablist"
+              :aria-label="t('tray.provider')"
             >
-              {{ PROVIDER_LABELS[provider] }}
-            </button>
+              <button
+                v-for="provider in visibleProviders"
+                :key="provider"
+                class="provider-option"
+                :class="{
+                  'is-active': selectedProvider === provider,
+                  'provider-option--icon': miniMode,
+                }"
+                role="tab"
+                :aria-selected="selectedProvider === provider"
+                :aria-label="providerLabel(provider)"
+                :disabled="loading"
+                @click="selectProvider(provider)"
+              >
+                <AgentIcon v-if="miniMode" :agent-id="provider" :size="13" />
+                <template v-else>{{ providerLabel(provider) }}</template>
+              </button>
+            </div>
+          </template>
+          <div v-else class="tray-empty" role="status">
+            <span class="tray-empty__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.8-3.8"/><path d="M8.5 11h5"/></svg>
+            </span>
+            <span class="tray-empty__text">{{ t('tray.no_query_items') }}</span>
           </div>
-        </template>
-        <!-- Fixed empty state: nothing queryable (signed out everywhere) or
-             every provider hidden via the context menu. -->
-        <div v-else class="tray-empty" role="status">
-          <span class="tray-empty__icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.8-3.8"/><path d="M8.5 11h5"/></svg>
-          </span>
-          <span class="tray-empty__text">{{ t('tray.no_query_items') }}</span>
-        </div>
 
-        <template v-if="visibleProviders.length">
-        <template v-if="selectedProvider === 'codex'">
-          <div class="quota-wrap" :class="{ 'is-loading': loading }">
-            <UsageOrb v-if="usageWindows.length" :windows="usageWindows">
-              <div v-if="snapshot && !error" class="credit-inline">
-                <span class="credit-inline__title">{{ t('tray.reset_credit') }}</span>
-                <div v-if="resetCards.length" class="credit-chips">
-                  <div v-for="(card, index) in resetCards" :key="`${card.expires_at ?? 'unknown'}-${index}`" class="credit-chip">
-                    <span class="credit-chip__tooltip">
-                      <span>{{ t('tray.reset_credit_expiry') }}</span>
-                      <span>{{ splitExpiry(card.expires_at).date }}</span>
-                      <span v-if="splitExpiry(card.expires_at).time">{{ splitExpiry(card.expires_at).time }}</span>
-                    </span>
-                    <span class="credit-chip__date">{{ splitExpiry(card.expires_at).date }}</span>
+          <template v-if="visibleProviders.length">
+            <template v-if="selectedProvider === 'codex'">
+              <div class="quota-wrap" :class="{ 'is-loading': loading, 'is-mini': miniMode }">
+                <UsageOrb v-if="usageWindows.length" :windows="usageWindows" :mini="miniMode">
+                  <div v-if="!miniMode && snapshot && !error" class="credit-inline">
+                    <span class="credit-inline__title">{{ t('tray.reset_credit') }}</span>
+                    <div v-if="resetCards.length" class="credit-chips">
+                      <div v-for="(card, index) in resetCards" :key="`${card.expires_at ?? 'unknown'}-${index}`" class="credit-chip">
+                        <span class="credit-chip__tooltip">
+                          <span>{{ t('tray.reset_credit_expiry') }}</span>
+                          <span>{{ splitExpiry(card.expires_at).date }}</span>
+                          <span v-if="splitExpiry(card.expires_at).time">{{ splitExpiry(card.expires_at).time }}</span>
+                        </span>
+                        <span class="credit-chip__date">{{ splitExpiry(card.expires_at).date }}</span>
+                      </div>
+                    </div>
+                    <p v-else class="credit-empty">{{ t('tray.no_reset_credit') }}</p>
                   </div>
+                </UsageOrb>
+                <div v-else-if="error" class="quota-fail" role="status">
+                  <CircleAlert :size="22" class="quota-fail__icon" aria-hidden="true" />
+                  <span class="quota-fail__text">{{ t('tray.failed_hint') }}</span>
                 </div>
-                <p v-else class="credit-empty">{{ t('tray.no_reset_credit') }}</p>
+                <TrayWaveLoader v-else-if="loading">{{ t('tray.query_wait') }}</TrayWaveLoader>
+                <div v-else class="quota-message quota-message--compact">
+                  {{ t('tray.no_usage') }}
+                </div>
               </div>
-            </UsageOrb>
-            <div v-else-if="error" class="quota-message">
-              <strong>{{ t('tray.failed') }}</strong>
-              <span>{{ error }}</span>
-              <button @click="refresh(false, false, true)">{{ t('tray.retry') }}</button>
-            </div>
-            <TrayWaveLoader v-else-if="loading">{{ t('tray.query_wait') }}</TrayWaveLoader>
-            <div v-else class="quota-message quota-message--compact">
-              {{ t('tray.no_usage') }}
-            </div>
-          </div>
+            </template>
+
+            <template v-else-if="selectedProvider === 'kimi-code'">
+              <div class="quota-wrap" :class="{ 'is-loading': loading, 'is-mini': miniMode }">
+                <UsageOrb v-if="kimiWindows.length" :windows="kimiWindows" :mini="miniMode" />
+                <div v-else-if="error" class="quota-fail" role="status">
+                  <CircleAlert :size="22" class="quota-fail__icon" aria-hidden="true" />
+                  <span class="quota-fail__text">{{ t('tray.failed_hint') }}</span>
+                </div>
+                <TrayWaveLoader v-else-if="loading">{{ t('tray.query_wait') }}</TrayWaveLoader>
+                <div v-else class="quota-message quota-message--compact">
+                  {{ t('tray.no_usage') }}
+                </div>
+              </div>
+            </template>
+
+            <template v-else-if="selectedProvider === 'claude-code'">
+              <div class="quota-wrap" :class="{ 'is-loading': loading, 'is-mini': miniMode }">
+                <UsageOrb v-if="claudeWindows.length" :windows="claudeWindows" :mini="miniMode" />
+                <div v-else-if="error" class="quota-fail" role="status">
+                  <CircleAlert :size="22" class="quota-fail__icon" aria-hidden="true" />
+                  <span class="quota-fail__text">{{ t('tray.failed_hint') }}</span>
+                </div>
+                <TrayWaveLoader v-else-if="loading">{{ t('tray.query_wait') }}</TrayWaveLoader>
+                <div v-else class="quota-message quota-message--compact">
+                  {{ t('tray.no_usage') }}
+                </div>
+              </div>
+            </template>
+
+            <template v-else-if="selectedProvider === 'grok-build'">
+              <div v-if="!miniMode && grokUsage?.stale" class="grok-warning">
+                {{ t('switch.grok_stale_warning') }}
+              </div>
+
+              <div class="quota-wrap" :class="{ 'is-loading': loading, 'is-mini': miniMode }">
+                <UsageOrb v-if="grokWindows.length" :windows="grokWindows" :mini="miniMode" />
+                <div v-else-if="error" class="quota-fail" role="status">
+                  <CircleAlert :size="22" class="quota-fail__icon" aria-hidden="true" />
+                  <span class="quota-fail__text">{{ t('tray.failed_hint') }}</span>
+                </div>
+                <TrayWaveLoader v-else-if="loading">{{ t('tray.query_wait') }}</TrayWaveLoader>
+                <div v-else class="quota-message quota-message--compact">
+                  {{ t('tray.no_usage') }}
+                </div>
+              </div>
+            </template>
+          </template>
         </template>
 
-        <template v-else-if="selectedProvider === 'kimi-code'">
-          <div class="quota-wrap" :class="{ 'is-loading': loading }">
-            <UsageOrb v-if="kimiWindows.length" :windows="kimiWindows" />
-            <div v-else-if="error" class="quota-message">
-              <strong>{{ t('tray.failed') }}</strong>
-              <span>{{ error }}</span>
-              <button @click="refresh(false, false, true)">{{ t('tray.retry') }}</button>
-            </div>
-            <TrayWaveLoader v-else-if="loading">{{ t('tray.query_wait') }}</TrayWaveLoader>
-            <div v-else class="quota-message quota-message--compact">
-              {{ t('tray.no_usage') }}
-            </div>
-          </div>
-        </template>
-
-        <template v-else-if="selectedProvider === 'claude-code'">
-          <div class="quota-wrap" :class="{ 'is-loading': loading }">
-            <UsageOrb v-if="claudeWindows.length" :windows="claudeWindows" />
-            <div v-else-if="error" class="quota-message">
-              <strong>{{ t('tray.failed') }}</strong>
-              <span>{{ error }}</span>
-              <button @click="refresh(false, false, true)">{{ t('tray.retry') }}</button>
-            </div>
-            <TrayWaveLoader v-else-if="loading">{{ t('tray.query_wait') }}</TrayWaveLoader>
-            <div v-else class="quota-message quota-message--compact">
-              {{ t('tray.no_usage') }}
-            </div>
-          </div>
-        </template>
-
-        <template v-else-if="selectedProvider === 'grok-build'">
-          <div v-if="grokUsage?.stale" class="grok-warning">
-            {{ t('switch.grok_stale_warning') }}
-          </div>
-
-          <div class="quota-wrap" :class="{ 'is-loading': loading }">
-            <UsageOrb v-if="grokWindows.length" :windows="grokWindows" />
-            <div v-else-if="error" class="quota-message">
-              <strong>{{ t('tray.failed') }}</strong>
-              <span>{{ error }}</span>
-              <button @click="refresh(false, false, true)">{{ t('tray.retry') }}</button>
-            </div>
-            <TrayWaveLoader v-else-if="loading">{{ t('tray.query_wait') }}</TrayWaveLoader>
-            <div v-else class="quota-message quota-message--compact">
-              {{ t('tray.no_usage') }}
-            </div>
-          </div>
-        </template>
-        </template>
-
-        <!-- Mini monitor strip: one line per session (status dot + agent +
-             user question), live via session-monitor change events. The
-             right-click menu can hide the whole module; otherwise it always
-             renders — with a fixed empty state when nothing is visible. -->
-        <div v-if="!monitorHidden" class="monitor-strip">
-          <div class="monitor-strip__title">{{ t('ui.monitor_tab') }}</div>
+        <!-- Monitor strip: whole block gone when hidden. Mini drops tooltips. -->
+        <div v-if="!monitorHidden" class="monitor-strip" :class="{ 'is-mini': miniMode }">
+          <div v-if="!miniMode" class="monitor-strip__title">{{ t('ui.monitor_tab') }}</div>
           <div v-if="!monitorRows.length" class="monitor-empty" role="status">
             <span class="monitor-empty__icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 12h4l2.5-6 3 12 2.5-6h6"/></svg>
@@ -895,19 +1016,38 @@ onBeforeUnmount(() => {
             <span>{{ t('tray.no_monitor_items') }}</span>
           </div>
           <div
-            v-for="row in monitorRows"
+            v-for="(row, index) in monitorRows"
             :key="`${row.agent}-${row.sessionId}-${row.turnId}`"
             class="monitor-row"
           >
             <span
-              v-tooltip:top="t(`session_monitor.status_${row.status}`)"
+              v-tooltip:[monitorTipPlacement(index)]="miniMode ? '' : t(`session_monitor.status_${row.status}`)"
               class="monitor-dot"
               :class="`is-${row.status}`"
               :data-session-dot="monitorRowKey(row)"
             />
-            <span class="monitor-agent">{{ monitorAgentLabel(row) }}</span>
+            <!-- Mini: icon only (tooltip = full name). Full: icon + label. -->
+            <span
+              class="monitor-agent"
+              :class="{ 'monitor-agent--icon-only': miniMode }"
+              v-tooltip:[monitorTipPlacement(index)]="miniMode ? monitorAgentLabel(row) : ''"
+            >
+              <SessionClientIcon
+                v-if="monitorIsChatgpt(row)"
+                client-id="chatgpt"
+                :size="miniMode ? 13 : 12"
+              />
+              <AgentIcon
+                v-else
+                :agent-id="row.agent"
+                :size="miniMode ? 13 : 12"
+              />
+              <span v-if="!miniMode">{{ monitorAgentLabel(row) }}</span>
+            </span>
             <span class="monitor-question">
-              <span v-tooltip:top="row.userPrompt || t('session_monitor.no_prompt')">
+              <span
+                v-tooltip:[monitorTipPlacement(index)]="miniMode ? '' : (row.userPrompt || t('session_monitor.no_prompt'))"
+              >
                 {{ row.userPrompt || t('session_monitor.no_prompt') }}
               </span>
             </span>
@@ -925,62 +1065,7 @@ onBeforeUnmount(() => {
         :class="`is-${pulse.status}`"
       />
     </section>
-
-    <!-- Right-click menu: opacity + per-area visibility, two levels. -->
-    <div
-      v-if="opacityMenu"
-      class="tray-menu"
-      :style="{ left: `${opacityMenu.x}px`, top: `${opacityMenu.y}px` }"
-      @click.stop
-      @contextmenu.stop
-      @mouseleave="openSubmenu = null"
-    >
-      <div class="tray-menu__parent" @mouseenter="openSubmenu = 'opacity'">
-        <span>{{ t('tray.opacity') }}</span>
-        <span class="tray-menu__caret">{{ submenuSide === 'right' ? '›' : '‹' }}</span>
-        <div v-if="openSubmenu === 'opacity'" class="tray-submenu" :class="`tray-submenu--${submenuSide}`">
-          <button
-            v-for="option in OPACITY_OPTIONS"
-            :key="option"
-            class="tray-submenu__option"
-            :class="{ 'is-active': panelOpacity === option }"
-            @click="selectOpacity(option)"
-          >
-            <span class="tray-submenu__check">{{ panelOpacity === option ? '✓' : '' }}</span>
-            {{ option }}%
-          </button>
-        </div>
-      </div>
-
-      <div class="tray-menu__parent" @mouseenter="openSubmenu = 'usage'">
-        <span>{{ t('tray.hide_usage') }}</span>
-        <span class="tray-menu__caret">{{ submenuSide === 'right' ? '›' : '‹' }}</span>
-        <div v-if="openSubmenu === 'usage'" class="tray-submenu" :class="`tray-submenu--${submenuSide}`">
-          <button
-            class="tray-submenu__option"
-            :class="{ 'is-checked': allUsageHidden }"
-            @click="toggleAllUsage()"
-          >
-            <span class="tray-submenu__check">{{ allUsageHidden ? '✓' : '' }}</span>
-            {{ t('tray.all') }}
-          </button>
-          <button
-            v-for="provider in queryableProviders"
-            :key="provider"
-            class="tray-submenu__option"
-            :class="{ 'is-checked': hiddenUsage.includes(provider) }"
-            @click="toggleHiddenUsage(provider)"
-          >
-            <span class="tray-submenu__check">{{ hiddenUsage.includes(provider) ? '✓' : '' }}</span>
-            {{ PROVIDER_LABELS[provider] }}
-          </button>
-        </div>
-      </div>
-
-      <button class="tray-menu__item" @click="toggleMonitorHidden">
-        {{ monitorHidden ? t('tray.show_monitor') : t('tray.hide_monitor') }}
-      </button>
-    </div>
+    <AppToast />
   </main>
 </template>
 
@@ -1065,12 +1150,76 @@ onBeforeUnmount(() => {
 .tray-panel:not(.tray-panel--loading) {
   padding-top: 34px;
 }
+/* Full-width top band: drag target + mini hover hit area for title icons. */
+.tray-titlebar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 34px;
+  z-index: 6;
+}
 
-.tray-pin {
+/* Mini: hide ephemeral title icons until the title band is hovered.
+   Pin is intentionally not .tray-chrome-ephemeral — always visible. */
+.tray-panel--mini .tray-titlebar .tray-chrome-ephemeral {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .15s ease;
+}
+.tray-panel--mini .tray-titlebar:hover .tray-chrome-ephemeral {
+  opacity: 1;
+  pointer-events: auto;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tray-panel--mini .tray-titlebar .tray-chrome-ephemeral {
+    transition: none;
+  }
+}
+
+/* Mini keeps the same shell/panel top+left padding as normal so the top-left
+   chrome (controls / pin) does not shift when the window shrinks. Only content
+   density (icon tabs, no legend) differs. */
+.tray-panel--mini .provider-switch {
+  flex: 0 0 26px;
+  height: 26px;
+  margin-bottom: 4px;
+  gap: 2px;
+  padding: 2px;
+}
+.tray-panel--mini .provider-option--icon {
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.tray-panel--mini .quota-wrap.is-mini {
+  min-height: 0;
+  padding-block: 0 2px;
+}
+.tray-panel--mini .monitor-strip.is-mini {
+  gap: 2px;
+  padding-top: 4px;
+}
+.tray-panel--mini .monitor-row {
+  font-size: 10px;
+  gap: 4px;
+}
+
+/* Top-left controls: opacity + section toggles. */
+.tray-controls {
   position: absolute;
   top: 7px;
-  right: 10px;
-  z-index: 5;
+  left: 10px;
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.tray-control { position: relative; }
+.tray-control-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1084,8 +1233,103 @@ onBeforeUnmount(() => {
   cursor: pointer;
   transition: color .15s ease, background-color .15s ease;
 }
-.tray-pin:hover { color: var(--tray-ink-2); background: var(--tray-inset); }
-.tray-pin.is-pinned { color: var(--tray-accent); background: var(--tray-accent-soft); }
+.tray-control-btn:hover { color: var(--tray-ink-2); background: var(--tray-inset); }
+.tray-control-btn.is-active { color: var(--tray-accent); background: var(--tray-accent-soft); }
+/* Muted = section currently hidden; click again to show. */
+.tray-control-btn.is-muted { color: var(--tray-ink-4); opacity: .42; }
+.tray-control-btn.is-muted:hover { opacity: .72; color: var(--tray-ink-2); }
+/* Compact horizontal opacity slider — one short row, not a tall list. */
+.tray-opacity-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 148px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--tray-border);
+  border-radius: 10px;
+  background: var(--tray-surface);
+  box-shadow: var(--tray-panel-shadow);
+}
+.tray-opacity-popover__value {
+  flex: 0 0 auto;
+  min-width: 34px;
+  color: var(--tray-ink-2);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.tray-opacity-slider {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 14px;
+  margin: 0;
+  padding: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+.tray-opacity-slider:focus { outline: none; }
+.tray-opacity-slider::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--tray-border);
+}
+.tray-opacity-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -4.5px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--tray-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--tray-accent) 18%, transparent);
+  cursor: grab;
+}
+.tray-opacity-slider:active::-webkit-slider-thumb { cursor: grabbing; }
+.tray-opacity-slider::-moz-range-track {
+  height: 3px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--tray-border);
+}
+.tray-opacity-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--tray-accent);
+  cursor: grab;
+}
+
+/* Pin: unpinned = accent (invite to pin); pinned = quiet gray (persistent). */
+.tray-pin {
+  position: absolute;
+  top: 7px;
+  right: 10px;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  color: var(--tray-accent);
+  background: transparent;
+  cursor: pointer;
+  transition: color .15s ease, background-color .15s ease;
+}
+.tray-pin:hover { color: var(--tray-accent); background: var(--tray-accent-soft); }
+.tray-pin.is-pinned { color: var(--tray-ink-4); background: transparent; }
+.tray-pin.is-pinned:hover { color: var(--tray-ink-2); background: var(--tray-inset); }
 
 /* Refresh sits immediately left of the pin; the icon spins while a query is
    in flight. Force refresh also feeds the shared backend cache the Accounts
@@ -1190,6 +1434,14 @@ onBeforeUnmount(() => {
 .provider-option:focus-visible { outline: 2px solid var(--tray-accent-mid); outline-offset: 1px; }
 .provider-option:disabled { opacity: .48; cursor: default; }
 .provider-option.is-active:disabled { opacity: 1; }
+/* Mini: icon-only tabs — no ellipsis text, equal icon buttons. */
+.provider-switch--icons {
+  grid-auto-columns: 1fr;
+}
+.provider-option--icon {
+  overflow: visible;
+  text-overflow: unset;
+}
 
 /* Fixed empty state for the quota area: nothing queryable or every provider
    hidden. Same 132px height as the orb/loader so the panel never jumps. */
@@ -1257,10 +1509,31 @@ onBeforeUnmount(() => {
   gap: 6px;
   color: var(--tray-ink-3);
 }
-.quota-message strong { color: var(--tray-danger); }
-.quota-message span { max-height: 42px; overflow: hidden; font-size: 12px; }
-.quota-message button { min-height: 34px; padding: 0; border: 0; color: var(--tray-accent); background: none; cursor: pointer; }
 .quota-message--compact { min-height: 48px; align-items: center; font-size: 13px; }
+/* Quiet failure: icon + short line only; retry lives on the top-right refresh. */
+.quota-fail {
+  min-height: 110px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--tray-ink-3);
+  text-align: center;
+}
+.quota-fail__icon {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--tray-danger) 72%, var(--tray-ink-3));
+  opacity: .9;
+}
+.quota-fail__text {
+  max-width: 16em;
+  color: var(--tray-ink-3);
+  font-size: 12px;
+  line-height: 1.45;
+}
+/* Fail state matches the fixed 132px orb so height does not jump. */
+.quota-wrap.is-mini .quota-fail { min-height: 132px; }
 
 /* Reset credits sit in the orb's side column under the legend, titled like a
    legend row, so all three provider panels share the same overall height. */
@@ -1314,7 +1587,7 @@ onBeforeUnmount(() => {
 }
 .credit-empty { margin: 0; color: var(--tray-ink-3); font-size: 11px; }
 
-/* Mini monitor strip under the quota area. */
+/* Monitor strip under the quota area. */
 .monitor-strip {
   flex: 0 0 auto;
   display: flex;
@@ -1322,6 +1595,10 @@ onBeforeUnmount(() => {
   gap: 4px;
   padding: 8px 0 2px;
   border-top: 1px solid var(--tray-hairline);
+}
+.monitor-strip.is-mini {
+  gap: 3px;
+  padding-top: 6px;
 }
 .monitor-strip__title {
   color: var(--tray-ink-2);
@@ -1370,8 +1647,15 @@ onBeforeUnmount(() => {
 }
 .monitor-agent {
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   color: var(--tray-ink);
   font-weight: 700;
+}
+.monitor-agent--icon-only {
+  min-width: 0;
+  max-width: none;
 }
 .monitor-question {
   flex: 1 1 auto;
@@ -1389,91 +1673,6 @@ onBeforeUnmount(() => {
   white-space: nowrap;
   vertical-align: top;
 }
-
-/* Right-click menu: parent rows open a submenu to their left on hover. */
-.tray-menu {
-  position: fixed;
-  z-index: 20;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 118px;
-  padding: 5px;
-  border: 1px solid var(--tray-border);
-  border-radius: 10px;
-  background: var(--tray-surface);
-  box-shadow: var(--tray-panel-shadow);
-}
-.tray-menu__parent {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-height: 26px;
-  padding: 0 8px;
-  border-radius: 6px;
-  color: var(--tray-ink-2);
-  font-size: 12px;
-  cursor: default;
-  user-select: none;
-}
-.tray-menu__parent:hover { background: var(--tray-inset); color: var(--tray-ink); }
-.tray-menu__caret { margin-left: auto; color: var(--tray-ink-3); font-size: 11px; }
-/* Direct action item (no submenu), same row look as parents. */
-.tray-menu__item {
-  display: flex;
-  align-items: center;
-  min-height: 26px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 6px;
-  color: var(--tray-ink-2);
-  background: transparent;
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-.tray-menu__item:hover { background: var(--tray-inset); color: var(--tray-ink); }
-.tray-submenu {
-  position: absolute;
-  /* Default: open to the right of the parent menu. */
-  left: calc(100% + 4px);
-  top: -6px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 108px;
-  padding: 5px;
-  border: 1px solid var(--tray-border);
-  border-radius: 10px;
-  background: var(--tray-surface);
-  box-shadow: var(--tray-panel-shadow);
-}
-/* Flipped when the right side would overflow the window. */
-.tray-submenu--left {
-  left: auto;
-  right: calc(100% + 4px);
-}
-.tray-submenu__option {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-height: 24px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 6px;
-  color: var(--tray-ink-2);
-  background: transparent;
-  font: inherit;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.tray-submenu__option:hover { background: var(--tray-inset); color: var(--tray-ink); }
-.tray-submenu__option.is-active,
-.tray-submenu__option.is-checked { color: var(--tray-accent); font-weight: 650; }
-.tray-submenu__check { width: 12px; flex: 0 0 auto; }
 
 /* Dark tray palette: explicit night choice wins; with no explicit choice the
    OS preference decides (same rule as theme.css). The entire selector must

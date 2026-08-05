@@ -1,3 +1,4 @@
+pub(crate) mod antigravity;
 mod claude;
 mod codex;
 mod export;
@@ -11,18 +12,13 @@ mod zcode;
 use std::path::PathBuf;
 use std::process::Command;
 
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
-
 pub use models::{
     BatchDeleteFailure, BatchDeleteResult, SessionExportResult, SessionListPage, SessionMessage,
     SessionPlatform, SessionResumePreview, SessionSearchResult, SessionTerminalOption,
 };
 
-// Windows: suppress the console window that GUI apps otherwise allocate for each
-// child process. Applied to silent detection probes only, never to terminal spawns.
 #[cfg(target_os = "windows")]
-const CREATE_NO_WINDOW: u32 = 0x08000000;
+use crate::win_console::suppress_console;
 
 const MAX_SESSION_PAGE_SIZE: usize = 200;
 const PATH_FILTER_ALL: &str = "all";
@@ -40,12 +36,22 @@ pub fn list_session_platforms() -> Result<Vec<SessionPlatform>, String> {
         });
     }
 
+    // Order mirrors platform/registry.rs (session subset only).
     let claude_count = claude::count_claude_sessions()?;
     if claude_count > 0 {
         platforms.push(SessionPlatform {
             id: "claude-code".to_string(),
             display_name: "Claude Code".to_string(),
             session_count: claude_count,
+        });
+    }
+
+    let antigravity_count = antigravity::count_antigravity_sessions()?;
+    if antigravity_count > 0 {
+        platforms.push(SessionPlatform {
+            id: "antigravity".to_string(),
+            display_name: "Antigravity".to_string(),
+            session_count: antigravity_count,
         });
     }
 
@@ -119,6 +125,7 @@ fn list_sessions_all(platform_id: &str) -> Result<Vec<models::SessionSummary>, S
     match platform_id {
         "claude-code" => claude::list_claude_sessions_all(),
         "codex" => codex::list_codex_sessions_all(),
+        "antigravity" => antigravity::list_antigravity_sessions_all(),
         "kiro" => kiro::list_kiro_sessions_all(),
         "grok" => grok::list_grok_sessions_all(),
         "kimi" => kimi::list_kimi_sessions_all(),
@@ -294,6 +301,7 @@ fn last_session_messages(
     match platform_id {
         "claude-code" => claude::last_claude_messages(session_id),
         "codex" => codex::last_codex_messages(session_id),
+        "antigravity" => antigravity::last_antigravity_messages(session_id),
         "kiro" => kiro::last_kiro_messages(session_id),
         "grok" => grok::last_grok_messages(session_id),
         "kimi" => kimi::last_kimi_messages(session_id),
@@ -330,13 +338,28 @@ fn shell_quote(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
 }
 
+/// Whether a CLI name resolves on PATH. Platform-aware so Windows never
+/// shells out through `sh` (Git for Windows ships `sh.exe`; spawning it
+/// without CREATE_NO_WINDOW flashes a blank console when the user merely
+/// opens the resume modal — e.g. Grok/Kimi/Kiro `command_exists` probes).
 fn command_exists(command: &str) -> bool {
-    Command::new("sh")
-        .arg("-lc")
-        .arg(format!("command -v {} >/dev/null 2>&1", command))
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+    #[cfg(target_os = "windows")]
+    {
+        // `where` without a console window. Check bare name and `.exe`.
+        return executable_available(command)
+            || executable_available(&format!("{command}.exe"))
+            || executable_available(&format!("{command}.cmd"))
+            || executable_available(&format!("{command}.bat"));
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Command::new("sh")
+            .arg("-lc")
+            .arg(format!("command -v {} >/dev/null 2>&1", command))
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
 }
 
 /// Windows: check whether an executable is on PATH via `where`, without flashing
@@ -344,11 +367,11 @@ fn command_exists(command: &str) -> bool {
 /// returns is unchanged, so detection results are identical to before.
 #[cfg(target_os = "windows")]
 fn executable_available(exe: &str) -> bool {
-    Command::new("where")
-        .arg(exe)
+    let mut cmd = Command::new("where");
+    cmd.arg(exe)
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW)
+        .stderr(std::process::Stdio::null());
+    suppress_console(&mut cmd)
         .status()
         .map(|status| status.success())
         .unwrap_or(false)
@@ -512,7 +535,9 @@ fn launch_terminal_with_command(terminal_id: &str, command: &str) -> Result<(), 
             Ok(())
         }
         "powershell" => {
-            // Prefer pwsh (PowerShell 7+), fall back to powershell (5)
+            // Prefer pwsh (PowerShell 7+), fall back to powershell (5).
+            // Outer PowerShell is a launcher only — suppress its own console;
+            // Start-Process still opens the visible resume terminal the user asked for.
             let ps = if executable_available("pwsh.exe") {
                 "pwsh.exe"
             } else {
@@ -522,22 +547,26 @@ fn launch_terminal_with_command(terminal_id: &str, command: &str) -> Result<(), 
                 "Start-Process cmd.exe -ArgumentList '/k','{}'",
                 bat_path.to_string_lossy().replace('\'', "''")
             );
-            Command::new(ps)
-                .arg("-Command")
-                .arg(&ps_script)
+            let mut cmd = Command::new(ps);
+            cmd.arg("-NoProfile").arg("-Command").arg(&ps_script);
+            suppress_console(&mut cmd)
                 .spawn()
                 .map_err(|e| format!("Failed to launch terminal: {}", e))?;
             Ok(())
         }
         _ => {
-            // Default: use PowerShell Start-Process to avoid the cmd.exe flash
+            // Default: use PowerShell Start-Process so the outer PS host stays
+            // invisible (CREATE_NO_WINDOW + -WindowStyle Hidden). The resume
+            // cmd window itself is intentional and still shown.
             let bat_str = bat_path.to_string_lossy().replace('\'', "''");
             let ps_script = format!("Start-Process cmd.exe -ArgumentList '/k','{}'", bat_str);
-            Command::new("powershell.exe")
+            let mut cmd = Command::new("powershell.exe");
+            cmd.arg("-NoProfile")
                 .arg("-WindowStyle")
                 .arg("Hidden")
                 .arg("-Command")
-                .arg(&ps_script)
+                .arg(&ps_script);
+            suppress_console(&mut cmd)
                 .spawn()
                 .map_err(|e| format!("Failed to launch terminal: {}", e))?;
             Ok(())
@@ -559,6 +588,7 @@ pub fn get_session_messages(
     match platform_id {
         "claude-code" => claude::get_claude_messages(session_id, offset, limit),
         "codex" => codex::get_codex_messages(session_id, offset, limit),
+        "antigravity" => antigravity::get_antigravity_messages(session_id, offset, limit),
         "kiro" => kiro::get_kiro_messages(session_id, offset, limit),
         "grok" => grok::get_grok_messages(session_id, offset, limit),
         "kimi" => kimi::get_kimi_messages(session_id, offset, limit),
@@ -575,6 +605,7 @@ pub fn search_session_messages(
     match platform_id {
         "claude-code" => claude::search_claude_messages(&query_lower),
         "codex" => codex::search_codex_messages(&query_lower),
+        "antigravity" => antigravity::search_antigravity_messages(&query_lower),
         "kiro" => kiro::search_kiro_messages(&query_lower),
         "grok" => grok::search_grok_messages(&query_lower),
         "kimi" => kimi::search_kimi_messages(&query_lower),
@@ -587,6 +618,7 @@ pub fn delete_session(platform_id: &str, session_id: &str) -> Result<(), String>
     match platform_id {
         "claude-code" => claude::delete_claude_session(session_id),
         "codex" => codex::delete_codex_session(session_id),
+        "antigravity" => antigravity::delete_antigravity_session(session_id),
         "kiro" => kiro::delete_kiro_session(session_id),
         "grok" => grok::delete_grok_session(session_id),
         "kimi" => kimi::delete_kimi_session(session_id),
@@ -676,6 +708,15 @@ fn build_resume_command(platform_id: &str, session_id: &str) -> Result<String, S
                 return Err("Kimi Code CLI is not available on PATH.".to_string());
             }
             Ok(format!("kimi --session {}", shell_quote(session_id)))
+        }
+        "antigravity" => {
+            if !command_exists("agy") {
+                return Err("Antigravity CLI (agy) is not available on PATH.".to_string());
+            }
+            Ok(format!(
+                "agy --conversation={}",
+                shell_quote(session_id)
+            ))
         }
         // ZCode is an Electron desktop app: sessions have no terminal resume
         // command. The resume modal surfaces this error instead of a command.

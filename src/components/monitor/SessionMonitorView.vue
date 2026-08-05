@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted } from 'vue'
+import { computed, nextTick, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Activity, CheckCircle2, CircleStop } from 'lucide-vue-next'
 import AppModal from '@/components/ui/AppModal.vue'
+import AppLoading from '@/components/ui/AppLoading.vue'
 import SessionCard from '@/components/sessions/SessionCard.vue'
 import SessionMessagesModal from '@/components/sessions/SessionMessagesModal.vue'
 import SessionResumeModal from '@/components/sessions/SessionResumeModal.vue'
@@ -22,6 +23,12 @@ const { t, locale } = useI18n()
 const store = useSessionMonitorStore()
 const { showToast } = useToast()
 
+/** Full-page boot shell: title + wave loader only. No IPC has started yet
+ *  (or primary agent is still in flight). Heavy cards/modals stay unmounted. */
+const showBootLoading = computed(
+  () => store.loading && !store.hookStatus && store.displaySessions.length === 0,
+)
+
 const supportsHooks = computed(() => (HOOK_AGENTS as string[]).includes(store.activeAgent))
 const isAll = computed(() => store.activeAgent === 'all')
 const hookAction = computed(() => store.hookStatus?.installed ? 'uninstall' : 'install')
@@ -29,6 +36,7 @@ const HOOK_CONFIG_PATHS: Record<string, string> = {
   codex: '~/.codex/hooks.json',
   claude: '~/.claude/settings.json',
   cursor: '~/.cursor/hooks.json',
+  antigravity: '~/.gemini/config/hooks.json',
   grok: '~/.grok/hooks/agent-hub.json',
   kimi: '~/.kimi-code/config.toml',
   zcode: '~/.zcode/cli/config.json',
@@ -66,7 +74,7 @@ const primaryNotice = computed<{ kind: 'info' | 'warning' | 'error'; text: strin
   if (store.activeAgent === 'codex' && store.hookStatus?.installed) {
     return { kind: 'warning', text: t('session_monitor.trust_hint') }
   }
-  if ((['cursor', 'grok', 'kimi', 'zcode'] as string[]).includes(store.activeAgent) && store.hookStatus?.installed) {
+  if ((['cursor', 'grok', 'kimi', 'zcode', 'antigravity'] as string[]).includes(store.activeAgent) && store.hookStatus?.installed) {
     return { kind: 'info', text: t('session_monitor.hook_reload_hint') }
   }
   return null
@@ -89,12 +97,40 @@ function agentLabel(agent: MonitorAgent): string {
 
 /** Card badge: mark the concrete client when the capture channel proves it.
  *  Codex rows carry hook-detected provenance: the ChatGPT desktop / IDE
- *  client is marked as such, everything else stays "Codex". */
+ *  client is marked as such. Antigravity splits CLI / desktop / IDE via the
+ *  product data-dir in the hook payload. Everything else stays the agent name. */
 function agentBadgeLabel(session: AgentSessionState): string {
   if (session.agent === 'codex' && session.source === 'chatgpt') {
     return t('session_monitor.source_chatgpt')
   }
+  if (session.agent === 'antigravity') {
+    if (session.source === 'terminal') return t('session.source_antigravity_cli')
+    if (session.source === 'antigravity-ide') return t('session_monitor.source_antigravity_ide')
+    if (session.source === 'antigravity') return t('session_monitor.source_antigravity')
+  }
   return agentLabel(session.agent)
+}
+
+/** Client icon when the badge itself is ChatGPT; otherwise undefined. */
+function agentBadgeIcon(session: AgentSessionState): string | undefined {
+  return session.agent === 'codex' && session.source === 'chatgpt' ? 'chatgpt' : undefined
+}
+
+/** AgentIcon id for the primary badge (skipped when using ChatGPT client icon). */
+function agentBadgeAgentId(session: AgentSessionState): string | undefined {
+  if (agentBadgeIcon(session)) return undefined
+  return session.agent
+}
+
+/**
+ * Source chip only when it adds info the primary badge does not already
+ * carry. ChatGPT / Antigravity client-as-badge must not double with a chip.
+ */
+function agentSource(session: AgentSessionState): SessionState['source'] | null {
+  if (session.agent === 'codex' && session.source === 'chatgpt') return null
+  // Badge already encodes Antigravity product (CLI / client / IDE).
+  if (session.agent === 'antigravity') return null
+  return session.source ?? null
 }
 
 /** Title of the sessions section: the merged tab has no single agent name. */
@@ -119,6 +155,8 @@ function formatTime(timestamp: number): string {
 function sourceLabel(session: SessionState): string {
   if (session.source === 'chatgpt') return t('session_monitor.source_chatgpt')
   if (session.source === 'cursor') return t('session_monitor.source_cursor')
+  if (session.source === 'antigravity') return t('session_monitor.source_antigravity')
+  if (session.source === 'antigravity-ide') return t('session_monitor.source_antigravity_ide')
   return t('session_monitor.source_terminal')
 }
 
@@ -158,8 +196,22 @@ async function handleApplyHook() {
   }
 }
 
-onMounted(() => store.initialize())
-onUnmounted(() => store.dispose())
+// Paint the loading shell first; only then kick off IPC. Calling backend
+// work in the same turn as mount can stall the webview before the loader
+// appears — which is exactly the "click Monitor, freeze for seconds" feel.
+onMounted(() => {
+  if (!store.hydrated) {
+    store.beginEnter()
+  }
+  void nextTick(() => {
+    requestAnimationFrame(() => {
+      // One more macrotask so the browser actually commits the loader frame.
+      setTimeout(() => {
+        store.initialize()
+      }, 0)
+    })
+  })
+})
 </script>
 
 <template>
@@ -170,7 +222,7 @@ onUnmounted(() => store.dispose())
         <p class="session-monitor-subtitle">{{ t('session_monitor.subtitle') }}</p>
       </div>
       <button
-        v-if="supportsHooks"
+        v-if="supportsHooks && !showBootLoading"
         class="btn"
         :class="hookAction === 'uninstall' ? 'btn-danger' : 'btn-primary'"
         :disabled="store.previewLoading || store.hookLoading"
@@ -180,170 +232,176 @@ onUnmounted(() => store.dispose())
       </button>
     </div>
 
-    <div v-if="isAll" class="monitor-tag-row">
-      <button
-        v-for="tag in agentTags"
-        :key="tag.agent"
-        class="monitor-tag"
-        :class="tag.enabled ? 'is-on' : 'is-off'"
-        v-tooltip="t(tag.enabled ? 'session_monitor.tag_on' : 'session_monitor.tag_off')"
-        @click="store.activeAgent = tag.agent"
-      >
-        <span class="monitor-tag__dot" />
-        {{ agentLabel(tag.agent) }}
-      </button>
+    <!-- Boot shell: enter first, load later. Zero heavy children while loading. -->
+    <div v-if="showBootLoading" class="monitor-empty monitor-empty--boot">
+      <AppLoading :size="56">{{ t('session_monitor.loading') }}</AppLoading>
     </div>
 
-    <section v-if="supportsHooks" class="hook-card ah-card">
-      <div class="hook-card__status">
-        <CheckCircle2 v-if="store.hookStatus?.installed" :size="18" class="hook-card__ok" />
-        <CircleStop v-else :size="18" class="hook-card__missing" />
-        <div class="min-w-0">
-          <div class="hook-card__title">
-            {{ store.hookStatus?.installed
-              ? t('session_monitor.hook_installed', { agent: agentLabel(store.activeAgent as MonitorAgent) })
-              : t('session_monitor.hook_missing', { agent: agentLabel(store.activeAgent as MonitorAgent) }) }}
-          </div>
-          <div class="hook-card__path">
-            {{ store.hookStatus?.configPath || defaultConfigPath }}
-          </div>
-        </div>
-      </div>
-      <div class="hook-card__meta">
-        <span>{{ t('session_monitor.running_summary', { count: runningCount }) }}</span>
-        <span>{{ t('session_monitor.total_summary', { count: store.snapshot.sessions.length }) }}</span>
-      </div>
-    </section>
-
-    <p
-      v-if="primaryNotice"
-      class="ah-notice"
-      :class="{
-        'ah-notice--warning': primaryNotice.kind === 'warning',
-        'ah-notice--error': primaryNotice.kind === 'error',
-      }"
-    >
-      {{ primaryNotice.text }}
-    </p>
-
-    <div class="session-list-header">
-      <h2>{{ sessionsTitle() }}</h2>
-      <button class="btn btn-secondary btn-sm" :disabled="store.loading" @click="store.refresh">
-        {{ t('session_monitor.refresh') }}
-      </button>
-    </div>
-
-    <div v-if="store.loading && store.displaySessions.length === 0" class="monitor-empty">
-      {{ t('session_monitor.loading') }}
-    </div>
-    <div v-else-if="store.displaySessions.length === 0" class="monitor-empty">
-      <Activity :size="30" />
-      <strong>{{ t('session_monitor.empty') }}</strong>
-      <span>{{ emptyHint() }}</span>
-    </div>
-    <div v-else class="session-monitor-list">
-      <SessionCard
-        v-for="session in store.displaySessions"
-        :key="`${session.agent}-${session.sessionId}`"
-        :badge="agentBadgeLabel(session)"
-        :source="session.source"
-        :source-label="sourceLabel(session)"
-        :status="session.status"
-        :time="formatTime(session.updatedAt)"
-        :delete-note="t('session_monitor.delete_note')"
-        :title="session.userPrompt || t('session_monitor.no_prompt')"
-        :subtitle="session.cwd || undefined"
-        :resumable="sessionPlatform(session) !== null"
-        @open="sessionPlatform(session) !== null && store.openMessages(session)"
-        @resume="store.openResume(session)"
-        @delete="store.deleteSession(session.sessionId, session.agent)"
-      >
-        <div class="session-row__line">
-          <span>{{ t('session_monitor.assistant_reply') }}</span>
-          <p>{{ session.assistantReply || (session.status === 'running' ? t('session_monitor.waiting_reply', { agent: agentLabel(session.agent) }) : t('session_monitor.no_reply')) }}</p>
-        </div>
-      </SessionCard>
-    </div>
-
-    <SessionMessagesModal
-      :show="store.messagesModalOpen"
-      :platform-id="sessionPlatform(store.modalSession)"
-      :session-id="store.modalSession?.sessionId"
-      :title="store.modalSession?.userPrompt || undefined"
-      :project-path="store.modalSession?.cwd"
-      :started-at="store.modalSession?.updatedAt ? store.modalSession.updatedAt / 1000 : null"
-      @close="store.messagesModalOpen = false"
-    />
-
-    <SessionResumeModal
-      :show="store.resumeModalOpen"
-      :platform-id="sessionPlatform(store.resumeSession)"
-      :session-id="store.resumeSession?.sessionId"
-      :project-path="store.resumeSession?.cwd"
-      :title="store.resumeSession?.userPrompt || undefined"
-      @close="store.resumeModalOpen = false"
-    />
-
-    <AppModal
-      :show="store.previewOpen"
-      :title="store.preview?.action === 'uninstall'
-        ? t('session_monitor.uninstall_preview_title', { agent: agentLabel(store.previewAgent) })
-        : t('session_monitor.install_preview_title', { agent: agentLabel(store.previewAgent) })"
-      width-class="w-[44rem]"
-      :close-on-outside="!store.hookLoading"
-      @close="store.closeHookPreview"
-    >
-      <div v-if="store.previewLoading" class="preview-loading">
-        {{ t('session_monitor.preview_loading') }}
-      </div>
-      <div v-else-if="store.previewError" class="ah-notice ah-notice--error">
-        {{ store.previewError }}
-      </div>
-      <template v-else-if="store.preview">
-        <p class="preview-explanation">
-          {{ previewExplanation() }}
-        </p>
-
-        <dl class="preview-fields">
-          <div>
-            <dt>{{ t('session_monitor.config_file') }}</dt>
-            <dd>{{ store.preview.configPath }}</dd>
-          </div>
-          <div>
-            <dt>{{ t('session_monitor.hook_command') }}</dt>
-            <dd>{{ store.preview.command }}</dd>
-          </div>
-        </dl>
-
-        <p v-if="store.preview.action === 'install' && store.previewAgent === 'codex'" class="ah-notice ah-notice--warning">
-          {{ t('session_monitor.trust_hint') }}
-        </p>
-
-        <div class="preview-stats">
-          {{ t('session_monitor.preview_stats', { added: store.preview.added, removed: store.preview.removed }) }}
-        </div>
-        <pre v-if="store.preview.diffLines.length" class="hook-diff"><template v-for="(line, index) in store.preview.diffLines" :key="index"><span :class="`hook-diff__${line.tag}`">{{ line.tag === 'added' ? '+ ' : line.tag === 'removed' ? '- ' : '  ' }}{{ line.content }}</span></template></pre>
-        <p v-else class="preview-loading">{{ t('session_monitor.no_changes') }}</p>
-      </template>
-
-      <template #footer>
-        <button class="btn btn-secondary" :disabled="store.hookLoading" @click="store.closeHookPreview">
-          {{ t('action.cancel') }}
-        </button>
+    <template v-else>
+      <div v-if="isAll" class="monitor-tag-row">
         <button
-          class="btn"
-          :class="store.preview?.action === 'uninstall' ? 'btn-danger' : 'btn-primary'"
-          :disabled="!store.preview?.changed || store.hookLoading || store.previewLoading"
-          @click="handleApplyHook"
+          v-for="tag in agentTags"
+          :key="tag.agent"
+          class="monitor-tag"
+          :class="tag.enabled ? 'is-on' : 'is-off'"
+          v-tooltip="t(tag.enabled ? 'session_monitor.tag_on' : 'session_monitor.tag_off')"
+          @click="store.activeAgent = tag.agent"
         >
-          {{ store.hookLoading
-            ? t('session_monitor.applying')
-            : store.preview?.action === 'uninstall'
-              ? t('session_monitor.confirm_uninstall')
-              : t('session_monitor.confirm_install') }}
+          <span class="monitor-tag__dot" />
+          {{ agentLabel(tag.agent) }}
         </button>
-      </template>
-    </AppModal>
+      </div>
+
+      <section v-if="supportsHooks" class="hook-card ah-card">
+        <div class="hook-card__status">
+          <CheckCircle2 v-if="store.hookStatus?.installed" :size="18" class="hook-card__ok" />
+          <CircleStop v-else :size="18" class="hook-card__missing" />
+          <div class="min-w-0">
+            <div class="hook-card__title">
+              {{ store.hookStatus?.installed
+                ? t('session_monitor.hook_installed', { agent: agentLabel(store.activeAgent as MonitorAgent) })
+                : t('session_monitor.hook_missing', { agent: agentLabel(store.activeAgent as MonitorAgent) }) }}
+            </div>
+            <div class="hook-card__path">
+              {{ store.hookStatus?.configPath || defaultConfigPath }}
+            </div>
+          </div>
+        </div>
+        <div class="hook-card__meta">
+          <span>{{ t('session_monitor.running_summary', { count: runningCount }) }}</span>
+          <span>{{ t('session_monitor.total_summary', { count: store.snapshot.sessions.length }) }}</span>
+        </div>
+      </section>
+
+      <p
+        v-if="primaryNotice"
+        class="ah-notice"
+        :class="{
+          'ah-notice--warning': primaryNotice.kind === 'warning',
+          'ah-notice--error': primaryNotice.kind === 'error',
+        }"
+      >
+        {{ primaryNotice.text }}
+      </p>
+
+      <div class="session-list-header">
+        <h2>{{ sessionsTitle() }}</h2>
+        <button class="btn btn-secondary btn-sm" :disabled="store.loading" @click="store.refresh()">
+          {{ t('session_monitor.refresh') }}
+        </button>
+      </div>
+
+      <div v-if="store.displaySessions.length === 0" class="monitor-empty">
+        <Activity :size="30" />
+        <strong>{{ t('session_monitor.empty') }}</strong>
+        <span>{{ emptyHint() }}</span>
+      </div>
+      <div v-else class="session-monitor-list">
+        <SessionCard
+          v-for="session in store.displaySessions"
+          :key="`${session.agent}-${session.sessionId}`"
+          :badge="agentBadgeLabel(session)"
+          :badge-agent-id="agentBadgeAgentId(session)"
+          :badge-icon="agentBadgeIcon(session)"
+          :source="agentSource(session)"
+          :source-label="agentSource(session) ? sourceLabel(session) : undefined"
+          :status="session.status"
+          :time="formatTime(session.updatedAt)"
+          :delete-note="t('session_monitor.delete_note')"
+          :title="session.userPrompt || t('session_monitor.no_prompt')"
+          :subtitle="session.cwd || undefined"
+          :resumable="sessionPlatform(session) !== null"
+          @open="sessionPlatform(session) !== null && store.openMessages(session)"
+          @resume="store.openResume(session)"
+          @delete="store.deleteSession(session.sessionId, session.agent)"
+        >
+          <div class="session-row__line">
+            <span>{{ t('session_monitor.assistant_reply') }}</span>
+            <p>{{ session.assistantReply || (session.status === 'running' ? t('session_monitor.waiting_reply', { agent: agentLabel(session.agent) }) : t('session_monitor.no_reply')) }}</p>
+          </div>
+        </SessionCard>
+      </div>
+
+      <SessionMessagesModal
+        :show="store.messagesModalOpen"
+        :platform-id="sessionPlatform(store.modalSession)"
+        :session-id="store.modalSession?.sessionId"
+        :title="store.modalSession?.userPrompt || undefined"
+        :project-path="store.modalSession?.cwd"
+        :started-at="store.modalSession?.updatedAt ? store.modalSession.updatedAt / 1000 : null"
+        @close="store.messagesModalOpen = false"
+      />
+
+      <SessionResumeModal
+        :show="store.resumeModalOpen"
+        :platform-id="sessionPlatform(store.resumeSession)"
+        :session-id="store.resumeSession?.sessionId"
+        :project-path="store.resumeSession?.cwd"
+        :title="store.resumeSession?.userPrompt || undefined"
+        @close="store.resumeModalOpen = false"
+      />
+
+      <AppModal
+        :show="store.previewOpen"
+        :title="store.preview?.action === 'uninstall'
+          ? t('session_monitor.uninstall_preview_title', { agent: agentLabel(store.previewAgent) })
+          : t('session_monitor.install_preview_title', { agent: agentLabel(store.previewAgent) })"
+        width-class="w-[44rem]"
+        :close-on-outside="!store.hookLoading"
+        @close="store.closeHookPreview"
+      >
+        <div v-if="store.previewLoading" class="preview-loading">
+          {{ t('session_monitor.preview_loading') }}
+        </div>
+        <div v-else-if="store.previewError" class="ah-notice ah-notice--error">
+          {{ store.previewError }}
+        </div>
+        <template v-else-if="store.preview">
+          <p class="preview-explanation">
+            {{ previewExplanation() }}
+          </p>
+
+          <dl class="preview-fields">
+            <div>
+              <dt>{{ t('session_monitor.config_file') }}</dt>
+              <dd>{{ store.preview.configPath }}</dd>
+            </div>
+            <div>
+              <dt>{{ t('session_monitor.hook_command') }}</dt>
+              <dd>{{ store.preview.command }}</dd>
+            </div>
+          </dl>
+
+          <p v-if="store.preview.action === 'install' && store.previewAgent === 'codex'" class="ah-notice ah-notice--warning">
+            {{ t('session_monitor.trust_hint') }}
+          </p>
+
+          <div class="preview-stats">
+            {{ t('session_monitor.preview_stats', { added: store.preview.added, removed: store.preview.removed }) }}
+          </div>
+          <pre v-if="store.preview.diffLines.length" class="hook-diff"><template v-for="(line, index) in store.preview.diffLines" :key="index"><span :class="`hook-diff__${line.tag}`">{{ line.tag === 'added' ? '+ ' : line.tag === 'removed' ? '- ' : '  ' }}{{ line.content }}</span></template></pre>
+          <p v-else class="preview-loading">{{ t('session_monitor.no_changes') }}</p>
+        </template>
+
+        <template #footer>
+          <button class="btn btn-secondary" :disabled="store.hookLoading" @click="store.closeHookPreview">
+            {{ t('action.cancel') }}
+          </button>
+          <button
+            class="btn"
+            :class="store.preview?.action === 'uninstall' ? 'btn-danger' : 'btn-primary'"
+            :disabled="!store.preview?.changed || store.hookLoading || store.previewLoading"
+            @click="handleApplyHook"
+          >
+            {{ store.hookLoading
+              ? t('session_monitor.applying')
+              : store.preview?.action === 'uninstall'
+                ? t('session_monitor.confirm_uninstall')
+                : t('session_monitor.confirm_install') }}
+          </button>
+        </template>
+      </AppModal>
+    </template>
   </div>
 </template>
 
@@ -352,6 +410,7 @@ onUnmounted(() => store.dispose())
 .session-monitor-heading { align-items: flex-end; }
 .session-monitor-subtitle { margin-top: 5px; color: var(--ink-3); font-size: 13px; }
 .hook-card { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 14px; }
+.hook-card__loading { width: 100%; min-height: 52px; display: flex; align-items: center; justify-content: center; padding: 6px 0; }
 .hook-card__status { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .hook-card__ok { color: var(--success); flex: none; }
 .hook-card__missing { color: var(--warning); flex: none; }
@@ -393,6 +452,7 @@ onUnmounted(() => store.dispose())
 .session-row__line > span { color: var(--ink-4); }
 .session-row__line > p { min-width: 0; overflow: hidden; color: var(--ink-2); text-overflow: ellipsis; white-space: nowrap; }
 .monitor-empty { min-height: 230px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--ink-4); text-align: center; }
+.monitor-empty--boot { min-height: min(52vh, 420px); }
 .monitor-empty strong { color: var(--ink-2); font-size: 14px; }
 .monitor-empty span { font-size: 12px; }
 .preview-loading { padding: 16px 0; color: var(--ink-3); font-size: 13px; }

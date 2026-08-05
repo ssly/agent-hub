@@ -6,7 +6,7 @@ import { useAppStore } from '@/stores/app'
 import { useSkillsStore } from '@/stores/skills'
 import { usePluginsStore } from '@/stores/plugins'
 import { useSessionsStore } from '@/stores/sessions'
-import { useSessionMonitorStore, type MonitorTab } from '@/stores/session-monitor'
+import { MONITOR_AGENTS, useSessionMonitorStore, type MonitorTab } from '@/stores/session-monitor'
 import { useSwitchStore } from '@/stores/switch'
 import { useToast } from '@/composables/useToast'
 import { openUsageTray, pickPluginDirectory } from '@/lib/api'
@@ -56,6 +56,12 @@ const tabs = [
 ]
 
 async function handleTabClick(tabId: typeof tabs[number]['id']) {
+  // Monitor: flip loading on *before* the view mounts so the first paint
+  // already shows the wave loader (Pinia store HMR / cold IPC shouldn't look
+  // like a frozen tab switch).
+  if (tabId === 'monitor') {
+    sessionMonitorStore.beginEnter()
+  }
   appStore.switchTab(tabId)
   if (tabId === 'sessions') {
     sessionsStore.isLoading = true
@@ -91,12 +97,10 @@ function getSidebarItems() {
   if (appStore.currentTab === 'sessions') return sessionsStore.platforms
   if (appStore.currentTab === 'monitor') return [
     { id: 'all', display_name: t('session_monitor.agent_all') },
-    { id: 'codex', display_name: 'Codex' },
-    { id: 'claude', display_name: 'Claude Code' },
-    { id: 'cursor', display_name: 'Cursor' },
-    { id: 'grok', display_name: 'Grok Build' },
-    { id: 'kimi', display_name: 'Kimi Code' },
-    { id: 'zcode', display_name: 'ZCode' },
+    ...MONITOR_AGENTS.map(agent => ({
+      id: agent,
+      display_name: t(`session_monitor.agent_${agent}`),
+    })),
   ]
   if (appStore.currentTab === 'accounts') return [
     { id: 'codex', display_name: 'Codex' },

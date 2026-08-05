@@ -121,6 +121,7 @@ fn build_html(platform_id: &str, locale: &str, conversations: &[ExportConversati
     let platform_name = match platform_id {
         "claude-code" => "Claude Code",
         "codex" => "Codex",
+        "antigravity" => "Antigravity",
         "kiro" => "Kiro",
         "grok" => "Grok Build",
         "kimi" => "Kimi Code",

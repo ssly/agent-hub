@@ -1,13 +1,15 @@
 use super::capture::{
-    CLAUDE_HOOK_ARG, CODEX_HOOK_ARG, CURSOR_HOOK_ARG, GROK_HOOK_ARG, KIMI_HOOK_ARG, ZCODE_HOOK_ARG,
+    ANTIGRAVITY_HOOK_ARG, CLAUDE_HOOK_ARG, CODEX_HOOK_ARG, CURSOR_HOOK_ARG, GROK_HOOK_ARG,
+    KIMI_HOOK_ARG, ZCODE_HOOK_ARG,
 };
 use super::types::{AgentKind, HookChangePreview, HookDiffLine, HookStatus};
+use crate::win_console::suppress_console;
 use serde_json::{json, Map, Value};
 use similar::{ChangeTag, TextDiff};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use uuid::Uuid;
 
 const USER_PROMPT_SUBMIT: &str = "UserPromptSubmit";
@@ -26,6 +28,12 @@ const SUBAGENT_STOP: &str = "SubagentStop";
 const CURSOR_BEFORE_SUBMIT_PROMPT: &str = "beforeSubmitPrompt";
 const CURSOR_AFTER_AGENT_RESPONSE: &str = "afterAgentResponse";
 const CURSOR_STOP: &str = "stop";
+// Antigravity's official event set (no UserPromptSubmit): PreInvocation fires
+// before each model call; Stop when the execution loop ends.
+const ANTIGRAVITY_PRE_INVOCATION: &str = "PreInvocation";
+const ANTIGRAVITY_STOP: &str = "Stop";
+/// Top-level named hook entry written into ~/.gemini/config/hooks.json.
+const ANTIGRAVITY_HOOK_NAME: &str = "agent-hub";
 
 /// The managed hook events each agent gets on install. Codex stays at two:
 /// its hook system has no StopFailure/Interrupt events at all.
@@ -60,6 +68,7 @@ fn managed_events(agent: AgentKind) -> &'static [&'static str] {
         // ZCode snapshots hook config at session start; its two managed
         // events take no matcher.
         AgentKind::ZCode => &[USER_PROMPT_SUBMIT, STOP],
+        AgentKind::Antigravity => &[ANTIGRAVITY_PRE_INVOCATION, ANTIGRAVITY_STOP],
     }
 }
 
@@ -94,6 +103,7 @@ fn hook_arg(agent: AgentKind) -> Result<&'static str, String> {
         AgentKind::Grok => Ok(GROK_HOOK_ARG),
         AgentKind::Kimi => Ok(KIMI_HOOK_ARG),
         AgentKind::ZCode => Ok(ZCODE_HOOK_ARG),
+        AgentKind::Antigravity => Ok(ANTIGRAVITY_HOOK_ARG),
     }
 }
 
@@ -109,6 +119,8 @@ fn config_path(agent: AgentKind) -> Result<PathBuf, String> {
         AgentKind::Grok => Ok(home.join(".grok").join("hooks").join("agent-hub.json")),
         AgentKind::Kimi => Ok(home.join(".kimi-code").join("config.toml")),
         AgentKind::ZCode => Ok(home.join(".zcode").join("cli").join("config.json")),
+        // Shared by agy CLI, Antigravity 2.0, and IDE (docs + community).
+        AgentKind::Antigravity => Ok(home.join(".gemini").join("config").join("hooks.json")),
     }
 }
 
@@ -120,6 +132,7 @@ fn config_label(agent: AgentKind) -> &'static str {
         AgentKind::Grok => "Grok Hook 文件",
         AgentKind::Kimi => "Kimi Code 配置文件",
         AgentKind::ZCode => "ZCode 配置文件",
+        AgentKind::Antigravity => "Antigravity Hook 配置文件",
     }
 }
 
@@ -131,6 +144,7 @@ fn agent_label(agent: AgentKind) -> &'static str {
         AgentKind::Grok => "Grok Build",
         AgentKind::Kimi => "Kimi Code",
         AgentKind::ZCode => "ZCode",
+        AgentKind::Antigravity => "Antigravity",
     }
 }
 
@@ -143,6 +157,9 @@ pub fn get_hook_status(agent: AgentKind) -> Result<HookStatus, String> {
     }
     if agent == AgentKind::ZCode {
         return zcode_hook_status();
+    }
+    if agent == AgentKind::Antigravity {
+        return antigravity_hook_status();
     }
     let path = config_path(agent)?;
     let arg = hook_arg(agent)?;
@@ -224,6 +241,10 @@ pub fn preview_hook_change(
         let after = zcode_render_after(action, &path, &executable, &before)?;
         return Ok(build_preview(action, &path, &command, &before, &after));
     }
+    if agent == AgentKind::Antigravity {
+        let after = antigravity_render_after(action, &path, &command, &before)?;
+        return Ok(build_preview(action, &path, &command, &before, &after));
+    }
     let after = render_after(agent, action, &path, &command, arg, &before)?;
     Ok(build_preview(action, &path, &command, &before, &after))
 }
@@ -250,6 +271,8 @@ pub fn apply_hook_change(
         cursor_render_after(action, &path, &command, &before)?
     } else if agent == AgentKind::ZCode {
         zcode_render_after(action, &path, &expected_executable()?, &before)?
+    } else if agent == AgentKind::Antigravity {
+        antigravity_render_after(action, &path, &command, &before)?
     } else {
         render_after(agent, action, &path, &command, arg, &before)?
     };
@@ -452,14 +475,50 @@ fn expected_executable() -> Result<String, String> {
     Ok(executable.to_string_lossy().into_owned())
 }
 
+/// Windows: write/update a small `.cmd` shim that invokes the real GUI binary.
+///
+/// Release builds are `windows_subsystem = "windows"` (no console). When Grok
+/// (and some other CLIs) spawn hook commands through `cmd.exe` / shell without
+/// properly attaching redirected stdio to a GUI PE, the hook process gets an
+/// empty stdin and silently drops every event. Running through a `.cmd` keeps
+/// the pipe attached via `cmd`, which is the reliable pattern for GUI apps.
+///
+/// The shim is rewritten whenever `current_exe()` changes (portable installs,
+/// version upgrades) so reinstalling hooks always picks up the live binary.
+#[cfg(target_os = "windows")]
+fn ensure_windows_hook_runner() -> Result<PathBuf, String> {
+    let home = dirs::home_dir().ok_or_else(|| "home directory is unavailable".to_string())?;
+    let dir = home.join(".agent-hub").join("hook-runner");
+    fs::create_dir_all(&dir)
+        .map_err(|error| format!("unable to create hook-runner directory: {error}"))?;
+    let runner = dir.join("agent-hub-hook.cmd");
+    let exe = expected_executable()?.replace('"', "");
+    // %* forwards the hook arg (--agent-hub-*-hook). CRLF for cmd.exe.
+    let content = format!(
+        "@echo off\r\nREM Auto-generated by Agent Hub — do not edit.\r\n\"{exe}\" %*\r\n"
+    );
+    let needs_write = fs::read_to_string(&runner)
+        .map(|existing| existing != content)
+        .unwrap_or(true);
+    if needs_write {
+        fs::write(&runner, content)
+            .map_err(|error| format!("unable to write hook runner: {error}"))?;
+    }
+    Ok(runner)
+}
+
 fn expected_command(arg: &str) -> Result<String, String> {
-    let path = expected_executable()?;
     #[cfg(target_os = "windows")]
     {
-        return Ok(format!("\"{}\" {arg}", path.replace('"', "\\\"")));
+        // Prefer the .cmd shim (see ensure_windows_hook_runner). Quote the
+        // shim path for spaces under %USERPROFILE%; arg has no spaces.
+        let runner = ensure_windows_hook_runner()?;
+        let runner_path = runner.to_string_lossy().replace('"', "");
+        return Ok(format!("\"{runner_path}\" {arg}"));
     }
     #[cfg(not(target_os = "windows"))]
     {
+        let path = expected_executable()?;
         Ok(format!("'{}' {arg}", path.replace('\'', "'\\''")))
     }
 }
@@ -694,7 +753,13 @@ fn cursor_cli_version_issue() -> Option<String> {
         candidates.push(home.join(".local").join("bin").join("cursor-agent"));
     }
     for candidate in candidates {
-        let Ok(output) = Command::new(&candidate).arg("--version").output() else {
+        // Windows: CREATE_NO_WINDOW so probing cursor-agent never flashes a console.
+        let mut cmd = Command::new(&candidate);
+        cmd.arg("--version")
+            .stdin(Stdio::null())
+            .stderr(Stdio::null());
+        suppress_console(&mut cmd);
+        let Ok(output) = cmd.output() else {
             continue;
         };
         if !output.status.success() {
@@ -1065,6 +1130,148 @@ fn remove_zcode_managed_handlers(root: &mut Value) -> Result<(), String> {
     Ok(())
 }
 
+// --- Antigravity (named hooks.json entries under ~/.gemini/config) ----------
+// Schema (official): top-level keys are named hooks; each maps event names
+// (PreInvocation / Stop / …) to a flat list of command handlers. Shared by
+// agy CLI, Antigravity 2.0, and IDE. We own the `agent-hub` entry only.
+
+fn antigravity_hook_status() -> Result<HookStatus, String> {
+    let path = config_path(AgentKind::Antigravity)?;
+    let command = expected_command(ANTIGRAVITY_HOOK_ARG)?;
+    if !path.exists() {
+        return Ok(HookStatus {
+            installed: false,
+            config_path: path.display().to_string(),
+            command,
+            managed_handler_count: 0,
+            issue: None,
+        });
+    }
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("unable to read {}: {error}", path.display()))?;
+    let root = parse_root(&content, &path)?;
+    let managed = antigravity_managed_entries(&root);
+    let events = managed_events(AgentKind::Antigravity);
+    let installed = managed.len() == events.len()
+        && events
+            .iter()
+            .all(|event| managed.iter().filter(|(name, _)| name == event).count() == 1)
+        && managed.iter().all(|(_, cmd)| cmd == &command);
+    let issue = if !installed && !managed.is_empty() {
+        Some(format!(
+            "{} Hook 配置不完整或命令路径已变化，可重新安装进行修复。",
+            agent_label(AgentKind::Antigravity)
+        ))
+    } else {
+        None
+    };
+    Ok(HookStatus {
+        installed,
+        config_path: path.display().to_string(),
+        command,
+        managed_handler_count: managed.len(),
+        issue,
+    })
+}
+
+/// (event, full command string) pairs under the managed `agent-hub` entry.
+fn antigravity_managed_entries(root: &Value) -> Vec<(String, String)> {
+    root.get(ANTIGRAVITY_HOOK_NAME)
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|events| events.iter())
+        .filter_map(|(event, handlers)| handlers.as_array().map(|handlers| (event, handlers)))
+        .flat_map(|(event, handlers)| handlers.iter().map(move |handler| (event, handler)))
+        .filter(|(_, handler)| is_antigravity_managed_handler(handler))
+        .filter_map(|(event, handler)| {
+            handler
+                .get("command")
+                .and_then(Value::as_str)
+                .map(|command| (event.to_string(), command.to_string()))
+        })
+        .collect()
+}
+
+fn is_antigravity_managed_handler(handler: &Value) -> bool {
+    handler
+        .get("command")
+        .and_then(Value::as_str)
+        .is_some_and(|command| {
+            command
+                .split_whitespace()
+                .any(|part| part == ANTIGRAVITY_HOOK_ARG || part.ends_with(ANTIGRAVITY_HOOK_ARG))
+        })
+}
+
+fn antigravity_render_after(
+    action: HookAction,
+    path: &Path,
+    command: &str,
+    before: &str,
+) -> Result<String, String> {
+    if action == HookAction::Uninstall && before.is_empty() {
+        return Ok(String::new());
+    }
+    let mut root = if before.is_empty() {
+        Value::Object(Map::new())
+    } else {
+        parse_root(before, path)?
+    };
+    remove_antigravity_managed_entry(&mut root)?;
+    if action == HookAction::Install {
+        let root_object = root
+            .as_object_mut()
+            .ok_or_else(|| "Antigravity hooks.json root is not an object".to_string())?;
+        let mut entry = Map::new();
+        for event in managed_events(AgentKind::Antigravity) {
+            entry.insert(
+                event.to_string(),
+                json!([{
+                    "type": "command",
+                    "command": command,
+                    "timeout": 10
+                }]),
+            );
+        }
+        root_object.insert(ANTIGRAVITY_HOOK_NAME.to_string(), Value::Object(entry));
+    }
+    let mut rendered = serde_json::to_string_pretty(&root)
+        .map_err(|error| format!("unable to serialize Antigravity hooks.json: {error}"))?;
+    rendered.push('\n');
+    Ok(rendered)
+}
+
+fn remove_antigravity_managed_entry(root: &mut Value) -> Result<(), String> {
+    let Some(root_object) = root.as_object_mut() else {
+        return Err("Antigravity hooks.json root is not an object".to_string());
+    };
+    // Prefer dropping the whole named entry we own. If someone hand-edited
+    // foreign handlers into the same name, still strip only our command handlers.
+    if let Some(entry) = root_object.get_mut(ANTIGRAVITY_HOOK_NAME) {
+        if let Some(events) = entry.as_object_mut() {
+            let mut empty_events = Vec::new();
+            for (event_name, handlers_value) in events.iter_mut() {
+                let Some(handlers) = handlers_value.as_array_mut() else {
+                    continue;
+                };
+                handlers.retain(|handler| !is_antigravity_managed_handler(handler));
+                if handlers.is_empty() {
+                    empty_events.push(event_name.clone());
+                }
+            }
+            for event_name in empty_events {
+                events.remove(&event_name);
+            }
+            if events.is_empty() {
+                root_object.remove(ANTIGRAVITY_HOOK_NAME);
+            }
+        } else {
+            root_object.remove(ANTIGRAVITY_HOOK_NAME);
+        }
+    }
+    Ok(())
+}
+
 fn resolve_write_target(path: &Path) -> Result<PathBuf, String> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
@@ -1363,6 +1570,45 @@ mod tests {
             kimi_toml_escape("\"C:\\Tools\\Agent Hub.exe\" --agent-hub-kimi-hook"),
             "\\\"C:\\\\Tools\\\\Agent Hub.exe\\\" --agent-hub-kimi-hook"
         );
+    }
+
+    #[test]
+    fn antigravity_install_writes_named_entry_with_preinvocation_and_stop() {
+        let after = antigravity_render_after(
+            HookAction::Install,
+            Path::new("/tmp/hooks.json"),
+            "'/app/agent-hub' --agent-hub-antigravity-hook",
+            "",
+        )
+        .unwrap();
+        let root: Value = serde_json::from_str(&after).unwrap();
+        let managed = antigravity_managed_entries(&root);
+        assert_eq!(managed.len(), 2);
+        assert!(managed.iter().any(|(e, _)| e == "PreInvocation"));
+        assert!(managed.iter().any(|(e, _)| e == "Stop"));
+        assert!(root.get("agent-hub").is_some());
+    }
+
+    #[test]
+    fn antigravity_uninstall_removes_only_agent_hub_entry() {
+        let before = r#"{
+          "other-hook": { "Stop": [{ "type": "command", "command": "echo keep" }] },
+          "agent-hub": {
+            "PreInvocation": [{ "type": "command", "command": "'/app/agent-hub' --agent-hub-antigravity-hook" }],
+            "Stop": [{ "type": "command", "command": "'/app/agent-hub' --agent-hub-antigravity-hook" }]
+          }
+        }"#;
+        let after = antigravity_render_after(
+            HookAction::Uninstall,
+            Path::new("/tmp/hooks.json"),
+            "'/app/agent-hub' --agent-hub-antigravity-hook",
+            before,
+        )
+        .unwrap();
+        let root: Value = serde_json::from_str(&after).unwrap();
+        assert!(antigravity_managed_entries(&root).is_empty());
+        assert!(root.get("agent-hub").is_none());
+        assert!(root.get("other-hook").is_some());
     }
 
     #[test]

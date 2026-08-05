@@ -16,6 +16,7 @@ mod switch;
 mod sync;
 mod trash;
 mod tray;
+mod win_console;
 mod zcode_plugin;
 
 use state::AppState;
@@ -134,6 +135,11 @@ pub fn run() {
             commands::get_zcode_hook_status,
             commands::preview_zcode_hook_change,
             commands::apply_zcode_hook_change,
+            commands::get_antigravity_session_monitor_snapshot,
+            commands::delete_antigravity_session_monitor_session,
+            commands::get_antigravity_hook_status,
+            commands::preview_antigravity_hook_change,
+            commands::apply_antigravity_hook_change,
             claude_plugin::list_claude_plugins,
             claude_plugin::set_claude_plugin_enabled,
             commands::get_zcode_plugins,

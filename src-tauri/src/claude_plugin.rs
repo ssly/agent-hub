@@ -7,14 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use crate::paths::join_relative;
-
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
-
-// Suppress the transient console window when the GUI invokes Claude Code in
-// the background to list, enable, or disable plugins.
-#[cfg(target_os = "windows")]
-const CREATE_NO_WINDOW: u32 = 0x08000000;
+use crate::win_console::suppress_console;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ClaudePluginView {
@@ -189,16 +182,12 @@ fn claude_executable_candidates() -> Vec<PathBuf> {
     candidates
 }
 
-#[cfg(target_os = "windows")]
 fn background_command(executable: &Path) -> Command {
     let mut command = Command::new(executable);
-    command.creation_flags(CREATE_NO_WINDOW);
+    // Windows: CREATE_NO_WINDOW so listing/toggling Claude plugins never
+    // flashes a console behind the GUI.
+    suppress_console(&mut command);
     command
-}
-
-#[cfg(not(target_os = "windows"))]
-fn background_command(executable: &Path) -> Command {
-    Command::new(executable)
 }
 
 fn run_claude(args: &[&str], workspace: Option<&Path>) -> Result<Output, String> {

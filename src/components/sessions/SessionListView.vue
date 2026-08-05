@@ -84,8 +84,8 @@ function platformName(platformId: string | undefined): string {
 /** Badge with client-source refinement: Codex threads recorded as created by
  *  the ChatGPT desktop/IDE client (threads.source = "vscode") are marked as
  *  such; Kiro sessions all come from the kiro-cli transcript directory, so
- *  they are marked "Kiro CLI" (an IDE-sourced adapter could mark its own);
- *  anything else keeps the plain platform name. */
+ *  they are marked "Kiro CLI"; Antigravity splits CLI / desktop / IDE via
+ *  app_data_dir; anything else keeps the plain platform name. */
 function sessionBadge(session: { platform_id?: string; source?: string | null }): string {
   const id = session.platform_id || store.selectedPlatformId || ''
   if (id === 'codex' && session.source === 'chatgpt') {
@@ -94,7 +94,25 @@ function sessionBadge(session: { platform_id?: string; source?: string | null })
   if (id === 'kiro' && session.source === 'terminal') {
     return t('session.source_kiro_cli')
   }
+  if (id === 'antigravity') {
+    if (session.source === 'terminal') return t('session.source_antigravity_cli')
+    if (session.source === 'antigravity-ide') return t('session.source_antigravity_ide')
+    if (session.source === 'antigravity') return t('session.source_antigravity_app')
+  }
   return platformName(session.platform_id)
+}
+
+/** ChatGPT is a concrete Codex client source, not a standalone platform.
+ *  Its icon is therefore scoped to session cards only. */
+function sessionBadgeIcon(session: { platform_id?: string; source?: string | null }): string | undefined {
+  const id = session.platform_id || store.selectedPlatformId || ''
+  return id === 'codex' && session.source === 'chatgpt' ? 'chatgpt' : undefined
+}
+
+/** Platform id for AgentIcon. ChatGPT badge uses SessionClientIcon instead. */
+function sessionBadgeAgentId(session: { platform_id?: string; source?: string | null }): string | undefined {
+  if (sessionBadgeIcon(session)) return undefined
+  return session.platform_id || store.selectedPlatformId || undefined
 }
 
 // Single delete: the card already ran its two-step confirm, so this fires the
@@ -301,6 +319,8 @@ function clearSessionSearch() {
               v-for="session in store.sessions"
               :key="session.id"
               :badge="sessionBadge(session)"
+              :badge-agent-id="sessionBadgeAgentId(session)"
+              :badge-icon="sessionBadgeIcon(session)"
               :time="formatSessionTime(session.updated_at, locale)"
               :title="session.title || t('session.untitled')"
               :subtitle="session.project_path || t('session.no_project')"

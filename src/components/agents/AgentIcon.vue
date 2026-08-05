@@ -7,7 +7,6 @@ import {
   Route,
   Send,
   Triangle,
-  Zap,
 } from 'lucide-vue-next'
 import kimiCodeMask from '@/assets/agent-icons/kimi-code.png'
 import kiroMask from '@/assets/agent-icons/kiro.png'
@@ -17,6 +16,7 @@ import claudeCodeMask from '@/assets/agent-icons/claude-code.png'
 import codexMask from '@/assets/agent-icons/codex.png'
 import cursorMask from '@/assets/agent-icons/cursor.png'
 import grokBuildMask from '@/assets/agent-icons/grok-build.png'
+import zcodeMask from '@/assets/agent-icons/zcode.png'
 
 const props = withDefaults(defineProps<{
   agentId: string
@@ -44,6 +44,7 @@ const brandMasks: Record<string, string> = {
   codex: codexMask,
   cursor: cursorMask,
   grok: grokBuildMask,
+  zcode: zcodeMask,
 }
 
 const brandDetailMasks: Record<string, string> = {
@@ -57,7 +58,6 @@ const icons: Record<string, Component> = {
   hermes: Send,
   trae: Route,
   opencode: Triangle,
-  zcode: Zap,
 }
 
 const agentKey = computed(() => aliases[props.agentId] ?? props.agentId)

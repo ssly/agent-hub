@@ -11,7 +11,13 @@ export interface OrbWindow {
   window: UsageWindow
 }
 
-const props = defineProps<{ windows: OrbWindow[] }>()
+const props = withDefaults(defineProps<{
+  windows: OrbWindow[]
+  /** Ring-only layout: no legend side column, no hover tooltips. */
+  mini?: boolean
+}>(), {
+  mini: false,
+})
 const { t, locale } = useI18n()
 
 // Fixed viewBox; the graph renders at ~132px wide via CSS.
@@ -127,12 +133,13 @@ function tip(item: OrbWindow) {
 // window's lines joined together, placed beside the orb when there is room.
 const graphTip = computed(() => props.windows.map((item) => tip(item)).join('\n'))
 
-const centerRemain = computed(() => remainingPercent(bubbleWindow.value.window))
+/** Center readout is *used* share of the shortest window (not remaining). */
+const centerUsed = computed(() => Math.round(usedPercent(bubbleWindow.value.window)))
 </script>
 
 <template>
-  <div class="usage-orb">
-    <div class="usage-orb__graph" v-tooltip:right="graphTip">
+  <div class="usage-orb" :class="{ 'is-mini': mini }">
+    <div class="usage-orb__graph" v-tooltip:right="mini ? '' : graphTip">
       <svg viewBox="0 0 180 180" aria-hidden="true">
         <defs>
           <clipPath :id="clipId">
@@ -140,13 +147,11 @@ const centerRemain = computed(() => remainingPercent(bubbleWindow.value.window))
           </clipPath>
         </defs>
 
-        <!-- Quota rings: larger windows wrap the tank, largest outermost. The
-             fill arc tracks consumption; two tiny bubbles orbit each ring. -->
+        <!-- Outer rings (longer windows): accent color, arc = used %. -->
         <g
           v-for="(ring, index) in rings"
           :key="ring.item.key"
-          class="usage-orb__ring"
-          :class="`tone-${ring.item.tone}`"
+          class="usage-orb__ring tone-ring"
         >
           <circle class="ring-track" :cx="CX" :cy="CY" :r="ring.radius" />
           <circle
@@ -161,8 +166,8 @@ const centerRemain = computed(() => remainingPercent(bubbleWindow.value.window))
           </g>
         </g>
 
-        <!-- Bubble tank for the shortest window. -->
-        <g class="usage-orb__tank" :class="`tone-${bubbleWindow.tone}`">
+        <!-- Inner tank (shortest window): green water, level = used %. -->
+        <g class="usage-orb__tank tone-tank">
           <circle class="tank-bg" :cx="CX" :cy="CY" :r="bubbleR" />
           <g :clip-path="`url(#${clipId})`">
             <g class="tank-water" :style="waterStyle">
@@ -181,25 +186,24 @@ const centerRemain = computed(() => remainingPercent(bubbleWindow.value.window))
         </g>
       </svg>
 
+      <!-- Center readout: used % of the shortest window only (no label). -->
       <div class="usage-orb__center">
-        <strong>{{ centerRemain }}%</strong>
-        <span>{{ t('tray.remaining') }}</span>
+        <strong>{{ centerUsed }}%</strong>
       </div>
     </div>
 
-    <div class="usage-orb__side">
+    <div v-if="!mini" class="usage-orb__side">
       <ul class="usage-orb__legend">
         <li
-          v-for="item in windows"
+          v-for="(item, index) in windows"
           :key="item.key"
           v-tooltip:top="tip(item)"
-          :class="`tone-${item.tone}`"
+          :class="index === 0 ? 'tone-tank' : 'tone-ring'"
         >
           <span class="legend-dot" />
           <span class="legend-label">{{ item.label }} {{ t('tray.limit') }}</span>
           <span class="legend-nums">
-            <span class="legend-used">{{ t('tray.used') }} {{ Math.round(usedPercent(item.window)) }}%</span>
-            <strong class="legend-remain">{{ t('tray.remaining') }} {{ remainingPercent(item.window) }}%</strong>
+            <strong class="legend-used">{{ t('tray.used') }} {{ Math.round(usedPercent(item.window)) }}%</strong>
           </span>
         </li>
       </ul>
@@ -212,6 +216,8 @@ const centerRemain = computed(() => remainingPercent(bubbleWindow.value.window))
 
 <style scoped>
 .usage-orb { display: flex; align-items: center; gap: 14px; }
+.usage-orb.is-mini { justify-content: center; }
+/* Same graph size in mini and normal so the orb does not jump on mode switch. */
 .usage-orb__graph { position: relative; flex: 0 0 auto; width: 132px; }
 .usage-orb__graph svg { display: block; width: 100%; height: auto; }
 .usage-orb__side {
@@ -223,9 +229,9 @@ const centerRemain = computed(() => remainingPercent(bubbleWindow.value.window))
   gap: 8px;
 }
 
-.tone-primary { color: var(--tray-accent); }
-.tone-secondary { color: var(--tray-success); }
-.tone-monthly { color: var(--tray-highlight); }
+/* Inner circle = green; outer ring(s) = accent — both encode *used* share. */
+.tone-tank { color: var(--tray-success); }
+.tone-ring { color: var(--tray-accent); }
 
 /* Quota rings */
 .ring-track {
@@ -272,7 +278,7 @@ const centerRemain = computed(() => remainingPercent(bubbleWindow.value.window))
   100% { transform: translate(0, 0); opacity: 0; }
 }
 
-/* Center readout: remaining share of the shortest window. */
+/* Center readout: used % of the shortest window. */
 .usage-orb__center {
   position: absolute;
   inset: 0;
@@ -290,11 +296,9 @@ const centerRemain = computed(() => remainingPercent(bubbleWindow.value.window))
   line-height: 1.1;
 }
 /* Keep the readout legible when the water level rises behind it. */
-.usage-orb__center strong,
-.usage-orb__center span {
+.usage-orb__center strong {
   text-shadow: 0 0 3px var(--tray-inset), 0 0 7px var(--tray-inset), 0 0 2px var(--tray-inset);
 }
-.usage-orb__center span { color: var(--tray-ink-3); font-size: 10px; }
 
 /* Per-window legend rows: dot + label on line 1, used/remaining on line 2,
    sitting to the right of the orb so 1-window and 2-window providers share
@@ -329,8 +333,11 @@ const centerRemain = computed(() => remainingPercent(bubbleWindow.value.window))
 }
 .legend-label { color: var(--tray-ink-2); font-weight: 600; text-transform: uppercase; }
 .legend-nums { display: flex; gap: 8px; white-space: nowrap; }
-.legend-used { color: var(--tray-ink-3); font-variant-numeric: tabular-nums; }
-.legend-remain { color: var(--tray-ink); font-variant-numeric: tabular-nums; }
+.legend-used {
+  color: var(--tray-ink);
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
 
 @media (prefers-reduced-motion: reduce) {
   .wave, .ring-orbit, .tank-bubble { animation: none; }

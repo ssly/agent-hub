@@ -1252,11 +1252,11 @@ button:active:not(:disabled) {
   position: fixed;
   z-index: 90;
   max-width: 26rem;
-  /* Clamp long content (e.g. monitor prompts) to 6 lines with an ellipsis
+  /* Clamp long content (e.g. monitor prompts) to 3 lines with an ellipsis
      instead of a hard max-height cut that loses text mid-line. */
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 6;
+  -webkit-line-clamp: 3;
   overflow: hidden;
   padding: 7px 11px;
   border-radius: var(--radius-sm);

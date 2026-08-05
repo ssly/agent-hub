@@ -11,6 +11,7 @@ pub const CURSOR_HOOK_ARG: &str = "--agent-hub-cursor-hook";
 pub const GROK_HOOK_ARG: &str = "--agent-hub-grok-hook";
 pub const KIMI_HOOK_ARG: &str = "--agent-hub-kimi-hook";
 pub const ZCODE_HOOK_ARG: &str = "--agent-hub-zcode-hook";
+pub const ANTIGRAVITY_HOOK_ARG: &str = "--agent-hub-antigravity-hook";
 const MAX_HOOK_INPUT_BYTES: u64 = 256 * 1024;
 const MAX_IGNORED_SESSIONS: usize = 200;
 /// Kimi sub-agent markers older than this are treated as stale: the matching
@@ -55,6 +56,8 @@ pub fn try_capture_hook_event() -> bool {
         AgentKind::Kimi
     } else if std::env::args().any(|arg| arg == ZCODE_HOOK_ARG) {
         AgentKind::ZCode
+    } else if std::env::args().any(|arg| arg == ANTIGRAVITY_HOOK_ARG) {
+        AgentKind::Antigravity
     } else {
         return false;
     };
@@ -62,8 +65,10 @@ pub fn try_capture_hook_event() -> bool {
     if let Err(error) = capture_stdin_event(agent) {
         // Hooks must never block or fail an agent turn. This process
         // intentionally exits successfully even when the local event inbox is
-        // unavailable.
+        // unavailable. Always leave a breadcrumb so Windows silent failures
+        // (empty stdin from GUI-subsystem spawn) are diagnosable.
         eprintln!("agent-hub {} hook capture skipped: {error}", agent.as_str());
+        log_capture_error(agent, &error);
     }
     true
 }
@@ -74,6 +79,13 @@ fn capture_stdin_event(agent: AgentKind) -> Result<(), String> {
         .take(MAX_HOOK_INPUT_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(|error| format!("unable to read hook input: {error}"))?;
+    if bytes.is_empty() {
+        return Err(
+            "hook stdin was empty (Windows GUI-subsystem / shell spawn often causes this; \
+             reinstall Grok hooks after upgrading Agent Hub so the .cmd runner is used)"
+                .to_string(),
+        );
+    }
     if bytes.len() as u64 > MAX_HOOK_INPUT_BYTES {
         return Err("hook input exceeded 256 KiB".to_string());
     }
@@ -92,9 +104,17 @@ fn capture_stdin_event(agent: AgentKind) -> Result<(), String> {
     }
 
     let event_id = Uuid::new_v4().to_string();
-    let session_id = string_field_any(&input, &["session_id", "sessionId", "conversation_id"])
-        .or_else(|| std::env::var("CODEX_THREAD_ID").ok())
-        .unwrap_or_else(|| format!("unknown-{event_id}"));
+    let session_id = string_field_any(
+        &input,
+        &[
+            "session_id",
+            "sessionId",
+            "conversation_id",
+            "conversationId",
+        ],
+    )
+    .or_else(|| std::env::var("CODEX_THREAD_ID").ok())
+    .unwrap_or_else(|| format!("unknown-{event_id}"));
 
     // Kimi Code fires the plain Stop event when a SUB-AGENT's model turn ends
     // (payload identical to the main turn's Stop, always BEFORE SubagentStop —
@@ -140,19 +160,28 @@ fn capture_stdin_event(agent: AgentKind) -> Result<(), String> {
     }
 
     // Codex/Claude/Kimi/ZCode wrap events in snake_case, Grok in camelCase.
-    let event_name = string_field_any(&input, &["hook_event_name", "hookEventName"])
-        .ok_or_else(|| "hook_event_name is missing".to_string())?;
+    // Antigravity payloads omit hookEventName — infer from field shape.
+    let raw_event_name = string_field_any(&input, &["hook_event_name", "hookEventName"])
+        .or_else(|| infer_antigravity_event_name(agent, &input));
+    let event_name = raw_event_name.ok_or_else(|| "hook_event_name is missing".to_string())?;
     let Some(event_name) = canonical_event_name(&event_name) else {
         return Ok(());
     };
 
-    let user_prompt = prompt_field(&input).map(|prompt| {
+    let mut user_prompt = prompt_field(&input).map(|prompt| {
         if agent == AgentKind::Grok {
             unwrap_grok_user_query(&prompt)
         } else {
             prompt
         }
     });
+    // Antigravity PreInvocation/Stop never carry the user text; pull the last
+    // USER_INPUT from the conversation transcript when available.
+    if agent == AgentKind::Antigravity && user_prompt.is_none() {
+        if let Some(path) = string_field_any(&input, &["transcriptPath", "transcript_path"]) {
+            user_prompt = last_transcript_user_prompt(&path);
+        }
+    }
 
     // Codex desktop only: drop internal desktop turns (ambient suggestions,
     // safety reviewer, memory consolidation). Their Stop event carries no
@@ -178,12 +207,22 @@ fn capture_stdin_event(agent: AgentKind) -> Result<(), String> {
     let source = match agent {
         AgentKind::Codex => detect_source(),
         AgentKind::Cursor => SessionSource::Cursor,
+        // Shared hooks.json; product is encoded in transcriptPath /
+        // artifactDirectoryPath (antigravity-cli | antigravity | antigravity-ide).
+        AgentKind::Antigravity => detect_antigravity_source(&input),
         // Claude Desktop is intentionally out of scope; the Claude Code hook
         // only fires for terminal sessions. Grok Build and Kimi Code are
         // terminal CLIs, and the ZCode hook payload carries no client
         // discriminator.
         _ => SessionSource::Terminal,
     };
+    let mut assistant_reply = assistant_reply_field(agent, &input);
+    if agent == AgentKind::Antigravity && event_name == "Stop" && assistant_reply.is_none() {
+        if let Some(path) = string_field_any(&input, &["transcriptPath", "transcript_path"]) {
+            assistant_reply = last_transcript_assistant_reply(&path);
+        }
+    }
+
     let event = HookEvent {
         event_id: event_id.clone(),
         agent,
@@ -193,7 +232,7 @@ fn capture_stdin_event(agent: AgentKind) -> Result<(), String> {
         source,
         cwd: cwd_field(&input),
         user_prompt,
-        assistant_reply: assistant_reply_field(agent, &input),
+        assistant_reply,
         occurred_at: now_millis(),
     };
 
@@ -225,7 +264,9 @@ fn capture_stdin_event(agent: AgentKind) -> Result<(), String> {
 /// are normalized to Stop because the turn is over either way.
 fn canonical_event_name(name: &str) -> Option<&'static str> {
     match name {
-        "UserPromptSubmit" | "user_prompt_submit" => Some("UserPromptSubmit"),
+        "UserPromptSubmit" | "user_prompt_submit" | "PreInvocation" | "pre_invocation" => {
+            Some("UserPromptSubmit")
+        }
         "beforeSubmitPrompt" => Some("UserPromptSubmit"),
         "afterAgentResponse" => Some("AssistantResponse"),
         "Stop" | "stop" | "Interrupt" | "interrupt" | "StopFailure" | "stop_failure" => {
@@ -233,6 +274,30 @@ fn canonical_event_name(name: &str) -> Option<&'static str> {
         }
         _ => None,
     }
+}
+
+/// Antigravity stdin payloads have no hookEventName. Infer from documented
+/// field shapes: Stop carries `terminationReason`/`fullyIdle`; PreInvocation
+/// carries `invocationNum`.
+fn infer_antigravity_event_name(agent: AgentKind, input: &serde_json::Value) -> Option<String> {
+    if agent != AgentKind::Antigravity {
+        return None;
+    }
+    if input.get("terminationReason").is_some()
+        || input.get("termination_reason").is_some()
+        || input.get("fullyIdle").is_some()
+        || input.get("fully_idle").is_some()
+    {
+        return Some("Stop".to_string());
+    }
+    if input.get("invocationNum").is_some() || input.get("invocation_num").is_some() {
+        return Some("PreInvocation".to_string());
+    }
+    // Fallback: conversation lifecycle without tool fields → treat as start.
+    if string_field_any(input, &["conversationId", "conversation_id"]).is_some() {
+        return Some("PreInvocation".to_string());
+    }
+    None
 }
 
 fn string_field_any(input: &serde_json::Value, keys: &[&str]) -> Option<String> {
@@ -301,16 +366,64 @@ fn resolve_turn_id(input: &serde_json::Value, fallback: &str) -> String {
 }
 
 fn cwd_field(input: &serde_json::Value) -> Option<String> {
-    string_field(input, "cwd").or_else(|| {
-        input
-            .get("workspace_roots")
-            .and_then(serde_json::Value::as_array)
-            .and_then(|roots| roots.first())
+    string_field(input, "cwd")
+        .or_else(|| {
+            input
+                .get("workspace_roots")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|roots| roots.first())
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .or_else(|| {
+            // Antigravity: workspacePaths is an array of absolute dirs.
+            input
+                .get("workspacePaths")
+                .or_else(|| input.get("workspace_paths"))
+                .and_then(serde_json::Value::as_array)
+                .and_then(|roots| roots.first())
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+}
+
+fn last_transcript_user_prompt(path: &str) -> Option<String> {
+    last_transcript_role(path, "USER_INPUT").map(|text| {
+        crate::session::antigravity::unwrap_user_request(&text)
+    })
+}
+
+fn last_transcript_assistant_reply(path: &str) -> Option<String> {
+    last_transcript_role(path, "PLANNER_RESPONSE")
+}
+
+fn last_transcript_role(path: &str, want_type: &str) -> Option<String> {
+    use std::io::{BufRead, BufReader};
+    let file = fs::File::open(path).ok()?;
+    let reader = BufReader::new(file);
+    let mut last = None;
+    for line in reader.lines().flatten() {
+        let value: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        if value.get("type").and_then(serde_json::Value::as_str) != Some(want_type) {
+            continue;
+        }
+        if let Some(content) = value
+            .get("content")
             .and_then(serde_json::Value::as_str)
             .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-    })
+            .filter(|text| !text.is_empty())
+        {
+            last = Some(content.to_string());
+        }
+    }
+    last
 }
 
 fn assistant_reply_field(agent: AgentKind, input: &serde_json::Value) -> Option<String> {
@@ -343,6 +456,38 @@ fn source_from_originator(originator: &str) -> SessionSource {
         SessionSource::Chatgpt
     } else {
         SessionSource::Terminal
+    }
+}
+
+/// Map Antigravity product data dir to a SessionSource. Check the longer
+/// product names first so `antigravity-cli` is not mistaken for bare
+/// `antigravity`.
+fn detect_antigravity_source(input: &serde_json::Value) -> SessionSource {
+    let path = string_field_any(
+        input,
+        &[
+            "transcriptPath",
+            "transcript_path",
+            "artifactDirectoryPath",
+            "artifact_directory_path",
+        ],
+    )
+    .unwrap_or_default()
+    .replace('\\', "/")
+    .to_ascii_lowercase();
+    antigravity_source_from_path(&path)
+}
+
+fn antigravity_source_from_path(path: &str) -> SessionSource {
+    if path.contains("antigravity-cli") {
+        SessionSource::Terminal
+    } else if path.contains("antigravity-ide") {
+        SessionSource::AntigravityIde
+    } else if path.contains("antigravity") {
+        SessionSource::Antigravity
+    } else {
+        // Unknown path: prefer the desktop product (majority of local data).
+        SessionSource::Antigravity
     }
 }
 
@@ -508,6 +653,27 @@ fn now_millis() -> i64 {
         .unwrap_or_default()
 }
 
+/// Always-on breadcrumb for capture failures (empty stdin, bad JSON, IO).
+/// Lives next to hook-debug.jsonl so Windows users can diagnose silent hooks
+/// without enabling AGENT_HUB_HOOK_DEBUG.
+fn log_capture_error(agent: AgentKind, error: &str) {
+    let Ok(path) = monitor_root().map(|root| root.join("hook-capture-error.log")) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(
+            file,
+            "{} agent={} error={}",
+            now_millis(),
+            agent.as_str(),
+            error
+        );
+    }
+}
+
 /// Development aid: append every raw hook payload to
 /// `~/.agent-hub/session-monitor/hook-debug.jsonl`. Active in debug builds or
 /// when AGENT_HUB_HOOK_DEBUG is set, so release builds never write it unless
@@ -577,6 +743,33 @@ mod tests {
         );
         assert_eq!(source_from_originator("chatgpt"), SessionSource::Chatgpt);
         assert_eq!(source_from_originator("codex cli"), SessionSource::Terminal);
+    }
+
+    #[test]
+    fn antigravity_path_distinguishes_cli_desktop_and_ide() {
+        assert_eq!(
+            antigravity_source_from_path(
+                "/Users/x/.gemini/antigravity-cli/brain/id/.system_generated/logs/transcript.jsonl"
+            ),
+            SessionSource::Terminal
+        );
+        assert_eq!(
+            antigravity_source_from_path(
+                "/Users/x/.gemini/antigravity/brain/id/.system_generated/logs/transcript.jsonl"
+            ),
+            SessionSource::Antigravity
+        );
+        assert_eq!(
+            antigravity_source_from_path(
+                "/Users/x/.gemini/antigravity-ide/brain/id/.system_generated/logs/transcript.jsonl"
+            ),
+            SessionSource::AntigravityIde
+        );
+        // Longer product names must win over the bare "antigravity" segment.
+        assert_eq!(
+            antigravity_source_from_path("C:\\Users\\x\\.gemini\\antigravity-cli\\brain\\x"),
+            SessionSource::Terminal
+        );
     }
 
     #[test]
