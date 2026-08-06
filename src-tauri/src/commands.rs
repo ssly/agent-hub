@@ -1052,13 +1052,34 @@ pub async fn download_and_install_update_resumable<R: Runtime>(
         )));
     }
 
+    // Reject obvious HTML error pages from flaky mirrors before streaming.
+    if response_looks_like_html(response.headers().get(http::header::CONTENT_TYPE)) {
+        return Err(CommandError::SyncError(
+            if use_mirror {
+                "国内镜像返回了非安装包内容（可能是错误页）。请改用 GitHub 直连重试。"
+            } else {
+                "下载地址返回了非安装包内容，请稍后重试。"
+            }
+            .to_string(),
+        ));
+    }
+
     let content_length = response
         .headers()
         .get(CONTENT_LENGTH)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok());
-    let total = parse_total_from_content_range(response.headers().get(CONTENT_RANGE))
-        .or_else(|| content_length.map(|len| len.saturating_add(resumed_from)));
+    // Prefer Content-Range's full size. On 206, Content-Length is remaining
+    // bytes only — do not treat it as full total by itself.
+    let total = parse_total_from_content_range(response.headers().get(CONTENT_RANGE)).or_else(
+        || {
+            if response.status() == StatusCode::PARTIAL_CONTENT {
+                content_length.map(|len| len.saturating_add(resumed_from))
+            } else {
+                content_length
+            }
+        },
+    );
 
     let mut file = if resumed_from > 0 && response.status() == StatusCode::PARTIAL_CONTENT {
         OpenOptions::new()
@@ -1076,14 +1097,22 @@ pub async fn download_and_install_update_resumable<R: Runtime>(
     };
 
     let mut downloaded = resumed_from;
+    // Lock total once known so later header quirks cannot shrink it.
+    let mut locked_total = total;
     let _ = on_event.send(ResumableDownloadEvent::Started {
         content_length,
-        total,
+        total: locked_total,
         resumed_from,
         downloaded,
     });
 
     let mut stream = response.bytes_stream();
+    // Throttle progress events so the UI is not flooded (mirrors can send
+    // tiny chunks); always emit on completion of the loop body via Finished.
+    let mut last_emit = std::time::Instant::now()
+        .checked_sub(Duration::from_secs(1))
+        .unwrap_or_else(std::time::Instant::now);
+    let mut last_emitted_downloaded = downloaded;
     while let Some(chunk) = stream.next().await {
         // Check the cancellation flag each iteration so the user can abort
         // mid-download (e.g. when switching to a China mirror).
@@ -1096,19 +1125,65 @@ pub async fn download_and_install_update_resumable<R: Runtime>(
         file.write_all(&chunk)
             .map_err(|err| CommandError::SyncError(err.to_string()))?;
         downloaded = downloaded.saturating_add(chunk.len() as u64);
-        let _ = on_event.send(ResumableDownloadEvent::Progress {
-            chunk_length: chunk.len(),
-            total,
-            downloaded,
-        });
+        let now = std::time::Instant::now();
+        let advanced = downloaded.saturating_sub(last_emitted_downloaded) >= 256 * 1024;
+        let timed_out = now.duration_since(last_emit) >= Duration::from_millis(120);
+        if advanced || timed_out {
+            let _ = on_event.send(ResumableDownloadEvent::Progress {
+                chunk_length: chunk.len(),
+                total: locked_total,
+                downloaded,
+            });
+            last_emit = now;
+            last_emitted_downloaded = downloaded;
+        }
     }
     file.flush()
         .map_err(|err| CommandError::SyncError(err.to_string()))?;
 
+    if let Some(expected) = locked_total {
+        if downloaded != expected {
+            let _ = fs::remove_file(&partial_path);
+            return Err(CommandError::SyncError(format!(
+                "下载不完整（{} / {} 字节）{}。请重试或改用另一下载源。",
+                downloaded,
+                expected,
+                if use_mirror { "，国内镜像可能中断" } else { "" }
+            )));
+        }
+    }
+
     let bytes = fs::read(&partial_path).map_err(|err| CommandError::SyncError(err.to_string()))?;
-    verify_update_signature(&bytes, &update.signature, &pubkey)?;
+    if bytes.len() < 1024 {
+        let _ = fs::remove_file(&partial_path);
+        return Err(CommandError::SyncError(
+            if use_mirror {
+                "国内镜像返回的文件过小（可能是错误页）。请改用 GitHub 直连重试。"
+            } else {
+                "下载文件过小，安装包无效。请稍后重试。"
+            }
+            .to_string(),
+        ));
+    }
+    if let Err(err) = verify_update_signature(&bytes, &update.signature, &pubkey) {
+        let _ = fs::remove_file(&partial_path);
+        let detail = match err {
+            CommandError::SyncError(message) => message,
+            CommandError::General(message) => message,
+            CommandError::NotFound(message) => message,
+        };
+        return Err(CommandError::SyncError(if use_mirror {
+            format!(
+                "签名校验失败（国内镜像可能返回了损坏或不完整的文件）。请改用 GitHub 直连重试。({detail})"
+            )
+        } else {
+            format!("签名校验失败: {detail}")
+        }));
+    }
+    // Prefer actual file size as final total so the bar always ends at 100%.
+    locked_total = Some(locked_total.unwrap_or(downloaded).max(downloaded));
     let _ = on_event.send(ResumableDownloadEvent::Finished {
-        total,
+        total: locked_total,
         downloaded,
         used_resume: resumed_from > 0,
     });
@@ -1117,6 +1192,17 @@ pub async fn download_and_install_update_resumable<R: Runtime>(
         .map_err(|err| CommandError::SyncError(err.to_string()))?;
     let _ = fs::remove_file(&partial_path);
     Ok(())
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn response_looks_like_html(content_type: Option<&http::HeaderValue>) -> bool {
+    content_type
+        .and_then(|value| value.to_str().ok())
+        .map(|value| {
+            let lower = value.to_ascii_lowercase();
+            lower.contains("text/html") || lower.contains("text/plain")
+        })
+        .unwrap_or(false)
 }
 
 #[cfg(any(target_os = "android", target_os = "ios"))]

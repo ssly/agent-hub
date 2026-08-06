@@ -547,7 +547,7 @@
     "use_mirror": "Download via China Mirror",
     "switch_to_mirror": "Switch to China Mirror",
     "switch_to_direct": "Switch to Normal Download",
-    "mirror_notice": "The mirror is used only when you choose it. The downloaded package is still signature-verified.",
+    "mirror_notice": "The mirror is used only when you choose it. The package is still signature-verified. If verification fails, retry via GitHub direct download.",
     "new_version_toast": "New version v{version} found. Click the version in the sidebar to view details and update.",
     "update_available_short": "Update",
     "downloading_title": "Downloading update {percent}% — click to view"

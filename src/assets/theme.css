@@ -1034,6 +1034,16 @@
 }
 .ah-modal--bare { overflow: hidden; }
 .ah-modal__body--bare { padding: 0; }
+/* About modal: compact shell; release notes own the only scrollbar. */
+.ah-modal.about-modal-shell {
+  max-height: min(78vh, 36rem);
+}
+.ah-modal.about-modal-shell .ah-modal__body--bare {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
 /* Fill mode: the modal pins to a fixed height and the body stops scrolling,
    so one slotted region (e.g. a message list) owns the single scrollbar. */
 .ah-modal--fill { height: 88vh; }

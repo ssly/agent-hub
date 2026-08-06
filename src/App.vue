@@ -220,29 +220,43 @@ async function handleInstallUpdate(useMirror = false, clearCache = false) {
     }
 
     const channel = new Channel<any>()
+    // Progress must be monotonic: mirrors sometimes flip Content-Length between
+    // remaining-bytes and full size, which would otherwise make the bar jump
+    // backwards (e.g. 80% → 70%).
+    const applyDownloadProgress = (downloadedRaw: number, totalRaw?: number) => {
+      const downloaded = Math.max(0, Number(downloadedRaw) || 0)
+      const totalHint = Math.max(0, Number(totalRaw) || 0)
+      if (totalHint > 0) {
+        // Prefer a larger total once known; never shrink (avoids percent drops).
+        if (appStore.updateTotal <= 0 || totalHint >= appStore.updateTotal) {
+          appStore.updateTotal = totalHint
+        }
+      }
+      if (downloaded > appStore.updateDownloaded) {
+        appStore.updateDownloaded = downloaded
+      }
+      const total = appStore.updateTotal
+      if (total > 0) {
+        const next = Math.min(100, Math.round((appStore.updateDownloaded / total) * 100))
+        if (next > appStore.updateProgress) {
+          appStore.updateProgress = next
+        }
+      }
+    }
     channel.onmessage = (event: any) => {
       const eventName = String(event?.event || '').toLowerCase()
       if (eventName === 'started') {
-        const total = event.data?.total || event.data?.contentLength || 0
-        const resumed = event.data?.resumedFrom || 0
-        appStore.updateTotal = total
-        appStore.updateDownloaded = resumed
-        if (total > 0) {
-          appStore.updateProgress = Math.min(100, Math.round((resumed / total) * 100))
-        }
-      } else if (eventName === 'progress') {
+        // Prefer full-file total; contentLength alone may be remaining bytes on 206.
         const total = event.data?.total || 0
-        const downloaded = event.data?.downloaded || 0
-        if (total > 0) appStore.updateTotal = total
-        appStore.updateDownloaded = downloaded
-        if (total > 0) {
-          appStore.updateProgress = Math.min(100, Math.round((downloaded / total) * 100))
-        }
+        const resumed = event.data?.resumedFrom || 0
+        applyDownloadProgress(resumed, total)
+      } else if (eventName === 'progress') {
+        applyDownloadProgress(event.data?.downloaded || 0, event.data?.total || 0)
       } else if (eventName === 'finished') {
         const total = event.data?.total || appStore.updateTotal
         const downloaded = event.data?.downloaded || total
-        appStore.updateTotal = total
-        appStore.updateDownloaded = downloaded
+        if (total > 0) appStore.updateTotal = total
+        appStore.updateDownloaded = Math.max(appStore.updateDownloaded, downloaded || 0)
         appStore.updateProgress = 100
       }
     }
@@ -496,15 +510,16 @@ onBeforeUnmount(() => {
       bare
       :close-on-outside="!aboutUpdateStatus || aboutUpdateStatus !== 'installing'"
       @close="appStore.aboutModalOpen = false"
-      width-class="w-[30rem]"
+      width-class="w-[26rem] about-modal-shell"
     >
       <div class="about-modal">
-        <!-- Header: brand image (large, top-right) + identity text on the left.
-             No close button — click outside to dismiss (except during download). -->
+        <!-- Compact header: smaller brand mark + identity. -->
         <div class="about-head">
           <div class="about-head__text">
-            <h2 class="about-name">Agent Hub</h2>
-            <div class="about-version font-mono">v{{ appStore.appVersion }}</div>
+            <div class="about-head__title-row">
+              <h2 class="about-name">Agent Hub</h2>
+              <span class="about-version font-mono">v{{ appStore.appVersion }}</span>
+            </div>
             <p class="about-tagline">{{ t('about.tagline') }}</p>
           </div>
           <div class="about-head__brand">
@@ -512,7 +527,6 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <!-- Meta rows -->
         <dl class="about-meta">
           <div class="about-meta__row">
             <dt class="about-meta__label">{{ t('about.author_label') }}</dt>
@@ -538,7 +552,6 @@ onBeforeUnmount(() => {
           </div>
         </dl>
 
-        <!-- Check for Updates -->
         <div class="about-update">
           <button
             class="btn btn-primary w-full"
@@ -549,7 +562,6 @@ onBeforeUnmount(() => {
             <span v-else>{{ t('about.check_updates') }}</span>
           </button>
 
-          <!-- Status -->
           <div v-if="aboutUpdateStatus === 'uptodate'" class="about-update__status about-update__status--ok">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
             {{ t('about.up_to_date') }}
@@ -561,6 +573,7 @@ onBeforeUnmount(() => {
               <span class="about-update__version font-mono">v{{ aboutUpdateInfo.version }}</span>
             </div>
 
+            <!-- Only the notes pane scrolls — avoids a second modal scrollbar. -->
             <div
               v-if="aboutUpdateInfo.body"
               class="about-update__body"
@@ -591,7 +604,7 @@ onBeforeUnmount(() => {
               <div
                 :class="[
                   'about-progressbar__fill',
-                  aboutTotal > 0 ? 'transition-all duration-150' : 'update-progress-indeterminate',
+                  aboutTotal > 0 ? 'about-progressbar__fill--known' : 'update-progress-indeterminate',
                 ]"
                 :style="aboutTotal > 0 ? { width: aboutProgress + '%' } : undefined"
               ></div>
@@ -619,7 +632,7 @@ onBeforeUnmount(() => {
                 {{ t('about.retry_mirror') }}
               </button>
             </div>
-            <div v-if="aboutUpdateInfo" class="about-update__meta">
+            <div v-if="aboutUpdateInfo" class="about-update__meta about-update__meta--left">
               {{ t('about.mirror_notice') }}
             </div>
           </div>
@@ -644,34 +657,39 @@ onBeforeUnmount(() => {
   100% { transform: translateX(320%); }
 }
 
-/* ----- About modal ----- */
+/* ----- About modal (compact; only release notes scroll) ----- */
 .about-modal {
   display: flex;
   flex-direction: column;
+  /* Cap height so the modal shell never needs a second scrollbar. */
+  max-height: min(72vh, 34rem);
+  overflow: hidden;
 }
 
-/* Header row: brand mark pinned top-right, identity text on the left */
-/* Header: identity text on the left, large brand image on the right.
-   The image fills the right portion of the modal header; text is
-   constrained so it never runs under the image. */
 .about-head {
   display: flex;
-  align-items: stretch;
-  gap: 18px;
-  padding: 22px 24px 8px;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px 6px;
 }
 .about-head__text {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  gap: 4px;
+}
+.about-head__title-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 .about-head__brand {
   flex: 0 0 auto;
-  width: 168px;
-  height: 168px;
-  border-radius: var(--radius-md);
+  width: 72px;
+  height: 72px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
   background: var(--sunken);
   box-shadow: var(--shadow-soft);
@@ -686,37 +704,36 @@ onBeforeUnmount(() => {
 .about-name {
   margin: 0;
   font-family: var(--font-serif);
-  font-size: 22px;
+  font-size: 17px;
   font-weight: 600;
   letter-spacing: -0.01em;
   color: var(--ink);
+  line-height: 1.2;
 }
 .about-version {
-  margin-top: 3px;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   color: var(--ink-3);
 }
 .about-tagline {
-  margin: 10px 0 0;
-  font-size: 12.5px;
-  line-height: 1.55;
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
   color: var(--ink-3);
 }
 
-/* Meta rows */
 .about-meta {
   margin: 0;
-  padding: 10px 24px 4px;
+  padding: 4px 18px 2px;
   display: flex;
   flex-direction: column;
 }
 .about-meta__row {
   display: grid;
-  grid-template-columns: 72px 1fr;
+  grid-template-columns: 52px 1fr;
   align-items: center;
-  column-gap: 12px;
-  padding: 6px 0;
+  column-gap: 10px;
+  padding: 3px 0;
 }
 .about-meta__label {
   font-size: 11px;
@@ -730,27 +747,27 @@ onBeforeUnmount(() => {
 .about-link {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 13px;
+  gap: 5px;
+  font-size: 12.5px;
   font-weight: 500;
   color: var(--accent);
   background: transparent;
   border: none;
-  padding: 2px 0;
+  padding: 1px 0;
   cursor: pointer;
   transition: color var(--dur-fast) var(--ease-soft);
 }
 .about-link:hover { color: var(--accent-strong); }
 .about-link__ext { opacity: 0.55; }
 
-/* Update section */
 .about-update {
-  margin-top: 10px;
-  padding: 16px 24px 18px;
+  margin-top: 6px;
+  padding: 10px 18px 14px;
   border-top: 1px solid var(--hairline);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
+  min-height: 0;
 }
 .about-update__status {
   display: inline-flex;
@@ -759,33 +776,40 @@ onBeforeUnmount(() => {
   gap: 6px;
   width: 100%;
   font-size: 12px;
-  padding: 2px 0;
+  padding: 1px 0;
 }
 .about-update__status--ok { color: var(--success); }
 
 .about-update__available {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
+  min-height: 0;
 }
 .about-update__headline {
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--ink-3);
+  line-height: 1.35;
 }
 .about-update__version {
   margin-left: 4px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--ink);
 }
 .about-update__body {
   font-size: 11px;
-  line-height: 1.6;
-  padding: 10px 12px;
+  line-height: 1.5;
+  padding: 8px 10px;
   border-radius: var(--radius-sm);
-  max-height: 140px;
-  overflow: auto;
+  /* Single scroll region for release notes. */
+  max-height: 7.5rem;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   font-family: var(--font-mono, ui-monospace, monospace);
   white-space: pre-wrap;
+  word-break: break-word;
   background: var(--sunken);
   color: var(--ink-2);
   border: 1px solid var(--border);
@@ -795,10 +819,10 @@ onBeforeUnmount(() => {
 .about-update__error {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 7px;
 }
 .about-progressbar {
-  height: 6px;
+  height: 5px;
   border-radius: var(--radius-pill);
   background: var(--sunken);
   overflow: hidden;
@@ -808,15 +832,21 @@ onBeforeUnmount(() => {
   border-radius: var(--radius-pill);
   background: var(--accent);
 }
+.about-progressbar__fill--known {
+  /* Only expand width — no shrink animation when percent is held/monotonic. */
+  transition: width .2s linear;
+}
 .about-update__meta {
   font-size: 10px;
   text-align: right;
   color: var(--ink-4);
 }
+.about-update__meta--left { text-align: left; line-height: 1.4; }
 .about-update__errtext {
   font-size: 12px;
   color: var(--danger);
-  word-break: break-all;
+  word-break: break-word;
+  line-height: 1.4;
 }
 
 /* Two-step delete confirm: a quiet danger button turns into a solid danger
