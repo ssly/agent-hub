@@ -366,7 +366,7 @@ fn resolve_turn_id(input: &serde_json::Value, fallback: &str) -> String {
 }
 
 fn cwd_field(input: &serde_json::Value) -> Option<String> {
-    string_field(input, "cwd")
+    let raw = string_field(input, "cwd")
         .or_else(|| {
             input
                 .get("workspace_roots")
@@ -388,7 +388,8 @@ fn cwd_field(input: &serde_json::Value) -> Option<String> {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned)
-        })
+        })?;
+    crate::paths::normalize_project_path_display(&raw)
 }
 
 fn last_transcript_user_prompt(path: &str) -> Option<String> {

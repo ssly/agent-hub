@@ -462,15 +462,21 @@ async function handleConfirmClear() {
                   </span>
                 </div>
 
+                <!-- Stale: only show guidance, never the expired percentage block -->
                 <div
                   v-if="store.grokUsage.stale"
-                  class="ah-notice ah-notice--warning"
-                  style="margin: 0"
+                  class="p-3 rounded-lg space-y-1.5"
+                  style="background: var(--sunken); border: 1px solid color-mix(in srgb, var(--warning, #d97706) 28%, transparent)"
                 >
-                  {{ t('switch.grok_stale_warning') }}
+                  <div class="text-sm font-medium" style="color: var(--ink)">
+                    {{ t('switch.grok_stale_title') }}
+                  </div>
+                  <p class="text-xs m-0 leading-relaxed" style="color: var(--ink-3)">
+                    {{ t('switch.grok_stale_warning') }}
+                  </p>
                 </div>
 
-                <div class="p-3 rounded-lg" style="background: var(--sunken)">
+                <div v-else class="p-3 rounded-lg" style="background: var(--sunken)">
                   <div class="flex justify-between items-center">
                     <span class="font-medium" style="color: var(--ink)">{{ grokPeriodLabel }}</span>
                     <span class="font-semibold" style="color: var(--accent)">

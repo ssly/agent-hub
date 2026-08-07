@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { Activity, BarChart3, Blend, CircleAlert, Maximize2, Minimize2, Pin, PinOff, RefreshCw } from 'lucide-vue-next'
+import { Activity, BarChart3, Blend, Maximize2, Minimize2, Pin, PinOff, RefreshCw } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { useToast } from '@/composables/useToast'
 import AppToast from '@/components/layout/AppToast.vue'
@@ -34,6 +34,7 @@ import type { AgentSessionState, MonitorAgent, MonitorSnapshot } from '@/stores/
 import AgentIcon from '@/components/agents/AgentIcon.vue'
 import SessionClientIcon from '@/components/sessions/SessionClientIcon.vue'
 import UsageOrb, { type OrbTone, type OrbWindow } from './UsageOrb.vue'
+import UsageOrbPlaceholder from './UsageOrbPlaceholder.vue'
 import TrayWaveLoader from './TrayWaveLoader.vue'
 
 const { t, locale } = useI18n()
@@ -947,60 +948,96 @@ onBeforeUnmount(() => {
                     <p v-else class="credit-empty">{{ t('tray.no_reset_credit') }}</p>
                   </div>
                 </UsageOrb>
-                <div v-else-if="error" class="quota-fail" role="status">
-                  <CircleAlert :size="22" class="quota-fail__icon" aria-hidden="true" />
-                  <span class="quota-fail__text">{{ t('tray.failed_hint') }}</span>
-                </div>
+                <UsageOrbPlaceholder
+                  v-else-if="error"
+                  kind="error"
+                  :mini="miniMode"
+                  :title="t('tray.failed')"
+                  :message="t('tray.failed_hint')"
+                />
                 <TrayWaveLoader v-else-if="loading">{{ t('tray.query_wait') }}</TrayWaveLoader>
-                <div v-else class="quota-message quota-message--compact">
-                  {{ t('tray.no_usage') }}
-                </div>
+                <UsageOrbPlaceholder
+                  v-else
+                  kind="empty"
+                  :mini="miniMode"
+                  :title="t('tray.no_usage_title')"
+                  :message="t('tray.no_usage')"
+                />
               </div>
             </template>
 
             <template v-else-if="selectedProvider === 'kimi-code'">
               <div class="quota-wrap" :class="{ 'is-loading': loading, 'is-mini': miniMode }">
                 <UsageOrb v-if="kimiWindows.length" :windows="kimiWindows" :mini="miniMode" />
-                <div v-else-if="error" class="quota-fail" role="status">
-                  <CircleAlert :size="22" class="quota-fail__icon" aria-hidden="true" />
-                  <span class="quota-fail__text">{{ t('tray.failed_hint') }}</span>
-                </div>
+                <UsageOrbPlaceholder
+                  v-else-if="error"
+                  kind="error"
+                  :mini="miniMode"
+                  :title="t('tray.failed')"
+                  :message="t('tray.failed_hint')"
+                />
                 <TrayWaveLoader v-else-if="loading">{{ t('tray.query_wait') }}</TrayWaveLoader>
-                <div v-else class="quota-message quota-message--compact">
-                  {{ t('tray.no_usage') }}
-                </div>
+                <UsageOrbPlaceholder
+                  v-else
+                  kind="empty"
+                  :mini="miniMode"
+                  :title="t('tray.no_usage_title')"
+                  :message="t('tray.no_usage')"
+                />
               </div>
             </template>
 
             <template v-else-if="selectedProvider === 'claude-code'">
               <div class="quota-wrap" :class="{ 'is-loading': loading, 'is-mini': miniMode }">
                 <UsageOrb v-if="claudeWindows.length" :windows="claudeWindows" :mini="miniMode" />
-                <div v-else-if="error" class="quota-fail" role="status">
-                  <CircleAlert :size="22" class="quota-fail__icon" aria-hidden="true" />
-                  <span class="quota-fail__text">{{ t('tray.failed_hint') }}</span>
-                </div>
+                <UsageOrbPlaceholder
+                  v-else-if="error"
+                  kind="error"
+                  :mini="miniMode"
+                  :title="t('tray.failed')"
+                  :message="t('tray.failed_hint')"
+                />
                 <TrayWaveLoader v-else-if="loading">{{ t('tray.query_wait') }}</TrayWaveLoader>
-                <div v-else class="quota-message quota-message--compact">
-                  {{ t('tray.no_usage') }}
-                </div>
+                <UsageOrbPlaceholder
+                  v-else
+                  kind="empty"
+                  :mini="miniMode"
+                  :title="t('tray.no_usage_title')"
+                  :message="t('tray.no_usage')"
+                />
               </div>
             </template>
 
             <template v-else-if="selectedProvider === 'grok-build'">
-              <div v-if="!miniMode && grokUsage?.stale" class="grok-warning">
-                {{ t('switch.grok_stale_warning') }}
-              </div>
-
               <div class="quota-wrap" :class="{ 'is-loading': loading, 'is-mini': miniMode }">
-                <UsageOrb v-if="grokWindows.length" :windows="grokWindows" :mini="miniMode" />
-                <div v-else-if="error" class="quota-fail" role="status">
-                  <CircleAlert :size="22" class="quota-fail__icon" aria-hidden="true" />
-                  <span class="quota-fail__text">{{ t('tray.failed_hint') }}</span>
-                </div>
+                <!-- Stale cache: never show the orb with expired numbers; only a calm placeholder. -->
+                <UsageOrbPlaceholder
+                  v-if="grokUsage?.stale"
+                  kind="error"
+                  :mini="miniMode"
+                  :title="t('tray.stale_title')"
+                  :message="t('switch.grok_stale_warning')"
+                />
+                <UsageOrb
+                  v-else-if="grokWindows.length"
+                  :windows="grokWindows"
+                  :mini="miniMode"
+                />
+                <UsageOrbPlaceholder
+                  v-else-if="error"
+                  kind="error"
+                  :mini="miniMode"
+                  :title="t('tray.failed')"
+                  :message="t('tray.failed_hint')"
+                />
                 <TrayWaveLoader v-else-if="loading">{{ t('tray.query_wait') }}</TrayWaveLoader>
-                <div v-else class="quota-message quota-message--compact">
-                  {{ t('tray.no_usage') }}
-                </div>
+                <UsageOrbPlaceholder
+                  v-else
+                  kind="empty"
+                  :mini="miniMode"
+                  :title="t('tray.no_usage_title')"
+                  :message="t('tray.no_usage')"
+                />
               </div>
             </template>
           </template>
@@ -1479,61 +1516,13 @@ onBeforeUnmount(() => {
 .monitor-empty__icon { display: inline-flex; width: 13px; height: 13px; }
 .monitor-empty__icon svg { width: 13px; height: 13px; }
 
-.grok-warning {
-  flex: 0 0 44px;
-  min-height: 44px;
-  display: flex;
-  align-items: center;
-  margin: 0;
-  border-radius: 14px;
-  padding: 7px 11px;
-  color: var(--tray-warning);
-  background: var(--tray-warning-soft);
-  font-size: 11px;
-  line-height: 1.35;
-}
-
 .quota-wrap {
   flex: 0 0 auto;
+  min-height: 132px;
   padding: 12px 0 10px;
   transition: opacity .18s ease;
 }
 .quota-wrap.is-loading { opacity: .72; }
-
-.quota-message {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: flex-start;
-  min-height: 110px;
-  gap: 6px;
-  color: var(--tray-ink-3);
-}
-.quota-message--compact { min-height: 48px; align-items: center; font-size: 13px; }
-/* Quiet failure: icon + short line only; retry lives on the top-right refresh. */
-.quota-fail {
-  min-height: 110px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  color: var(--tray-ink-3);
-  text-align: center;
-}
-.quota-fail__icon {
-  flex: 0 0 auto;
-  color: color-mix(in srgb, var(--tray-danger) 72%, var(--tray-ink-3));
-  opacity: .9;
-}
-.quota-fail__text {
-  max-width: 16em;
-  color: var(--tray-ink-3);
-  font-size: 12px;
-  line-height: 1.45;
-}
-/* Fail state matches the fixed 132px orb so height does not jump. */
-.quota-wrap.is-mini .quota-fail { min-height: 132px; }
 
 /* Reset credits sit in the orb's side column under the legend, titled like a
    legend row, so all three provider panels share the same overall height. */

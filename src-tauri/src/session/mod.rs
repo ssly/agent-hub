@@ -122,7 +122,7 @@ pub fn list_sessions(
 }
 
 fn list_sessions_all(platform_id: &str) -> Result<Vec<models::SessionSummary>, String> {
-    match platform_id {
+    let mut sessions = match platform_id {
         "claude-code" => claude::list_claude_sessions_all(),
         "codex" => codex::list_codex_sessions_all(),
         "antigravity" => antigravity::list_antigravity_sessions_all(),
@@ -131,7 +131,13 @@ fn list_sessions_all(platform_id: &str) -> Result<Vec<models::SessionSummary>, S
         "kimi" => kimi::list_kimi_sessions_all(),
         "zcode" => zcode::list_zcode_sessions_all(),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
+    }?;
+    // Normalize once for path filters, cards, and resume `cd` so every agent
+    // surface shows the same Windows-friendly shape.
+    for session in &mut sessions {
+        session.project_path = normalize_project_path(&session.project_path).unwrap_or_default();
     }
+    Ok(sessions)
 }
 
 pub fn export_sessions_html(
@@ -144,12 +150,7 @@ pub fn export_sessions_html(
 }
 
 fn normalize_project_path(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
+    crate::paths::normalize_project_path_display(value)
 }
 
 fn build_path_options(sessions: &[models::SessionSummary]) -> Vec<String> {
@@ -967,5 +968,21 @@ mod tests {
         let exact = filter_sessions_by_path(sessions, "/tmp/a");
         assert_eq!(exact.len(), 1);
         assert_eq!(exact[0].id, "1");
+    }
+
+    #[test]
+    fn normalize_project_path_windows_shapes() {
+        assert_eq!(
+            normalize_project_path(r"\\?\C:\Users\liuyang\.codex\worktrees\x").as_deref(),
+            Some(r"C:\Users\liuyang\.codex\worktrees\x")
+        );
+        assert_eq!(
+            normalize_project_path("/D:/Coding/mng-master-web").as_deref(),
+            Some(r"D:\Coding\mng-master-web")
+        );
+        assert_eq!(
+            normalize_project_path("file:///D:/feishu-bot-go").as_deref(),
+            Some(r"D:\feishu-bot-go")
+        );
     }
 }

@@ -372,46 +372,9 @@ fn first_workspace_path(workspace_uris_json: &str) -> Option<String> {
 }
 
 fn file_uri_to_path(uri: &str) -> Option<String> {
-    let path = uri
-        .strip_prefix("file://")
-        .unwrap_or(uri)
-        .trim()
-        .to_string();
-    if path.is_empty() {
-        return None;
-    }
-    // Percent-decode common encodings without pulling in another crate.
-    let decoded = percent_decode(&path);
-    Some(decoded)
-}
-
-fn percent_decode(input: &str) -> String {
-    let bytes = input.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            let hi = from_hex(bytes[i + 1]);
-            let lo = from_hex(bytes[i + 2]);
-            if let (Some(h), Some(l)) = (hi, lo) {
-                out.push((h << 4) | l);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-fn from_hex(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
+    // Shared normalizer strips file://, percent-decodes, and fixes Windows
+    // shapes (`/D:/…`, `file:///C:/…`) for session path filters/UI.
+    crate::paths::normalize_project_path_display(uri)
 }
 
 fn first_nonempty(parts: &[&str]) -> Option<String> {
@@ -545,6 +508,18 @@ mod tests {
         )
         .expect("path");
         assert!(path.contains("Mobile Documents"));
+    }
+
+    #[test]
+    fn file_uri_windows_drive_normalized() {
+        assert_eq!(
+            file_uri_to_path("file:///D:/Task").as_deref(),
+            Some(r"D:\Task")
+        );
+        assert_eq!(
+            file_uri_to_path("file:///c:/Users/x").as_deref(),
+            Some(r"C:\Users\x")
+        );
     }
 
     #[test]

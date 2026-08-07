@@ -11,6 +11,164 @@
 
 use std::path::{Path, PathBuf};
 
+/// Normalize a project/cwd path for session UI, path filters, and resume `cd`.
+///
+/// Agents persist paths in platform-specific shapes. On Windows that often
+/// includes extended-length prefixes (`\\?\`), `file://` URIs, or POSIX-style
+/// drive roots (`/D:/Coding`). This returns a stable display form or `None`
+/// when the value is empty/whitespace only.
+///
+/// Unix absolute paths without a drive letter are left largely intact so macOS
+/// session paths keep working.
+pub fn normalize_project_path_display(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let without_uri = strip_file_uri(trimmed);
+    let decoded = percent_decode_path(&without_uri);
+    let normalized = normalize_windows_path_shape(&decoded);
+    let cleaned = normalized.trim();
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned.to_string())
+    }
+}
+
+fn strip_file_uri(input: &str) -> String {
+    let Some(after_scheme) = input
+        .strip_prefix("file://")
+        .or_else(|| input.strip_prefix("FILE://"))
+    else {
+        return input.to_string();
+    };
+    // file:///C:/x → /C:/x ; file://localhost/C:/x → /C:/x after localhost strip
+    let after_host = after_scheme
+        .strip_prefix("localhost")
+        .or_else(|| after_scheme.strip_prefix("LOCALHOST"))
+        .unwrap_or(after_scheme);
+    after_host.to_string()
+}
+
+fn percent_decode_path(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(h), Some(l)) = (from_hex(bytes[i + 1]), from_hex(bytes[i + 2])) {
+                out.push((h << 4) | l);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn from_hex(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn normalize_windows_path_shape(input: &str) -> String {
+    let mut s = input.to_string();
+
+    // Extended-length / device prefixes from Win32 APIs (Codex cwd etc.).
+    // \\?\C:\Users\…  //?/C:/Users/…  \?\C:\Users\… (sometimes shown that way)
+    const EXTENDED: &[&str] = &[r"\\?\", r"//?/", r"\?\", r"/?/" ];
+    for prefix in EXTENDED {
+        if let Some(rest) = s.strip_prefix(prefix) {
+            s = rest.to_string();
+            break;
+        }
+    }
+    // \\?\UNC\server\share → \\server\share
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        s = format!(r"\\{rest}");
+    } else if let Some(rest) = s.strip_prefix("//?/UNC/") {
+        s = format!(r"\\{}", rest.replace('/', "\\"));
+    }
+
+    // POSIX drive root: /D:/Coding or /D:\Coding → D:/… or D:\…
+    if looks_like_posix_drive_root(&s) {
+        s = s[1..].to_string();
+    }
+
+    // MSYS/Git-Bash: /c/Users/… → C:\Users\…
+    if looks_like_msys_drive_path(&s) {
+        let drive = (s.as_bytes()[1] as char).to_ascii_uppercase();
+        let rest = s[3..].replace('/', "\\");
+        return format!("{drive}:\\{rest}");
+    }
+
+    if is_windows_path_like(&s) {
+        s = s.replace('/', "\\");
+        // Uppercase drive letter: c:\… → C:\…
+        if s.len() >= 2 && s.as_bytes()[1] == b':' {
+            let mut chars: Vec<char> = s.chars().collect();
+            chars[0] = chars[0].to_ascii_uppercase();
+            s = chars.into_iter().collect();
+        }
+        s = collapse_win_backslashes(&s);
+    }
+
+    s
+}
+
+fn looks_like_posix_drive_root(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() >= 3 && b[0] == b'/' && b[1].is_ascii_alphabetic() && b[2] == b':'
+}
+
+fn looks_like_msys_drive_path(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() >= 3 && b[0] == b'/' && b[1].is_ascii_alphabetic() && b[2] == b'/'
+}
+
+fn is_windows_path_like(s: &str) -> bool {
+    let b = s.as_bytes();
+    // C:\ or C:/
+    if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
+        return true;
+    }
+    // UNC \\server\share
+    if s.starts_with(r"\\") || s.starts_with("//") {
+        return true;
+    }
+    false
+}
+
+/// Collapse duplicate `\` except keep a leading UNC `\\`.
+fn collapse_win_backslashes(s: &str) -> String {
+    let unc = s.starts_with(r"\\");
+    let body = if unc { &s[2..] } else { s };
+    let mut out = String::with_capacity(s.len());
+    if unc {
+        out.push_str(r"\\");
+    }
+    let mut prev_sep = false;
+    for ch in body.chars() {
+        if ch == '\\' {
+            if !prev_sep {
+                out.push('\\');
+            }
+            prev_sep = true;
+        } else {
+            out.push(ch);
+            prev_sep = false;
+        }
+    }
+    out
+}
+
 /// Join `base` with a relative path that may use either `/` or `\` as
 /// separator. We split on *both* and join each non-empty segment separately,
 /// so on Windows we don't end up with mixed-separator paths like
@@ -71,6 +229,51 @@ pub fn replace_file(from: &Path, target: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalize_strips_extended_prefix() {
+        assert_eq!(
+            normalize_project_path_display(r"\\?\C:\Users\liuyang\.codex\worktrees\x"),
+            Some(r"C:\Users\liuyang\.codex\worktrees\x".to_string())
+        );
+        assert_eq!(
+            normalize_project_path_display(r"\?\C:\Users\liuyang"),
+            Some(r"C:\Users\liuyang".to_string())
+        );
+    }
+
+    #[test]
+    fn normalize_posix_drive_and_file_uri() {
+        assert_eq!(
+            normalize_project_path_display("/D:/Coding/portal-master-web"),
+            Some(r"D:\Coding\portal-master-web".to_string())
+        );
+        assert_eq!(
+            normalize_project_path_display("file:///D:/Task"),
+            Some(r"D:\Task".to_string())
+        );
+        assert_eq!(
+            normalize_project_path_display("file:///C:/Users/liuyang/Documents"),
+            Some(r"C:\Users\liuyang\Documents".to_string())
+        );
+        assert_eq!(
+            normalize_project_path_display(r"c:\Users\liuyang\Downloads"),
+            Some(r"C:\Users\liuyang\Downloads".to_string())
+        );
+    }
+
+    #[test]
+    fn normalize_msys_and_unix_unchanged() {
+        assert_eq!(
+            normalize_project_path_display("/c/Users/demo/proj"),
+            Some(r"C:\Users\demo\proj".to_string())
+        );
+        assert_eq!(
+            normalize_project_path_display("/Users/demo/projects/app"),
+            Some("/Users/demo/projects/app".to_string())
+        );
+        assert_eq!(normalize_project_path_display("   "), None);
+    }
 
     #[test]
     fn join_relative_splits_both_separators() {
