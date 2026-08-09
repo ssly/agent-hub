@@ -10,12 +10,13 @@ pub enum AgentKind {
     Grok,
     Kimi,
     ZCode,
+    Kiro,
 }
 
 impl AgentKind {
     /// Same relative order as `platform/registry.rs` builtin platforms
-    /// (monitor subset: no Shared Pool / Hermes / Trae / Kiro).
-    pub const ALL: [AgentKind; 7] = [
+    /// (monitor subset: no Shared).
+    pub const ALL: [AgentKind; 8] = [
         Self::Codex,
         Self::Claude,
         Self::Cursor,
@@ -23,6 +24,7 @@ impl AgentKind {
         Self::Grok,
         Self::Kimi,
         Self::ZCode,
+        Self::Kiro,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -34,6 +36,7 @@ impl AgentKind {
             Self::Grok => "grok",
             Self::Kimi => "kimi",
             Self::ZCode => "zcode",
+            Self::Kiro => "kiro",
         }
     }
 
@@ -46,6 +49,7 @@ impl AgentKind {
             Self::Grok => "grok-state.json",
             Self::Kimi => "kimi-state.json",
             Self::ZCode => "zcode-state.json",
+            Self::Kiro => "kiro-state.json",
         }
     }
 
@@ -58,6 +62,7 @@ impl AgentKind {
             Self::Grok => "session-monitor:grok-changed",
             Self::Kimi => "session-monitor:kimi-changed",
             Self::ZCode => "session-monitor:zcode-changed",
+            Self::Kiro => "session-monitor:kiro-changed",
         }
     }
 }

@@ -1,6 +1,6 @@
 use super::capture::{
     ANTIGRAVITY_HOOK_ARG, CLAUDE_HOOK_ARG, CODEX_HOOK_ARG, CURSOR_HOOK_ARG, GROK_HOOK_ARG,
-    KIMI_HOOK_ARG, ZCODE_HOOK_ARG,
+    KIMI_HOOK_ARG, KIRO_HOOK_ARG, ZCODE_HOOK_ARG,
 };
 use super::types::{AgentKind, HookChangePreview, HookDiffLine, HookStatus};
 use crate::win_console::suppress_console;
@@ -69,8 +69,15 @@ fn managed_events(agent: AgentKind) -> &'static [&'static str] {
         // events take no matcher.
         AgentKind::ZCode => &[USER_PROMPT_SUBMIT, STOP],
         AgentKind::Antigravity => &[ANTIGRAVITY_PRE_INVOCATION, ANTIGRAVITY_STOP],
+        // Kiro: UserPromptSubmit + Stop. Install writes BOTH:
+        // - ~/.kiro/hooks/agent-hub.json (CLI 3.0 / IDE 1.0 KAS v2 standalone)
+        // - camelCase hooks inside ~/.kiro/agents/*.json (CLI 2.x agent-embedded)
+        AgentKind::Kiro => &[USER_PROMPT_SUBMIT, STOP],
     }
 }
+
+/// CLI 2.x agent-config event keys (camelCase map under `hooks`).
+const KIRO_AGENT_EVENTS: &[&str] = &["userPromptSubmit", "stop"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookAction {
@@ -104,6 +111,7 @@ fn hook_arg(agent: AgentKind) -> Result<&'static str, String> {
         AgentKind::Kimi => Ok(KIMI_HOOK_ARG),
         AgentKind::ZCode => Ok(ZCODE_HOOK_ARG),
         AgentKind::Antigravity => Ok(ANTIGRAVITY_HOOK_ARG),
+        AgentKind::Kiro => Ok(KIRO_HOOK_ARG),
     }
 }
 
@@ -121,6 +129,9 @@ fn config_path(agent: AgentKind) -> Result<PathBuf, String> {
         AgentKind::ZCode => Ok(home.join(".zcode").join("cli").join("config.json")),
         // Shared by agy CLI, Antigravity 2.0, and IDE (docs + community).
         AgentKind::Antigravity => Ok(home.join(".gemini").join("config").join("hooks.json")),
+        // Official global scope (~/.kiro/hooks/) applies to Kiro IDE + CLI.
+        // Dedicated managed file — never edit user/project hook files.
+        AgentKind::Kiro => Ok(home.join(".kiro").join("hooks").join("agent-hub.json")),
     }
 }
 
@@ -133,6 +144,7 @@ fn config_label(agent: AgentKind) -> &'static str {
         AgentKind::Kimi => "Kimi Code 配置文件",
         AgentKind::ZCode => "ZCode 配置文件",
         AgentKind::Antigravity => "Antigravity Hook 配置文件",
+        AgentKind::Kiro => "Kiro Hook 文件",
     }
 }
 
@@ -145,6 +157,7 @@ fn agent_label(agent: AgentKind) -> &'static str {
         AgentKind::Kimi => "Kimi Code",
         AgentKind::ZCode => "ZCode",
         AgentKind::Antigravity => "Antigravity",
+        AgentKind::Kiro => "Kiro",
     }
 }
 
@@ -160,6 +173,9 @@ pub fn get_hook_status(agent: AgentKind) -> Result<HookStatus, String> {
     }
     if agent == AgentKind::Antigravity {
         return antigravity_hook_status();
+    }
+    if agent == AgentKind::Kiro {
+        return kiro_hook_status();
     }
     let path = config_path(agent)?;
     let arg = hook_arg(agent)?;
@@ -206,7 +222,7 @@ pub fn get_hook_status(agent: AgentKind) -> Result<HookStatus, String> {
         }
     } else {
         Some(format!(
-            "{} Hook 配置不完整或命令路径已变化，可重新安装进行修复。",
+            "{} Hook 为旧版本，请点击「重置 Hook」。",
             agent_label(agent)
         ))
     };
@@ -245,6 +261,37 @@ pub fn preview_hook_change(
         let after = antigravity_render_after(action, &path, &command, &before)?;
         return Ok(build_preview(action, &path, &command, &before, &after));
     }
+    if agent == AgentKind::Kiro {
+        let after = kiro_render_after(action, &command, &before)?;
+        // Preview covers the global standalone file; agent-embedded injection
+        // is applied alongside install/uninstall (see apply_hook_change).
+        let mut preview = build_preview(action, &path, &command, &before, &after);
+        if let Ok(files) = kiro_agent_files() {
+            if !files.is_empty() {
+                let names: Vec<String> = files.iter().map(|p| kiro_agent_label(p)).collect();
+                preview.config_path = format!(
+                    "{} + agents: {}",
+                    preview.config_path,
+                    names.join(", ")
+                );
+                let note = match action {
+                    HookAction::Install => format!(
+                        "# Also injects agent-embedded hooks into: {}",
+                        names.join(", ")
+                    ),
+                    HookAction::Uninstall => format!(
+                        "# Also removes agent-embedded hooks from: {}",
+                        names.join(", ")
+                    ),
+                };
+                preview.diff_lines.push(HookDiffLine {
+                    tag: "context".to_string(),
+                    content: note,
+                });
+            }
+        }
+        return Ok(preview);
+    }
     let after = render_after(agent, action, &path, &command, arg, &before)?;
     Ok(build_preview(action, &path, &command, &before, &after))
 }
@@ -273,6 +320,8 @@ pub fn apply_hook_change(
         zcode_render_after(action, &path, &expected_executable()?, &before)?
     } else if agent == AgentKind::Antigravity {
         antigravity_render_after(action, &path, &command, &before)?
+    } else if agent == AgentKind::Kiro {
+        kiro_render_after(action, &command, &before)?
     } else {
         render_after(agent, action, &path, &command, arg, &before)?
     };
@@ -285,6 +334,11 @@ pub fn apply_hook_change(
         }
         let write_path = resolve_write_target(&path)?;
         atomic_write(agent, &write_path, after.as_bytes(), expected_before_hash)?;
+    }
+    // Kiro CLI 2.x only runs agent-embedded hooks; always sync those too.
+    if agent == AgentKind::Kiro {
+        let agent_command = kiro_agent_command(arg)?;
+        kiro_sync_agent_hooks(action, &agent_command)?;
     }
     get_hook_status(agent)
 }
@@ -632,7 +686,7 @@ fn cursor_hook_status() -> Result<HookStatus, String> {
             .all(|event| managed.iter().filter(|(name, _)| name == event).count() == 1)
         && managed.iter().all(|(_, cmd)| cmd == &command);
     let issue = if !installed && !managed.is_empty() {
-        Some("Cursor Hook 配置不完整或命令路径已变化，可重新安装进行修复。".to_string())
+        Some("Cursor Hook 为旧版本，请点击「重置 Hook」。".to_string())
     } else {
         cursor_cli_version_issue()
     };
@@ -820,7 +874,7 @@ fn kimi_hook_status() -> Result<HookStatus, String> {
         None
     } else {
         Some(format!(
-            "{} Hook 配置不完整或命令路径已变化，可重新安装进行修复。",
+            "{} Hook 为旧版本，请点击「重置 Hook」。",
             agent_label(AgentKind::Kimi)
         ))
     };
@@ -961,7 +1015,7 @@ fn zcode_hook_status() -> Result<HookStatus, String> {
         Some("ZCode 配置中 hooks.enabled 为 false，所有 Hook 都不会执行，请开启该选项或重新安装。".to_string())
     } else if !installed && !managed.is_empty() {
         Some(format!(
-            "{} Hook 配置不完整或命令路径已变化，可重新安装进行修复。",
+            "{} Hook 为旧版本，请点击「重置 Hook」。",
             agent_label(AgentKind::ZCode)
         ))
     } else {
@@ -1159,7 +1213,7 @@ fn antigravity_hook_status() -> Result<HookStatus, String> {
         && managed.iter().all(|(_, cmd)| cmd == &command);
     let issue = if !installed && !managed.is_empty() {
         Some(format!(
-            "{} Hook 配置不完整或命令路径已变化，可重新安装进行修复。",
+            "{} Hook 为旧版本，请点击「重置 Hook」。",
             agent_label(AgentKind::Antigravity)
         ))
     } else {
@@ -1268,6 +1322,444 @@ fn remove_antigravity_managed_entry(root: &mut Value) -> Result<(), String> {
         } else {
             root_object.remove(ANTIGRAVITY_HOOK_NAME);
         }
+    }
+    Ok(())
+}
+
+/// Kiro dual install surface:
+///
+/// 1. **Standalone (CLI 3.0 / IDE 1.0 KAS v2)** — `~/.kiro/hooks/agent-hub.json`
+///    with PascalCase triggers (`UserPromptSubmit` / `Stop`). Schema is still
+///    tagged `version: "v1"` in Kiro's own loader.
+/// 2. **Agent-embedded (CLI 2.x)** — camelCase map under each
+///    `~/.kiro/agents/*.json` (`userPromptSubmit` / `stop`). Built-in agents
+///    like `kiro_default` have no editable JSON; users must run a custom
+///    agent (or `agent set-default`) for CLI 2.x monitoring.
+///
+/// Global path alone is NOT enough for kiro-cli 2.x with the default agent —
+/// verified against 2.15.1: agent-embedded hooks fire; global standalone does
+/// not on that path.
+fn kiro_hook_status() -> Result<HookStatus, String> {
+    let path = config_path(AgentKind::Kiro)?;
+    let arg = hook_arg(AgentKind::Kiro)?;
+    let command = expected_command(arg)?;
+    let agent_command = kiro_agent_command(arg)?;
+    let (global_ok, global_count) = kiro_global_status(&path, arg, &command)?;
+    let agent_report = kiro_agent_hook_report(arg, &agent_command)?;
+    let agents_ok = agent_report.missing.is_empty();
+    let installed = global_ok && agents_ok;
+    let managed_handler_count = global_count + agent_report.managed_count;
+    let issue = kiro_status_issue(installed, global_ok, global_count, &agent_report);
+    Ok(HookStatus {
+        installed,
+        config_path: kiro_status_path_label(&path, &agent_report),
+        command,
+        managed_handler_count,
+        issue,
+    })
+}
+
+fn kiro_global_status(
+    path: &Path,
+    arg: &str,
+    command: &str,
+) -> Result<(bool, usize), String> {
+    if !path.exists() {
+        return Ok((false, 0));
+    }
+    let content = fs::read_to_string(path)
+        .map_err(|error| format!("unable to read {}: {error}", path.display()))?;
+    if content.trim().is_empty() {
+        return Ok((false, 0));
+    }
+    let root = parse_root(&content, path)?;
+    let managed = kiro_managed_entries(&root, arg);
+    let events = managed_events(AgentKind::Kiro);
+    let ok = managed.len() == events.len()
+        && events.iter().all(|event| {
+            managed
+                .iter()
+                .any(|(trigger, cmd)| trigger == event && cmd == command)
+        });
+    Ok((ok, managed.len()))
+}
+
+struct KiroAgentHookReport {
+    /// Agent config files under ~/.kiro/agents that we scanned.
+    total_files: usize,
+    /// Number of managed command entries found (across all agents/events).
+    managed_count: usize,
+    /// Agent file basenames still missing a correct managed hook.
+    missing: Vec<String>,
+}
+
+fn kiro_agent_hook_report(arg: &str, agent_command: &str) -> Result<KiroAgentHookReport, String> {
+    let files = kiro_agent_files()?;
+    let mut managed_count = 0;
+    let mut missing = Vec::new();
+    for path in &files {
+        let content = match fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(_) => {
+                missing.push(path.display().to_string());
+                continue;
+            }
+        };
+        if content.trim().is_empty() {
+            missing.push(kiro_agent_label(path));
+            continue;
+        }
+        let root = match parse_root(&content, path) {
+            Ok(root) => root,
+            Err(_) => {
+                missing.push(kiro_agent_label(path));
+                continue;
+            }
+        };
+        let entries = kiro_agent_managed_entries(&root, arg);
+        managed_count += entries.len();
+        let complete = KIRO_AGENT_EVENTS.iter().all(|event| {
+            entries
+                .iter()
+                .any(|(name, cmd)| name == event && kiro_command_matches(cmd, arg, agent_command))
+        });
+        if !complete {
+            missing.push(kiro_agent_label(path));
+        }
+    }
+    Ok(KiroAgentHookReport {
+        total_files: files.len(),
+        managed_count,
+        missing,
+    })
+}
+
+fn kiro_status_path_label(global: &Path, report: &KiroAgentHookReport) -> String {
+    if report.total_files == 0 {
+        global.display().to_string()
+    } else {
+        format!(
+            "{} + ~/.kiro/agents/*.json ({} agents)",
+            global.display(),
+            report.total_files
+        )
+    }
+}
+
+fn kiro_status_issue(
+    installed: bool,
+    global_ok: bool,
+    global_count: usize,
+    report: &KiroAgentHookReport,
+) -> Option<String> {
+    if installed {
+        // Short usage tip: global hooks cover CLI 3.0 / IDE; 2.x default needs
+        // the agent-embedded half (already installed when `installed` is true).
+        return Some(
+            "支持 CLI 3.0 / IDE。CLI 3.0 请用 `kiro-cli --v3` 启动。"
+                .to_string(),
+        );
+    }
+    if !report.missing.is_empty() {
+        return Some(format!(
+            "Hook 配置不完整（{}），请点击「重置 Hook」。",
+            report.missing.join(", ")
+        ));
+    }
+    if !global_ok && global_count > 0 {
+        return Some(format!(
+            "{} Hook 为旧版本，请点击「重置 Hook」。",
+            agent_label(AgentKind::Kiro)
+        ));
+    }
+    None
+}
+
+fn kiro_managed_entries(root: &Value, arg: &str) -> Vec<(String, String)> {
+    root.get("hooks")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|hook| {
+            let trigger = hook.get("trigger").and_then(Value::as_str)?.to_string();
+            let command = hook
+                .get("action")
+                .and_then(|action| action.get("command"))
+                .and_then(Value::as_str)?;
+            if !command.split_whitespace().any(|part| part == arg) {
+                return None;
+            }
+            Some((trigger, command.to_string()))
+        })
+        .collect()
+}
+
+/// Command string written into agent-embedded hooks (double-quoted path, matches
+/// Clawd / community agent configs).
+fn kiro_agent_command(arg: &str) -> Result<String, String> {
+    let path = expected_executable()?.replace('"', "");
+    Ok(format!("\"{path}\" {arg}"))
+}
+
+fn kiro_command_matches(cmd: &str, arg: &str, preferred: &str) -> bool {
+    if cmd == preferred {
+        return true;
+    }
+    // Accept either quoting style as long as the hook arg and executable path match.
+    if !cmd.split_whitespace().any(|part| part == arg) {
+        return false;
+    }
+    let Ok(exe) = expected_executable() else {
+        return false;
+    };
+    cmd.contains(exe.trim_matches(|c| c == '\'' || c == '"'))
+}
+
+fn kiro_agents_dir() -> Result<PathBuf, String> {
+    let home = dirs::home_dir().ok_or_else(|| "home directory is unavailable".to_string())?;
+    Ok(home.join(".kiro").join("agents"))
+}
+
+fn kiro_agent_files() -> Result<Vec<PathBuf>, String> {
+    let dir = kiro_agents_dir()?;
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut files = Vec::new();
+    let entries = fs::read_dir(&dir)
+        .map_err(|error| format!("unable to read {}: {error}", dir.display()))?;
+    for entry in entries {
+        let entry =
+            entry.map_err(|error| format!("unable to list {}: {error}", dir.display()))?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        // Skip examples / non-agent templates.
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        if name.ends_with(".example") || name.contains("example") {
+            continue;
+        }
+        files.push(path);
+    }
+    files.sort();
+    Ok(files)
+}
+
+fn kiro_agent_label(path: &Path) -> String {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_else(|| path.to_str().unwrap_or("agent"))
+        .to_string()
+}
+
+fn kiro_agent_managed_entries(root: &Value, arg: &str) -> Vec<(String, String)> {
+    let Some(hooks) = root.get("hooks").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for event in KIRO_AGENT_EVENTS {
+        let Some(arr) = hooks.get(*event).and_then(Value::as_array) else {
+            continue;
+        };
+        for entry in arr {
+            let Some(cmd) = entry.get("command").and_then(Value::as_str) else {
+                continue;
+            };
+            if cmd.split_whitespace().any(|part| part == arg) {
+                out.push(((*event).to_string(), cmd.to_string()));
+            }
+        }
+    }
+    out
+}
+
+fn kiro_render_after(
+    action: HookAction,
+    command: &str,
+    before: &str,
+) -> Result<String, String> {
+    if action == HookAction::Uninstall && before.trim().is_empty() {
+        return Ok(String::new());
+    }
+    let mut root = if before.trim().is_empty() {
+        json!({ "version": "v1", "hooks": [] })
+    } else {
+        parse_root(before, Path::new("kiro-hooks"))?
+    };
+    let root_object = root
+        .as_object_mut()
+        .ok_or_else(|| "Kiro hook file root is not an object".to_string())?;
+    root_object
+        .entry("version".to_string())
+        .or_insert_with(|| Value::String("v1".to_string()));
+    let hooks_value = root_object
+        .entry("hooks".to_string())
+        .or_insert_with(|| Value::Array(Vec::new()));
+    let hooks = hooks_value
+        .as_array_mut()
+        .ok_or_else(|| "Kiro hooks 字段必须是数组，已停止变更以保护原配置。".to_string())?;
+    // Drop only Agent Hub managed command hooks (matched by --agent-hub-kiro-hook).
+    hooks.retain(|hook| {
+        let Some(cmd) = hook
+            .get("action")
+            .and_then(|action| action.get("command"))
+            .and_then(Value::as_str)
+        else {
+            return true;
+        };
+        !cmd.split_whitespace().any(|part| part == KIRO_HOOK_ARG)
+    });
+    if action == HookAction::Install {
+        for event in managed_events(AgentKind::Kiro) {
+            hooks.push(json!({
+                "name": format!("agent-hub-{event}"),
+                "description": format!("Agent Hub session monitor ({event})"),
+                "trigger": event,
+                "enabled": true,
+                "timeout": 10,
+                "action": {
+                    "type": "command",
+                    "command": command
+                }
+            }));
+        }
+    }
+    if action == HookAction::Uninstall && hooks.is_empty() {
+        // Dedicated file: leave an empty file so uninstall is clean.
+        return Ok(String::new());
+    }
+    let mut rendered = serde_json::to_string_pretty(&root)
+        .map_err(|error| format!("unable to serialize Kiro hook file: {error}"))?;
+    rendered.push('\n');
+    Ok(rendered)
+}
+
+/// Inject or remove Agent Hub hooks from every custom agent under
+/// `~/.kiro/agents/*.json`. Foreign hooks (Clawd, user scripts) are preserved.
+fn kiro_sync_agent_hooks(action: HookAction, agent_command: &str) -> Result<(), String> {
+    let files = kiro_agent_files()?;
+    for path in files {
+        let before = read_existing(&path)?;
+        if before.trim().is_empty() && action == HookAction::Uninstall {
+            continue;
+        }
+        let after = kiro_render_agent_after(action, agent_command, &before, &path)?;
+        if before == after {
+            continue;
+        }
+        if action == HookAction::Install {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|error| format!("unable to create {}: {error}", parent.display()))?;
+            }
+        }
+        let write_path = resolve_write_target(&path)?;
+        // Agent files are multi-target; skip the single-file before_hash race
+        // check (global file still uses it). Write atomically.
+        kiro_atomic_write_agent(&write_path, after.as_bytes())?;
+    }
+    Ok(())
+}
+
+fn kiro_render_agent_after(
+    action: HookAction,
+    agent_command: &str,
+    before: &str,
+    path: &Path,
+) -> Result<String, String> {
+    let mut root = if before.trim().is_empty() {
+        let name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("agent");
+        json!({ "name": name, "hooks": {} })
+    } else {
+        parse_root(before, path)?
+    };
+    let root_object = root
+        .as_object_mut()
+        .ok_or_else(|| format!("{} root is not an object", path.display()))?;
+    let hooks_value = root_object
+        .entry("hooks".to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    let hooks = hooks_value.as_object_mut().ok_or_else(|| {
+        format!(
+            "{} hooks 字段必须是对象，已停止变更以保护原配置。",
+            path.display()
+        )
+    })?;
+
+    for event in KIRO_AGENT_EVENTS {
+        let arr_value = hooks
+            .entry((*event).to_string())
+            .or_insert_with(|| Value::Array(Vec::new()));
+        let arr = arr_value.as_array_mut().ok_or_else(|| {
+            format!(
+                "{} hooks.{} 必须是数组，已停止变更以保护原配置。",
+                path.display(),
+                event
+            )
+        })?;
+        arr.retain(|entry| {
+            let Some(cmd) = entry.get("command").and_then(Value::as_str) else {
+                return true;
+            };
+            !cmd.split_whitespace().any(|part| part == KIRO_HOOK_ARG)
+        });
+        if action == HookAction::Install {
+            arr.insert(0, json!({ "command": agent_command }));
+        }
+        if arr.is_empty() {
+            hooks.remove(*event);
+        }
+    }
+    if hooks.is_empty() {
+        // Keep an empty object rather than deleting the key — matches kiro
+        // example agents and avoids surprising schema diffs for users.
+        *hooks_value = Value::Object(Map::new());
+    }
+
+    let mut rendered = serde_json::to_string_pretty(&root)
+        .map_err(|error| format!("unable to serialize {}: {error}", path.display()))?;
+    rendered.push('\n');
+    Ok(rendered)
+}
+
+fn kiro_atomic_write_agent(path: &Path, content: &[u8]) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("{} has no parent directory", path.display()))?;
+    let temp_path = parent.join(format!(".agent-hub-kiro-agent-{}.tmp", Uuid::new_v4()));
+    let existing_permissions = fs::metadata(path)
+        .ok()
+        .map(|metadata| metadata.permissions());
+    let mut temp = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temp_path)
+        .map_err(|error| format!("unable to create temporary agent config: {error}"))?;
+    if let Some(permissions) = existing_permissions {
+        if let Err(error) = fs::set_permissions(&temp_path, permissions) {
+            let _ = fs::remove_file(&temp_path);
+            return Err(format!(
+                "unable to preserve agent config permissions: {error}"
+            ));
+        }
+    }
+    if let Err(error) = temp.write_all(content).and_then(|_| temp.sync_all()) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(format!("unable to persist temporary agent config: {error}"));
+    }
+    if let Err(error) = fs::rename(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(format!(
+            "unable to replace {}: {error}",
+            path.display()
+        ));
     }
     Ok(())
 }
@@ -1570,6 +2062,150 @@ mod tests {
             kimi_toml_escape("\"C:\\Tools\\Agent Hub.exe\" --agent-hub-kimi-hook"),
             "\\\"C:\\\\Tools\\\\Agent Hub.exe\\\" --agent-hub-kimi-hook"
         );
+    }
+
+    #[test]
+    fn kiro_install_writes_v1_userprompt_and_stop() {
+        let after = kiro_render_after(
+            HookAction::Install,
+            "'/app/agent-hub' --agent-hub-kiro-hook",
+            "",
+        )
+        .unwrap();
+        let root: Value = serde_json::from_str(&after).unwrap();
+        assert_eq!(root.get("version").and_then(Value::as_str), Some("v1"));
+        let managed = kiro_managed_entries(&root, KIRO_HOOK_ARG);
+        assert_eq!(managed.len(), 2);
+        assert!(managed.iter().any(|(e, _)| e == "UserPromptSubmit"));
+        assert!(managed.iter().any(|(e, _)| e == "Stop"));
+        // Command hooks must not print to stdout (Kiro injects stdout into context).
+        for hook in root.get("hooks").and_then(Value::as_array).unwrap() {
+            assert_eq!(
+                hook.get("action")
+                    .and_then(|a| a.get("type"))
+                    .and_then(Value::as_str),
+                Some("command")
+            );
+        }
+    }
+
+    #[test]
+    fn kiro_uninstall_clears_owned_file() {
+        let before = kiro_render_after(
+            HookAction::Install,
+            "agent-hub --agent-hub-kiro-hook",
+            "",
+        )
+        .unwrap();
+        let after = kiro_render_after(
+            HookAction::Uninstall,
+            "agent-hub --agent-hub-kiro-hook",
+            &before,
+        )
+        .unwrap();
+        assert!(after.trim().is_empty());
+    }
+
+    #[test]
+    fn kiro_install_preserves_foreign_hooks_in_same_file() {
+        let before = r#"{
+          "version": "v1",
+          "hooks": [{
+            "name": "lint-on-save",
+            "trigger": "PostFileSave",
+            "action": { "type": "command", "command": "npx eslint --fix" }
+          }]
+        }"#;
+        let after = kiro_render_after(
+            HookAction::Install,
+            "agent-hub --agent-hub-kiro-hook",
+            before,
+        )
+        .unwrap();
+        let root: Value = serde_json::from_str(&after).unwrap();
+        let hooks = root.get("hooks").and_then(Value::as_array).unwrap();
+        assert_eq!(hooks.len(), 3);
+        assert!(hooks.iter().any(|h| {
+            h.get("name").and_then(Value::as_str) == Some("lint-on-save")
+        }));
+        assert_eq!(kiro_managed_entries(&root, KIRO_HOOK_ARG).len(), 2);
+    }
+
+    #[test]
+    fn kiro_agent_install_injects_camelcase_events_and_preserves_foreign() {
+        let before = r#"{
+          "name": "demo",
+          "hooks": {
+            "stop": [
+              { "command": "/legacy/kiro-hook.sh" },
+              { "command": "\"/usr/bin/node\" \"/app/clawd/kiro-hook.js\"" }
+            ],
+            "userPromptSubmit": [
+              { "command": "\"/usr/bin/node\" \"/app/clawd/kiro-hook.js\"" }
+            ]
+          }
+        }"#;
+        let cmd = "\"/app/agent-hub\" --agent-hub-kiro-hook";
+        let after = kiro_render_agent_after(
+            HookAction::Install,
+            cmd,
+            before,
+            Path::new("/tmp/demo.json"),
+        )
+        .unwrap();
+        let root: Value = serde_json::from_str(&after).unwrap();
+        let managed = kiro_agent_managed_entries(&root, KIRO_HOOK_ARG);
+        assert_eq!(managed.len(), 2);
+        assert!(managed.iter().any(|(e, c)| e == "userPromptSubmit" && c == cmd));
+        assert!(managed.iter().any(|(e, c)| e == "stop" && c == cmd));
+        // Foreign hooks kept.
+        let stop = root
+            .pointer("/hooks/stop")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert!(stop.iter().any(|e| {
+            e.get("command").and_then(Value::as_str) == Some("/legacy/kiro-hook.sh")
+        }));
+        assert!(stop.iter().any(|e| {
+            e.get("command")
+                .and_then(Value::as_str)
+                .is_some_and(|c| c.contains("clawd"))
+        }));
+    }
+
+    #[test]
+    fn kiro_agent_uninstall_removes_only_managed() {
+        let before = r#"{
+          "name": "demo",
+          "hooks": {
+            "stop": [
+              { "command": "\"/app/agent-hub\" --agent-hub-kiro-hook" },
+              { "command": "/legacy/kiro-hook.sh" }
+            ],
+            "userPromptSubmit": [
+              { "command": "\"/app/agent-hub\" --agent-hub-kiro-hook" }
+            ]
+          }
+        }"#;
+        let after = kiro_render_agent_after(
+            HookAction::Uninstall,
+            "\"/app/agent-hub\" --agent-hub-kiro-hook",
+            before,
+            Path::new("/tmp/demo.json"),
+        )
+        .unwrap();
+        let root: Value = serde_json::from_str(&after).unwrap();
+        assert!(kiro_agent_managed_entries(&root, KIRO_HOOK_ARG).is_empty());
+        let stop = root
+            .pointer("/hooks/stop")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert_eq!(stop.len(), 1);
+        assert_eq!(
+            stop[0].get("command").and_then(Value::as_str),
+            Some("/legacy/kiro-hook.sh")
+        );
+        assert!(root.pointer("/hooks/userPromptSubmit").is_none());
     }
 
     #[test]

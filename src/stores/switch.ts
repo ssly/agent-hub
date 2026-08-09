@@ -103,12 +103,14 @@ export const useSwitchStore = defineStore('switch', () => {
     grokUsageLoading.value = true
     grokUsageError.value = null
     try {
-      grokUsage.value = await api.getGrokUsage(force)
-      grokUsageLastQuery.value = (grokUsage.value.fetched_at || Math.floor(Date.now() / 1000)) * 1000
+      const next = await api.getGrokUsage(force)
+      grokUsage.value = next
+      grokUsageLastQuery.value = (next.fetched_at || Math.floor(Date.now() / 1000)) * 1000
     } catch (reason: any) {
+      // Keep the last successful numbers on transport/parse failure; only
+      // surface the error banner when there is nothing left to show.
       grokUsageError.value = String(reason?.message || reason)
-      grokUsage.value = null
-      grokUsageLastQuery.value = 0
+      if (!grokUsage.value) grokUsageLastQuery.value = 0
     } finally {
       grokUsageLoading.value = false
     }

@@ -16,6 +16,7 @@ import {
   getGrokUsage,
   getKimiSessionMonitorSnapshot,
   getKimiUsage,
+  getKiroSessionMonitorSnapshot,
   getUsageProviderAvailability,
   getZCodeSessionMonitorSnapshot,
   resizeUsageTray,
@@ -93,7 +94,7 @@ let resizeSequence = 0
 // Same data the Monitor tab shows (backend snapshots + change events), but
 // reduced to one line per session: status dot + agent + user question.
 // Same order as MONITOR_AGENTS / platform registry (monitor subset).
-const MONITOR_AGENTS_LIST: MonitorAgent[] = ['codex', 'claude', 'cursor', 'antigravity', 'grok', 'kimi', 'zcode']
+const MONITOR_AGENTS_LIST: MonitorAgent[] = ['codex', 'claude', 'cursor', 'antigravity', 'grok', 'kimi', 'zcode', 'kiro']
 const MONITOR_CHANGED_EVENTS: Record<MonitorAgent, string> = {
   codex: 'session-monitor:codex-changed',
   claude: 'session-monitor:claude-changed',
@@ -102,6 +103,7 @@ const MONITOR_CHANGED_EVENTS: Record<MonitorAgent, string> = {
   grok: 'session-monitor:grok-changed',
   kimi: 'session-monitor:kimi-changed',
   zcode: 'session-monitor:zcode-changed',
+  kiro: 'session-monitor:kiro-changed',
 }
 const MONITOR_SNAPSHOT_API: Record<MonitorAgent, () => Promise<MonitorSnapshot>> = {
   codex: getCodexSessionMonitorSnapshot,
@@ -111,6 +113,7 @@ const MONITOR_SNAPSHOT_API: Record<MonitorAgent, () => Promise<MonitorSnapshot>>
   grok: getGrokSessionMonitorSnapshot,
   kimi: getKimiSessionMonitorSnapshot,
   zcode: getZCodeSessionMonitorSnapshot,
+  kiro: getKiroSessionMonitorSnapshot,
 }
 const monitorSnapshots = ref<Record<MonitorAgent, MonitorSnapshot>>({
   codex: { revision: 0, sessions: [] },
@@ -120,6 +123,7 @@ const monitorSnapshots = ref<Record<MonitorAgent, MonitorSnapshot>>({
   grok: { revision: 0, sessions: [] },
   kimi: { revision: 0, sessions: [] },
   zcode: { revision: 0, sessions: [] },
+  kiro: { revision: 0, sessions: [] },
 })
 
 // Merged like the Monitor tab's "all" view: running first, newest activity
@@ -143,7 +147,10 @@ function monitorTipPlacement(index: number): 'top' | 'bottom' {
   return index < MONITOR_TIP_SPLIT ? 'bottom' : 'top'
 }
 
-/** Full-mode text label (mini uses icons only). */
+/** Full-mode text label (mini uses icons only).
+ *  Only refine the label when source is a real, verified client split
+ *  (Codex→ChatGPT, Antigravity CLI/app/IDE). Kiro hooks cannot tell CLI
+ *  from IDE, so stay on the plain product name "Kiro". */
 function monitorAgentLabel(row: AgentSessionState) {
   if (row.agent === 'codex' && row.source === 'chatgpt') {
     return t('session_monitor.source_chatgpt')
@@ -709,6 +716,8 @@ async function refresh(compact = false, syncWithAccounts = false, force = false)
   } catch (reason: any) {
     if (sequence !== refreshSequence) return
     providerErrors.value[provider] = String(reason?.message || reason)
+    // Keep the previous successful payload so a transient error does not blank
+    // the orb. Only clear when there was never any data for this provider.
   } finally {
     if (sequence === refreshSequence) {
       compactLoading.value = false
@@ -1010,16 +1019,8 @@ onBeforeUnmount(() => {
 
             <template v-else-if="selectedProvider === 'grok-build'">
               <div class="quota-wrap" :class="{ 'is-loading': loading, 'is-mini': miniMode }">
-                <!-- Stale cache: never show the orb with expired numbers; only a calm placeholder. -->
-                <UsageOrbPlaceholder
-                  v-if="grokUsage?.stale"
-                  kind="error"
-                  :mini="miniMode"
-                  :title="t('tray.stale_title')"
-                  :message="t('switch.grok_stale_warning')"
-                />
                 <UsageOrb
-                  v-else-if="grokWindows.length"
+                  v-if="grokWindows.length"
                   :windows="grokWindows"
                   :mini="miniMode"
                 />
@@ -1082,8 +1083,9 @@ onBeforeUnmount(() => {
               <span v-if="!miniMode">{{ monitorAgentLabel(row) }}</span>
             </span>
             <span class="monitor-question">
+              <!-- Long prompts: clamp tooltip to 3 lines (no ghost 4th line). -->
               <span
-                v-tooltip:[monitorTipPlacement(index)]="miniMode ? '' : (row.userPrompt || t('session_monitor.no_prompt'))"
+                v-tooltip:[monitorTipPlacement(index)].clamp="miniMode ? '' : (row.userPrompt || t('session_monitor.no_prompt'))"
               >
                 {{ row.userPrompt || t('session_monitor.no_prompt') }}
               </span>
@@ -1545,28 +1547,33 @@ onBeforeUnmount(() => {
   background: var(--tray-inset);
 }
 /* Full validity floats above the chip on hover; the chip itself stays a
-   compact one-line YYYY-MM-DD tag and never reflows. */
+   compact one-line YYYY-MM-DD tag and never reflows.
+   Colors match app tooltips (ink/canvas invert): light theme → dark bubble,
+   night theme → light bubble. Do NOT use --tray-on-accent here — night mode
+   never redefines it, so text would stay cream-on-cream. */
 .credit-chip__tooltip {
   position: absolute;
   bottom: calc(100% + 6px);
   left: 50%;
   transform: translateX(-50%);
+  z-index: 4;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 1px;
   padding: 5px 9px;
   border-radius: 6px;
-  color: var(--tray-on-accent);
   background: var(--tray-ink);
+  color: var(--tray-canvas);
   font-size: 10px;
   line-height: 1.5;
   white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .18);
   opacity: 0;
   pointer-events: none;
   transition: opacity .15s ease;
 }
-.credit-chip:hover .credit-chip__tooltip { opacity: 1; }
+.credit-chip:hover .credit-chip__tooltip { opacity: 0.96; }
 .credit-chip__date {
   color: var(--tray-ink);
   font-size: 10px;
@@ -1686,6 +1693,8 @@ onBeforeUnmount(() => {
   --tray-danger: #D88078;
   --tray-hairline: rgba(231, 233, 240, .06);
   --tray-border: rgba(231, 233, 240, .10);
+  /* Text on accent buttons / inverted chips (pairs with light ink). */
+  --tray-on-accent: #171B25;
   --tray-inset: var(--tray-hover);
   --tray-btn-bg: var(--tray-hairline);
   --tray-btn-bg-hover: var(--tray-border);
@@ -1718,6 +1727,7 @@ onBeforeUnmount(() => {
     --tray-danger: #D88078;
     --tray-hairline: rgba(231, 233, 240, .06);
     --tray-border: rgba(231, 233, 240, .10);
+    --tray-on-accent: #171B25;
     --tray-inset: var(--tray-hover);
     --tray-btn-bg: var(--tray-hairline);
     --tray-btn-bg-hover: var(--tray-border);

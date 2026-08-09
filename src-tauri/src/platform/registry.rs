@@ -17,9 +17,9 @@ pub fn builtin_platforms() -> Vec<PlatformDef> {
     let home = dirs::home_dir().expect("no home directory");
     vec![
         PlatformDef {
-            id: "shared-pool".into(),
-            display_name: "Shared Pool".into(),
-            description: "Shared skill pool for all agents".into(),
+            id: "shared".into(),
+            display_name: "Shared".into(),
+            description: "Shared skill directory for agents".into(),
             presence_path: home.join(".agents"),
             skill_dir: join_relative(home.clone(), ".agents/skills"),
         },
@@ -76,20 +76,6 @@ pub fn builtin_platforms() -> Vec<PlatformDef> {
             skill_dir: join_relative(home.clone(), ".zcode/skills"),
         },
         PlatformDef {
-            id: "hermes".into(),
-            display_name: "Hermes".into(),
-            description: "Hermes agent skills".into(),
-            presence_path: home.join(".hermes"),
-            skill_dir: join_relative(home.clone(), ".hermes/skills"),
-        },
-        PlatformDef {
-            id: "trae".into(),
-            display_name: "Trae".into(),
-            description: "ByteDance Trae IDE agent skills".into(),
-            presence_path: home.join(".trae"),
-            skill_dir: join_relative(home.clone(), ".trae/skills"),
-        },
-        PlatformDef {
             id: "kiro".into(),
             display_name: "Kiro".into(),
             description: "Amazon Kiro IDE agent skills".into(),
@@ -130,7 +116,7 @@ mod tests {
             Some(root.join(".claude").join("skills"))
         );
         assert_eq!(
-            workspace_skill_dir("shared-pool", &root),
+            workspace_skill_dir("shared", &root),
             Some(root.join(".agents").join("skills"))
         );
         assert_eq!(
@@ -161,16 +147,16 @@ mod tests {
     }
 
     #[test]
-    fn codex_user_skills_live_in_the_shared_pool() {
+    fn codex_user_skills_live_in_shared() {
         let codex = builtin_platforms()
             .into_iter()
             .find(|platform| platform.id == "codex")
             .expect("codex platform should exist");
-        let shared_pool = builtin_platforms()
+        let shared = builtin_platforms()
             .into_iter()
-            .find(|platform| platform.id == "shared-pool")
-            .expect("shared-pool platform should exist");
-        assert_eq!(codex.skill_dir, shared_pool.skill_dir);
+            .find(|platform| platform.id == "shared")
+            .expect("shared platform should exist");
+        assert_eq!(codex.skill_dir, shared.skill_dir);
     }
 
     #[test]
@@ -181,16 +167,17 @@ mod tests {
             .map(|platform| platform.id.as_str())
             .collect();
         assert_eq!(
-            &ids[..8],
+            ids,
             [
-                "shared-pool",
+                "shared",
                 "codex",
                 "claude-code",
                 "cursor",
                 "antigravity",
                 "grok-build",
                 "kimi-code",
-                "zcode"
+                "zcode",
+                "kiro",
             ]
         );
     }

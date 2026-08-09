@@ -111,6 +111,11 @@ function getSidebarItems() {
   return pluginsStore.platforms
 }
 
+function platformLabel(item: { id: string; display_name?: string }) {
+  if (item.id === 'shared') return t('plugin.platform_shared')
+  return item.display_name || item.id
+}
+
 function getSelectedId() {
   if (appStore.currentTab === 'sessions') return sessionsStore.selectedPlatformId
   if (appStore.currentTab === 'monitor') return sessionMonitorStore.activeAgent
@@ -229,7 +234,7 @@ function handleSessionSearch(e: Event) {
           <div class="flex items-center justify-between">
             <span class="ah-platform-item__label">
               <AgentIcon :agent-id="item.id" class="ah-platform-item__icon" />
-              <span class="ah-platform-item__name">{{ item.display_name }}</span>
+              <span class="ah-platform-item__name">{{ platformLabel(item) }}</span>
             </span>
             <span v-if="appStore.currentTab === 'sessions' && item.session_count != null" class="ah-platform-item__count">
               {{ item.session_count }}

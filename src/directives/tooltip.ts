@@ -3,14 +3,15 @@ import type { Directive } from 'vue'
 /**
  * v-tooltip — styled replacement for the native `title` attribute.
  *
- * Usage: `v-tooltip="text"` / `v-tooltip:bottom` (below the anchor, flipping
- * above at the bottom edge), `v-tooltip:top="text"` (above the anchor, flipping
- * below at the top edge), or `v-tooltip:left` / `v-tooltip:right` (beside the
- * anchor on the preferred side, flipping at the screen edge). Dynamic args
- * work (`v-tooltip:[side]="text"`). Nothing shows when the value is empty.
- * A single tooltip element is shared app-wide (appended to <body>); its
- * colors invert with the theme via --ink / --canvas (styles live in
- * theme.css under § Tooltip).
+ * Usage:
+ *   v-tooltip="text"
+ *   v-tooltip:bottom / :top / :left / :right
+ *   v-tooltip.clamp="text"          — clamp body to 3 lines + ellipsis
+ *   v-tooltip:top.clamp="text"
+ *
+ * Dynamic args work (`v-tooltip:[side]="text"`). Empty value shows nothing.
+ * A single tooltip element is shared app-wide (appended to <body>); colors
+ * invert with the theme via --ink / --canvas (styles in theme.css § Tooltip).
  */
 
 let tipEl: HTMLDivElement | null = null
@@ -20,7 +21,6 @@ function ensureTip(): HTMLDivElement {
     tipEl = document.createElement('div')
     tipEl.className = 'ah-tooltip'
     document.body.appendChild(tipEl)
-    // Any scroll/resize repositions nothing — just dismiss.
     window.addEventListener('scroll', hide, true)
     window.addEventListener('resize', hide)
   }
@@ -31,15 +31,22 @@ function hide() {
   tipEl?.classList.remove('is-visible')
 }
 
-function show(el: HTMLElement, text: string, placement: 'bottom' | 'left' | 'right' | 'top') {
+function show(
+  el: HTMLElement,
+  text: string,
+  placement: 'bottom' | 'left' | 'right' | 'top',
+  clamp: boolean,
+) {
   if (!text) return
   const tip = ensureTip()
-  tip.textContent = text
+  // Clamped tips wrap as normal text (pre-wrap + line-clamp leaks a ghost
+  // 4th line in WebKit). Preserve newlines as spaces so one paragraph clamps cleanly.
+  tip.textContent = clamp ? text.replace(/\s*\n+\s*/g, ' ').trim() : text
+  tip.classList.toggle('is-clamped', clamp)
   tip.classList.add('is-visible')
 
   // Reset geometry before measuring: shrink-to-fit would otherwise size the
-  // box against the previous show's leftover position, producing narrow,
-  // super-tall tooltips.
+  // box against the previous show's leftover position.
   tip.style.left = '0px'
   tip.style.top = '0px'
   tip.style.maxWidth = `${window.innerWidth - 16}px`
@@ -48,10 +55,6 @@ function show(el: HTMLElement, text: string, placement: 'bottom' | 'left' | 'rig
   const tipRect = tip.getBoundingClientRect()
   const margin = 8
 
-  // Beside the anchor, vertically centered, on the preferred side; flip when
-  // that side is off-screen. When neither side fits at natural width (typical
-  // in the narrow tray popup), shrink the box into the wider side; only when
-  // even that is too cramped fall through to the bottom placement.
   const placeBeside = (prefer: 'left' | 'right'): boolean => {
     const placeAt = (left: number, height: number) => {
       let top = rect.top + rect.height / 2 - height / 2
@@ -85,7 +88,6 @@ function show(el: HTMLElement, text: string, placement: 'bottom' | 'left' | 'rig
     return
   }
 
-  // Above the anchor, horizontally centered; flip below at the top edge.
   if (placement === 'top') {
     const left = Math.max(
       margin,
@@ -113,7 +115,9 @@ function show(el: HTMLElement, text: string, placement: 'bottom' | 'left' | 'rig
 }
 
 type TooltipPlacement = 'bottom' | 'left' | 'right' | 'top'
-type TooltipElement = HTMLElement & { __ahTooltip__?: { onEnter: () => void; onLeave: () => void } }
+type TooltipElement = HTMLElement & {
+  __ahTooltip__?: { onEnter: () => void; onLeave: () => void }
+}
 
 function parsePlacement(arg: string | undefined): TooltipPlacement {
   if (arg === 'left' || arg === 'right' || arg === 'top' || arg === 'bottom') return arg
@@ -124,12 +128,13 @@ export const vTooltip: Directive<TooltipElement, string | undefined> = {
   mounted(el, binding) {
     el.dataset.ahTooltip = binding.value ?? ''
     el.dataset.ahTooltipPlacement = parsePlacement(binding.arg)
+    el.dataset.ahTooltipClamp = binding.modifiers.clamp ? '1' : ''
     const handlers = {
-      // Read placement on enter so dynamic args (e.g. monitor row index) stay fresh.
       onEnter: () => show(
         el,
         el.dataset.ahTooltip || '',
         parsePlacement(el.dataset.ahTooltipPlacement),
+        el.dataset.ahTooltipClamp === '1',
       ),
       onLeave: hide,
     }
@@ -140,6 +145,7 @@ export const vTooltip: Directive<TooltipElement, string | undefined> = {
   updated(el, binding) {
     el.dataset.ahTooltip = binding.value ?? ''
     el.dataset.ahTooltipPlacement = parsePlacement(binding.arg)
+    el.dataset.ahTooltipClamp = binding.modifiers.clamp ? '1' : ''
   },
   unmounted(el) {
     const handlers = el.__ahTooltip__

@@ -47,10 +47,6 @@ const bubbleR = computed(() => (props.windows.length >= 3 ? 50 : 64))
 function usedPercent(window: UsageWindow) {
   return Math.min(100, Math.max(0, window.used_percent ?? 0))
 }
-function remainingPercent(window: UsageWindow) {
-  const remaining = window.remaining_percent ?? 100 - usedPercent(window)
-  return Math.min(100, Math.max(0, Math.round(remaining)))
-}
 
 // Water level: the tank fills bottom-up with the *consumed* share, so a nearly
 // full tank means the window is nearly exhausted.
@@ -121,25 +117,14 @@ function formatReset(resetAt: number) {
   }).format(new Date(resetAt * 1000))
 }
 
-function tip(item: OrbWindow) {
-  const lines = [
-    `${item.label} ${t('tray.limit')} · ${t('tray.used')} ${Math.round(usedPercent(item.window))}% · ${t('tray.remaining')} ${remainingPercent(item.window)}%`,
-  ]
-  if (item.window.reset_at) lines.push(t('tray.reset_at', { time: formatReset(item.window.reset_at) }))
-  return lines.join('\n')
-}
-
-// The whole graph (bubble tank + rings) shares one hover tooltip: every
-// window's lines joined together, placed beside the orb when there is room.
-const graphTip = computed(() => props.windows.map((item) => tip(item)).join('\n'))
-
 /** Center readout is *used* share of the shortest window (not remaining). */
 const centerUsed = computed(() => Math.round(usedPercent(bubbleWindow.value.window)))
 </script>
 
 <template>
   <div class="usage-orb" :class="{ 'is-mini': mini }">
-    <div class="usage-orb__graph" v-tooltip:right="mini ? '' : graphTip">
+    <!-- No graph/legend tooltips: used % + reset time sit in the side legend. -->
+    <div class="usage-orb__graph">
       <svg viewBox="0 0 180 180" aria-hidden="true">
         <defs>
           <clipPath :id="clipId">
@@ -197,13 +182,15 @@ const centerUsed = computed(() => Math.round(usedPercent(bubbleWindow.value.wind
         <li
           v-for="(item, index) in windows"
           :key="item.key"
-          v-tooltip:top="tip(item)"
           :class="index === 0 ? 'tone-tank' : 'tone-ring'"
         >
           <span class="legend-dot" />
           <span class="legend-label">{{ item.label }} {{ t('tray.limit') }}</span>
           <span class="legend-nums">
             <strong class="legend-used">{{ t('tray.used') }} {{ Math.round(usedPercent(item.window)) }}%</strong>
+            <span v-if="item.window.reset_at" class="legend-reset">
+              {{ t('tray.reset_at', { time: formatReset(item.window.reset_at) }) }}
+            </span>
           </span>
         </li>
       </ul>
@@ -313,9 +300,8 @@ const centerUsed = computed(() => Math.round(usedPercent(bubbleWindow.value.wind
   gap: 8px;
 }
 .usage-orb__legend li {
-  /* fit-content keeps the v-tooltip hover area on the text itself instead of
-     the full side-column width. */
   width: fit-content;
+  max-width: 100%;
   display: grid;
   grid-template-columns: auto 1fr;
   align-items: center;
@@ -332,11 +318,23 @@ const centerUsed = computed(() => Math.round(usedPercent(bubbleWindow.value.wind
   background: currentColor;
 }
 .legend-label { color: var(--tray-ink-2); font-weight: 600; text-transform: uppercase; }
-.legend-nums { display: flex; gap: 8px; white-space: nowrap; }
+.legend-nums {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  min-width: 0;
+}
 .legend-used {
   color: var(--tray-ink);
   font-variant-numeric: tabular-nums;
   font-weight: 650;
+  white-space: nowrap;
+}
+.legend-reset {
+  color: var(--tray-ink-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 @media (prefers-reduced-motion: reduce) {

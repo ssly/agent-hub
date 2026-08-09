@@ -31,7 +31,11 @@ const showBootLoading = computed(
 
 const supportsHooks = computed(() => (HOOK_AGENTS as string[]).includes(store.activeAgent))
 const isAll = computed(() => store.activeAgent === 'all')
-const hookAction = computed(() => store.hookStatus?.installed ? 'uninstall' : 'install')
+/** Managed handlers present but not matching current version → needs reset. */
+const hookOutdated = computed(() => {
+  const status = store.hookStatus
+  return !!status && !status.installed && status.managedHandlerCount > 0
+})
 const HOOK_CONFIG_PATHS: Record<string, string> = {
   codex: '~/.codex/hooks.json',
   claude: '~/.claude/settings.json',
@@ -40,6 +44,7 @@ const HOOK_CONFIG_PATHS: Record<string, string> = {
   grok: '~/.grok/hooks/agent-hub.json',
   kimi: '~/.kimi-code/config.toml',
   zcode: '~/.zcode/cli/config.json',
+  kiro: '~/.kiro/hooks/agent-hub.json',
 }
 const defaultConfigPath = computed(() => HOOK_CONFIG_PATHS[store.activeAgent] ?? '')
 const runningCount = computed(
@@ -130,6 +135,10 @@ function agentSource(session: AgentSessionState): SessionState['source'] | null 
   if (session.agent === 'codex' && session.source === 'chatgpt') return null
   // Badge already encodes Antigravity product (CLI / client / IDE).
   if (session.agent === 'antigravity') return null
+  // Kiro hook payloads do not reliably distinguish CLI vs IDE; capture always
+  // stamps source=terminal as a default. Do not surface a CLI/IDE (or
+  // generic "terminal") chip until we have a real discriminator.
+  if (session.agent === 'kiro') return null
   return session.source ?? null
 }
 
@@ -177,22 +186,42 @@ function emptyHint(): string {
 
 function previewExplanation(): string {
   if (!store.preview) return ''
-  return store.preview.action === 'install'
+  if (store.previewKind === 'reset') return t('session_monitor.reset_explanation')
+  return store.previewKind === 'install'
     ? t('session_monitor.install_explanation')
     : t('session_monitor.uninstall_explanation')
 }
 
+function previewTitle(): string {
+  const agent = agentLabel(store.previewAgent)
+  if (store.previewKind === 'reset') {
+    return t('session_monitor.reset_preview_title', { agent })
+  }
+  if (store.previewKind === 'uninstall') {
+    return t('session_monitor.uninstall_preview_title', { agent })
+  }
+  return t('session_monitor.install_preview_title', { agent })
+}
+
+function confirmLabel(): string {
+  if (store.hookLoading) return t('session_monitor.applying')
+  if (store.previewKind === 'reset') return t('session_monitor.confirm_reset')
+  if (store.previewKind === 'uninstall') return t('session_monitor.confirm_uninstall')
+  return t('session_monitor.confirm_install')
+}
+
 async function handleApplyHook() {
-  const action = store.preview?.action
+  const kind = store.previewKind
   const agent = store.previewAgent
   await store.applyHookPreview()
-  if (!store.previewError && action) {
-    showToast(
-      action === 'install'
-        ? t('session_monitor.install_success', { agent: agentLabel(agent) })
-        : t('session_monitor.uninstall_success', { agent: agentLabel(agent) }),
-      'success',
-    )
+  if (!store.previewError && kind) {
+    const key =
+      kind === 'reset'
+        ? 'session_monitor.reset_success'
+        : kind === 'uninstall'
+          ? 'session_monitor.uninstall_success'
+          : 'session_monitor.install_success'
+    showToast(t(key, { agent: agentLabel(agent) }), 'success')
   }
 }
 
@@ -221,14 +250,30 @@ onMounted(() => {
         <h1 class="ah-page-title">{{ t('session_monitor.title') }}</h1>
         <p class="session-monitor-subtitle">{{ t('session_monitor.subtitle') }}</p>
       </div>
+      <!-- Exactly one action: install | reset (outdated) | uninstall. -->
       <button
-        v-if="supportsHooks && !showBootLoading"
-        class="btn"
-        :class="hookAction === 'uninstall' ? 'btn-danger' : 'btn-primary'"
+        v-if="supportsHooks && !showBootLoading && hookOutdated"
+        class="btn btn-primary"
         :disabled="store.previewLoading || store.hookLoading"
-        @click="store.openHookPreview(store.activeAgent as HookAgent, hookAction)"
+        @click="store.openHookPreview(store.activeAgent as HookAgent, 'reset')"
       >
-        {{ hookAction === 'uninstall' ? t('session_monitor.uninstall_hook') : t('session_monitor.install_hook') }}
+        {{ t('session_monitor.reset_hook') }}
+      </button>
+      <button
+        v-else-if="supportsHooks && !showBootLoading && store.hookStatus?.installed"
+        class="btn btn-danger"
+        :disabled="store.previewLoading || store.hookLoading"
+        @click="store.openHookPreview(store.activeAgent as HookAgent, 'uninstall')"
+      >
+        {{ t('session_monitor.uninstall_hook') }}
+      </button>
+      <button
+        v-else-if="supportsHooks && !showBootLoading"
+        class="btn btn-primary"
+        :disabled="store.previewLoading || store.hookLoading"
+        @click="store.openHookPreview(store.activeAgent as HookAgent, 'install')"
+      >
+        {{ t('session_monitor.install_hook') }}
       </button>
     </div>
 
@@ -343,9 +388,7 @@ onMounted(() => {
 
       <AppModal
         :show="store.previewOpen"
-        :title="store.preview?.action === 'uninstall'
-          ? t('session_monitor.uninstall_preview_title', { agent: agentLabel(store.previewAgent) })
-          : t('session_monitor.install_preview_title', { agent: agentLabel(store.previewAgent) })"
+        :title="previewTitle()"
         width-class="w-[44rem]"
         :close-on-outside="!store.hookLoading"
         @close="store.closeHookPreview"
@@ -372,7 +415,10 @@ onMounted(() => {
             </div>
           </dl>
 
-          <p v-if="store.preview.action === 'install' && store.previewAgent === 'codex'" class="ah-notice ah-notice--warning">
+          <p
+            v-if="(store.previewKind === 'install' || store.previewKind === 'reset') && store.previewAgent === 'codex'"
+            class="ah-notice ah-notice--warning"
+          >
             {{ t('session_monitor.trust_hint') }}
           </p>
 
@@ -389,15 +435,11 @@ onMounted(() => {
           </button>
           <button
             class="btn"
-            :class="store.preview?.action === 'uninstall' ? 'btn-danger' : 'btn-primary'"
+            :class="store.previewKind === 'uninstall' ? 'btn-danger' : 'btn-primary'"
             :disabled="!store.preview?.changed || store.hookLoading || store.previewLoading"
             @click="handleApplyHook"
           >
-            {{ store.hookLoading
-              ? t('session_monitor.applying')
-              : store.preview?.action === 'uninstall'
-                ? t('session_monitor.confirm_uninstall')
-                : t('session_monitor.confirm_install') }}
+            {{ confirmLabel() }}
           </button>
         </template>
       </AppModal>

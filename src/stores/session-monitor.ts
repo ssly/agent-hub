@@ -2,7 +2,10 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import * as api from '@/lib/api'
 
+/** Backend write action (install rewrites managed handlers; uninstall removes them). */
 export type HookAction = 'install' | 'uninstall'
+/** UI intent: reset is install under a different label (one-step reinstall). */
+export type HookPreviewKind = HookAction | 'reset'
 export type SessionSource =
   | 'terminal'
   | 'chatgpt'
@@ -12,8 +15,8 @@ export type SessionSource =
   /** Antigravity IDE surface. */
   | 'antigravity-ide'
 export type RuntimeStatus = 'running' | 'ended'
-export type MonitorAgent = 'codex' | 'claude' | 'cursor' | 'antigravity' | 'grok' | 'kimi' | 'zcode'
-/** Same relative order as platform/registry.rs (skip Shared Pool / no-hook agents). */
+export type MonitorAgent = 'codex' | 'claude' | 'cursor' | 'antigravity' | 'grok' | 'kimi' | 'zcode' | 'kiro'
+/** Same relative order as platform/registry.rs (skip Shared). */
 export const MONITOR_AGENTS: MonitorAgent[] = [
   'codex',
   'claude',
@@ -22,6 +25,7 @@ export const MONITOR_AGENTS: MonitorAgent[] = [
   'grok',
   'kimi',
   'zcode',
+  'kiro',
 ]
 /** Sidebar tab: one of the agents, or the merged "all" view. */
 export type MonitorTab = MonitorAgent | 'all'
@@ -38,6 +42,7 @@ export const MONITOR_AGENT_PLATFORM: Partial<Record<MonitorAgent, string>> = {
   grok: 'grok',
   kimi: 'kimi',
   zcode: 'zcode',
+  kiro: 'kiro',
 }
 
 export interface SessionState {
@@ -93,6 +98,7 @@ const CHANGED_EVENTS: Record<MonitorAgent, string> = {
   grok: 'session-monitor:grok-changed',
   kimi: 'session-monitor:kimi-changed',
   zcode: 'session-monitor:zcode-changed',
+  kiro: 'session-monitor:kiro-changed',
 }
 
 const snapshotApi: Record<MonitorAgent, () => Promise<MonitorSnapshot>> = {
@@ -103,6 +109,7 @@ const snapshotApi: Record<MonitorAgent, () => Promise<MonitorSnapshot>> = {
   grok: api.getGrokSessionMonitorSnapshot,
   kimi: api.getKimiSessionMonitorSnapshot,
   zcode: api.getZCodeSessionMonitorSnapshot,
+  kiro: api.getKiroSessionMonitorSnapshot,
 }
 
 const deleteSessionApi: Record<MonitorAgent, (sessionId: string) => Promise<void>> = {
@@ -113,6 +120,7 @@ const deleteSessionApi: Record<MonitorAgent, (sessionId: string) => Promise<void
   grok: api.deleteGrokSessionMonitorSession,
   kimi: api.deleteKimiSessionMonitorSession,
   zcode: api.deleteZCodeSessionMonitorSession,
+  kiro: api.deleteKiroSessionMonitorSession,
 }
 
 const hookApi: Record<HookAgent, {
@@ -155,6 +163,11 @@ const hookApi: Record<HookAgent, {
     preview: api.previewZCodeHookChange,
     apply: api.applyZCodeHookChange,
   },
+  kiro: {
+    status: api.getKiroHookStatus,
+    preview: api.previewKiroHookChange,
+    apply: api.applyKiroHookChange,
+  },
 }
 
 function emptySnapshot(): MonitorSnapshot {
@@ -175,6 +188,7 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     grok: emptySnapshot(),
     kimi: emptySnapshot(),
     zcode: emptySnapshot(),
+    kiro: emptySnapshot(),
   })
   const hookStatuses = ref<Record<HookAgent, HookStatus | null>>({
     codex: null,
@@ -184,6 +198,7 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     grok: null,
     kimi: null,
     zcode: null,
+    kiro: null,
   })
   const loading = ref(false)
   const hookLoading = ref(false)
@@ -345,12 +360,17 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     listenersReady = false
   }
 
-  async function openHookPreview(agent: HookAgent, action: HookAction) {
+  /** UI-facing kind for modal copy; `reset` previews/applies as install. */
+  const previewKind = ref<HookPreviewKind>('install')
+
+  async function openHookPreview(agent: HookAgent, kind: HookPreviewKind) {
     previewAgent.value = agent
+    previewKind.value = kind
     previewOpen.value = true
     previewLoading.value = true
     previewError.value = ''
     preview.value = null
+    const action: HookAction = kind === 'reset' ? 'install' : kind
     try {
       preview.value = await hookApi[agent].preview(action)
     } catch (cause) {
@@ -365,6 +385,7 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     previewOpen.value = false
     preview.value = null
     previewError.value = ''
+    previewKind.value = 'install'
   }
 
   async function applyHookPreview() {
@@ -434,6 +455,7 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     previewOpen,
     previewLoading,
     previewAgent,
+    previewKind,
     preview,
     previewError,
     hydrated,

@@ -4,8 +4,6 @@ import {
   Bot,
   Network,
   PanelsTopLeft,
-  Route,
-  Send,
   Triangle,
 } from 'lucide-vue-next'
 import kimiCodeMask from '@/assets/agent-icons/kimi-code.png'
@@ -52,11 +50,9 @@ const brandDetailMasks: Record<string, string> = {
 }
 
 const icons: Record<string, Component> = {
-  // Shared Pool is a shared capability directory, not a branded Agent.
-  'shared-pool': Network,
+  // Shared is a shared skill directory, not a branded Agent.
+  shared: Network,
   all: PanelsTopLeft,
-  hermes: Send,
-  trae: Route,
   opencode: Triangle,
 }
 

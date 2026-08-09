@@ -5,7 +5,8 @@ import { useSwitchStore } from '@/stores/switch'
 import { useToast } from '@/composables/useToast'
 import * as api from '@/lib/api'
 import AppModal from '@/components/ui/AppModal.vue'
-import { RefreshCw, Gauge, Trash2, Info } from 'lucide-vue-next'
+import AccountUsagePanel, { type UsageWindowRow } from '@/components/switch/AccountUsagePanel.vue'
+import { Trash2 } from 'lucide-vue-next'
 
 const { t, locale } = useI18n()
 const store = useSwitchStore()
@@ -18,20 +19,16 @@ const AGENT_DISPLAY_NAMES: Record<string, string> = {
   'kimi-code': 'Kimi Code',
 }
 const agentName = computed(
-  () => AGENT_DISPLAY_NAMES[store.selectedAgent ?? ''] ?? store.selectedAgent ?? ''
+  () => AGENT_DISPLAY_NAMES[store.selectedAgent ?? ''] ?? store.selectedAgent ?? '',
 )
 
-// --- Codex usage panel ---
 const isCodex = computed(() => store.selectedAgent === 'codex')
 const isGrokBuild = computed(() => store.selectedAgent === 'grok-build')
 const isKimiCode = computed(() => store.selectedAgent === 'kimi-code')
-const codexAccountName = computed(
-  () => store.codexUsage?.account_name || t('switch.codex_default_account')
-)
+const isClaudeCode = computed(() => store.selectedAgent === 'claude-code')
 
 // Absolute timestamp formatted as "YYYY-MM-DD HH:mm:ss" in the user's local
-// timezone. Uniform across locales so zh-CN/en-US render identically, and the
-// seconds are included so the user gets the concrete moment, not just the hour.
+// timezone. Uniform across locales so zh-CN/en-US render identically.
 function fmtAbsDate(value: number | string | null | undefined): string {
   if (value == null) return ''
   const d = typeof value === 'number' ? new Date(value * 1000) : new Date(value)
@@ -50,14 +47,10 @@ function fmtReset(secs?: number, resetAt?: number): string {
   const rel = h >= 24
     ? t('switch.usage_reset_dh', { d: Math.floor(h / 24), h: h % 24 })
     : t('switch.usage_reset_hm', { h, m })
-  // Append the absolute reset time when the backend provides reset_at (unix sec).
   const abs = resetAt ? t('switch.usage_reset_at', { date: fmtAbsDate(resetAt) }) : ''
   return abs ? `${rel} ${abs}` : rel
 }
 
-// Format the reset-credit expiry as a coarse countdown ("28 天后到期")
-// with the absolute expiry date appended as a small hint, since the user
-// explicitly asked for the concrete expiry time to be visible on the page.
 function fmtCreditExpiry(iso?: string | null): string {
   if (!iso) return ''
   const target = new Date(iso).getTime()
@@ -73,9 +66,6 @@ function fmtCreditExpiry(iso?: string | null): string {
   return `${rel} ${abs}`
 }
 
-// The reset-credit title comes back from the Codex backend as a fixed English
-// string (e.g. "Full reset (Weekly + 5 hr)"). Map it to a localized label so
-// the panel reads fully translated under zh-CN.
 const CREDIT_TITLE_MAP: Record<string, string> = {
   'full reset (weekly + 5 hr)': 'switch.usage_credit_title_full',
   'full reset': 'switch.usage_credit_title_full_plain',
@@ -86,19 +76,11 @@ function fmtCreditTitle(title?: string | null): string {
   return key ? t(key) : title
 }
 
-// Pick a localized window label from its duration in seconds.
-// The backend now forwards `window_seconds` from OpenAI, so we label the
-// window by what the API actually says rather than hard-coding 5h/7d.
-//   ~2592000s (30d) → monthly   (Free plan)
-//   604800s   (7d)   → 7-day     (Plus/Pro secondary)
-//   18000s    (5h)   → 5-hour    (Plus/Pro primary)
-// Anything else falls back to a generic "Xh/Xd" label.
 function windowLabel(seconds?: number): string {
   const s = seconds ?? 0
   if (s > 0 && Math.abs(s - 2592000) <= 86400) return t('switch.usage_monthly_window')
   if (s > 0 && Math.abs(s - 604800) <= 3600) return t('switch.usage_secondary_window')
   if (s > 0 && Math.abs(s - 18000) <= 600) return t('switch.usage_primary_window')
-  // Generic fallback derived from the duration itself.
   if (s >= 86400) {
     const d = Math.round(s / 86400)
     return t('switch.usage_reset_dh', { d, h: 0 })
@@ -108,78 +90,6 @@ function windowLabel(seconds?: number): string {
   }
   return t('switch.usage_primary_window')
 }
-
-// Build the list of windows that actually exist for this account from the same
-// normalized payload as the tray. The named fields remain only as a fallback
-// for older payloads; 5h/7d/30d can all be shown when returned.
-interface UsageCard { key: string; label: string; w: import('@/lib/api').UsageWindow }
-const usageWindows = computed<UsageCard[]>(() => {
-  const u = store.codexUsage
-  if (!u) return []
-  const fallback = [u.primary_window, u.secondary_window]
-    .filter((window): window is import('@/lib/api').UsageWindow => Boolean(window?.window_seconds))
-  const windows = (u.usage_windows?.length ? u.usage_windows : fallback)
-    .filter(window => window.window_seconds > 0)
-    .sort((left, right) => left.window_seconds - right.window_seconds)
-    .filter((window, index, all) => index === 0 || window.window_seconds !== all[index - 1].window_seconds)
-
-  return windows.map(window => ({
-    key: String(window.window_seconds),
-    label: windowLabel(window.window_seconds),
-    w: window,
-  }))
-})
-
-// Human-readable plan name for the badge (e.g. "free" → "Free").
-const planBadge = computed(() => {
-  const plan = (store.codexUsage?.plan_type || 'unknown')
-  const display = plan.charAt(0).toUpperCase() + plan.slice(1)
-  return t('switch.usage_plan_badge', { plan: display })
-})
-
-const grokAccountName = computed(
-  () => store.grokUsage?.account_name || t('switch.grok_default_account')
-)
-const grokPlanBadge = computed(() =>
-  t('switch.usage_plan_badge', { plan: store.grokUsage?.plan_type || 'Grok' })
-)
-const grokPeriodLabel = computed(() =>
-  store.grokUsage?.period_type === 'monthly'
-    ? t('switch.grok_monthly_window')
-    : t('switch.grok_weekly_window')
-)
-
-function fmtGrokValue(value: number): string {
-  return new Intl.NumberFormat(locale.value === 'zh-CN' ? 'zh-CN' : 'en-US', {
-    maximumFractionDigits: 2,
-  }).format(value)
-}
-
-// --- Kimi Code usage panel (5h rate-limit window + weekly quota) ---
-const kimiAccountName = computed(
-  () => store.kimiUsage?.account_name || t('switch.kimi_default_account')
-)
-// `METHOD_API_KEY` → "API 认证"; anything else falls back to a neutral label.
-const kimiAuthBadge = computed(() => {
-  const method = store.kimiUsage?.auth_method
-  if (method === 'METHOD_API_KEY') return t('switch.kimi_auth_api_key')
-  if (method === 'METHOD_OAUTH') return t('switch.kimi_auth_oauth')
-  return method || t('switch.kimi_auth_api_key')
-})
-// The 5-hour rolling rate-limit window. Its `reset_at` is the exact moment
-// the window rolls over, surfaced separately from the weekly reset.
-const kimiWindow5h = computed(() => store.kimiUsage?.window_5h ?? null)
-const kimiWindowWeekly = computed(() => store.kimiUsage?.window_weekly ?? null)
-
-// --- Claude Code usage panel (official OAuth login, 5h + weekly windows) ---
-// Always reflects the official /login subscription account, independent of
-// the custom-token profile pool below it.
-const isClaudeCode = computed(() => store.selectedAgent === 'claude-code')
-const claudeAccountName = computed(
-  () => store.claudeUsage?.account_name || t('switch.claude_default_account')
-)
-const claudeWindow5h = computed(() => store.claudeUsage?.window_5h ?? null)
-const claudeWindowWeekly = computed(() => store.claudeUsage?.window_weekly ?? null)
 
 function fmtQueryTime(value: number): string {
   if (!value) return ''
@@ -192,51 +102,173 @@ function fmtQueryTime(value: number): string {
   })
 }
 
-function fmtLastQuery(): string {
-  return fmtQueryTime(store.codexUsageLastQuery)
+function fmtGrokValue(value: number): string {
+  return new Intl.NumberFormat(locale.value === 'zh-CN' ? 'zh-CN' : 'en-US', {
+    maximumFractionDigits: 2,
+  }).format(value)
 }
 
-async function handleRefreshUsage() {
-  if (store.codexUsageLoading) return
-  // Explicit refresh always bypasses the 10-minute backend cache.
-  await store.refreshCodexUsage(true)
-  if (store.codexUsageError) {
-    showToast(t('switch.usage_failed'), 'error')
-  } else {
-    showToast(t('switch.usage_refresh_toast'), 'success')
+// --- Codex ---
+const codexAccountName = computed(
+  () => store.codexUsage?.account_name || t('switch.codex_default_account'),
+)
+const codexPlanBadge = computed(() => {
+  const plan = store.codexUsage?.plan_type || 'unknown'
+  const display = plan.charAt(0).toUpperCase() + plan.slice(1)
+  return t('switch.usage_plan_badge', { plan: display })
+})
+const codexWindows = computed<UsageWindowRow[]>(() => {
+  const u = store.codexUsage
+  if (!u) return []
+  const fallback = [u.primary_window, u.secondary_window]
+    .filter((window): window is import('@/lib/api').UsageWindow => Boolean(window?.window_seconds))
+  const windows = (u.usage_windows?.length ? u.usage_windows : fallback)
+    .filter(window => window.window_seconds > 0)
+    .sort((left, right) => left.window_seconds - right.window_seconds)
+    .filter((window, index, all) => index === 0 || window.window_seconds !== all[index - 1].window_seconds)
+
+  return windows.map(window => ({
+    key: String(window.window_seconds),
+    label: windowLabel(window.window_seconds),
+    remainingPercent: window.remaining_percent,
+    detail: t('switch.usage_used_reset', {
+      used: window.used_percent,
+      reset: fmtReset(window.reset_after_seconds, window.reset_at),
+    }),
+  }))
+})
+
+// --- Grok ---
+const grokAccountName = computed(
+  () => store.grokUsage?.account_name || t('switch.grok_default_account'),
+)
+const grokPlanBadge = computed(() =>
+  t('switch.usage_plan_badge', { plan: store.grokUsage?.plan_type || 'Grok' }),
+)
+const grokWindows = computed<UsageWindowRow[]>(() => {
+  const u = store.grokUsage
+  if (!u) return []
+  const label = u.period_type === 'monthly'
+    ? t('switch.grok_monthly_window')
+    : t('switch.grok_weekly_window')
+  const detail = u.used_value != null && u.limit_value != null
+    ? t('switch.grok_used_limit_reset', {
+        used: fmtGrokValue(u.used_value),
+        limit: fmtGrokValue(u.limit_value),
+        reset: fmtReset(u.usage_window.reset_after_seconds, u.usage_window.reset_at),
+      })
+    : t('switch.usage_used_reset', {
+        used: u.usage_window.used_percent,
+        reset: fmtReset(u.usage_window.reset_after_seconds, u.usage_window.reset_at),
+      })
+  return [{
+    key: 'period',
+    label,
+    remainingPercent: u.usage_window.remaining_percent,
+    detail,
+  }]
+})
+
+// --- Kimi ---
+const kimiAccountName = computed(
+  () => store.kimiUsage?.account_name || t('switch.kimi_default_account'),
+)
+const kimiAuthBadge = computed(() => {
+  const method = store.kimiUsage?.auth_method
+  if (method === 'METHOD_API_KEY') return t('switch.kimi_auth_api_key')
+  if (method === 'METHOD_OAUTH') return t('switch.kimi_auth_oauth')
+  return method || t('switch.kimi_auth_api_key')
+})
+const kimiWindows = computed<UsageWindowRow[]>(() => {
+  const rows: UsageWindowRow[] = []
+  const w5 = store.kimiUsage?.window_5h
+  const wWeek = store.kimiUsage?.window_weekly
+  if (w5) {
+    rows.push({
+      key: '5h',
+      label: t('switch.kimi_5h_window'),
+      remainingPercent: w5.remaining_percent,
+      detail: t('switch.kimi_used_reset', {
+        used: w5.used_percent,
+        reset: fmtReset(w5.reset_after_seconds, w5.reset_at),
+      }),
+    })
   }
+  if (wWeek) {
+    rows.push({
+      key: 'weekly',
+      label: t('switch.kimi_weekly_window'),
+      remainingPercent: wWeek.remaining_percent,
+      detail: t('switch.kimi_used_reset', {
+        used: wWeek.used_percent,
+        reset: fmtReset(wWeek.reset_after_seconds, wWeek.reset_at),
+      }),
+    })
+  }
+  return rows
+})
+
+// --- Claude ---
+const claudeAccountName = computed(
+  () => store.claudeUsage?.account_name || t('switch.claude_default_account'),
+)
+const claudeWindows = computed<UsageWindowRow[]>(() => {
+  const rows: UsageWindowRow[] = []
+  const w5 = store.claudeUsage?.window_5h
+  const wWeek = store.claudeUsage?.window_weekly
+  if (w5) {
+    rows.push({
+      key: '5h',
+      label: t('switch.kimi_5h_window'),
+      remainingPercent: w5.remaining_percent,
+      detail: t('switch.kimi_used_reset', {
+        used: w5.used_percent,
+        reset: fmtReset(w5.reset_after_seconds, w5.reset_at),
+      }),
+    })
+  }
+  if (wWeek) {
+    rows.push({
+      key: 'weekly',
+      label: t('switch.kimi_weekly_window'),
+      remainingPercent: wWeek.remaining_percent,
+      detail: t('switch.kimi_used_reset', {
+        used: wWeek.used_percent,
+        reset: fmtReset(wWeek.reset_after_seconds, wWeek.reset_at),
+      }),
+    })
+  }
+  return rows
+})
+
+async function handleRefreshCodex() {
+  if (store.codexUsageLoading) return
+  await store.refreshCodexUsage(true)
+  if (store.codexUsageError) showToast(t('switch.usage_failed'), 'error')
+  else showToast(t('switch.usage_refresh_toast'), 'success')
 }
 
-async function handleRefreshGrokUsage() {
+async function handleRefreshGrok() {
   if (store.grokUsageLoading) return
   await store.refreshGrokUsage(true)
-  if (store.grokUsageError) {
-    showToast(t('switch.usage_failed'), 'error')
-  } else {
-    showToast(t('switch.usage_refresh_toast'), 'success')
-  }
+  if (store.grokUsageError && !store.grokUsage) showToast(t('switch.usage_failed'), 'error')
+  else if (!store.grokUsageError) showToast(t('switch.usage_refresh_toast'), 'success')
+  else showToast(t('switch.usage_failed'), 'error')
 }
 
-async function handleRefreshKimiUsage() {
+async function handleRefreshKimi() {
   if (store.kimiUsageLoading) return
   await store.refreshKimiUsage(true)
-  if (store.kimiUsageError) {
-    showToast(t('switch.usage_failed'), 'error')
-  } else {
-    showToast(t('switch.usage_refresh_toast'), 'success')
-  }
+  if (store.kimiUsageError) showToast(t('switch.usage_failed'), 'error')
+  else showToast(t('switch.usage_refresh_toast'), 'success')
 }
 
-async function handleRefreshClaudeUsage() {
+async function handleRefreshClaude() {
   if (store.claudeUsageLoading) return
   await store.refreshClaudeUsage(true)
-  if (store.claudeUsageError) {
-    showToast(t('switch.usage_failed'), 'error')
-  } else if (store.claudeUsageAvailable === false) {
-    showToast(t('switch.claude_usage_login_required'), 'info')
-  } else {
-    showToast(t('switch.usage_refresh_toast'), 'success')
-  }
+  if (store.claudeUsageError) showToast(t('switch.usage_failed'), 'error')
+  else if (store.claudeUsageAvailable === false) showToast(t('switch.claude_usage_login_required'), 'info')
+  else showToast(t('switch.usage_refresh_toast'), 'success')
 }
 
 const addNote = ref('')
@@ -255,26 +287,19 @@ async function handleSaveCurrent() {
   }
 }
 
-// Clicking a card toggles the inline switch-confirm state.
-// The active card never enters the flow — it just hints it's in use.
 function handleCardClick(profile: any) {
   if (profile.is_active) {
     showToast(t('switch.already_active_hint'), 'info')
     return
   }
-  // Clicking the already-confirming card keeps it in place (no toggle-off);
-  // clicking another card switches the confirm target to it.
   if (store.switchConfirmId === profile.id) return
   store.switchConfirmId = profile.id
 }
 
-// Dismiss the inline switch-confirm when clicking anywhere outside the cards.
-// Cards stop propagation (@click.stop) so clicking inside a card won't dismiss.
 function handleOutsideClick() {
   if (store.switchConfirmId) store.switchConfirmId = null
 }
 
-// Moving the pointer off a card disarms only that card's confirm state.
 function handleCardLeave(profile: any) {
   if (store.switchConfirmId === profile.id) store.switchConfirmId = null
 }
@@ -334,7 +359,6 @@ async function handleSaveEdit() {
   const id = store.editingProfileId
   const note = store.editNote.trim()
   const content = store.editContent.trim()
-  // Save note first; if either step fails, keep the modal open so the user can retry.
   try {
     await api.updateAuthProfileNote(store.selectedAgent, id, note)
   } catch (e: any) {
@@ -367,13 +391,10 @@ async function confirmDelete() {
     store.closeEditModal()
     await store.loadProfiles()
   } catch (e: any) {
-    // keep armed so the user can retry or click away to cancel
     showToast(String(e?.message || e), 'error')
   }
 }
 
-// --- Clear active account (delete the live auth file, keep the pool) ---
-// Path of the auth file that will be deleted, shown in the confirm modal.
 const clearActivePath = computed(() => {
   switch (store.selectedAgent) {
     case 'codex': return '~/.codex/auth.json'
@@ -381,14 +402,11 @@ const clearActivePath = computed(() => {
     default: return ''
   }
 })
-// Display name of the agent for the "{agent} will be signed out" line.
 const clearActiveAgentName = computed(() => agentName.value || store.selectedAgent || '')
 
 async function handleConfirmClear() {
-  // Store returns null on success or an error string on failure.
   const err = await store.deleteActiveAuth()
   if (err) {
-    // "no_active_auth" is the backend sentinel for a missing auth file.
     const msg = err === 'no_active_auth'
       ? t('switch.clear_active_no_auth_error', { path: clearActivePath.value })
       : err
@@ -407,522 +425,232 @@ async function handleConfirmClear() {
       </div>
 
       <template v-else>
-        <div class="max-w-2xl mx-auto">
-          <!-- Grok Build deliberately exposes only the CLI's current account. -->
-          <div v-if="isGrokBuild" class="space-y-6">
-            <div class="ah-card switch-card--active switch-card--readonly">
-              <div class="flex items-start justify-between gap-3">
-                <div class="min-w-0">
-                  <div class="flex items-center gap-2 mb-1">
-                    <span class="text-sm font-medium truncate" style="color: var(--ink)">{{ grokAccountName }}</span>
-                    <span class="switch-active-badge">{{ t('switch.active_badge') }}</span>
-                  </div>
-                  <div class="text-xs" style="color: var(--ink-3)">{{ t('switch.grok_default_account_hint') }}</div>
-                </div>
-                <span class="text-xs px-2 py-1 rounded-full flex-shrink-0" style="background: var(--sunken); color: var(--ink-2)">
-                  {{ t('switch.grok_read_only') }}
+        <div class="max-w-2xl mx-auto space-y-6">
+          <!-- Codex / Grok / Kimi / Claude share one account+usage shell. -->
+          <AccountUsagePanel
+            v-if="isCodex"
+            :account-name="codexAccountName"
+            :account-hint="t('switch.codex_default_account_hint')"
+            :account-status-label="t('switch.codex_read_only')"
+            :usage-title="t('switch.usage_title', { name: codexAccountName })"
+            :loading="store.codexUsageLoading && !store.codexUsage"
+            :refreshing="store.codexUsageLoading"
+            :loading-text="t('switch.usage_loading')"
+            :error="store.codexUsageError"
+            :empty-hint="t('switch.usage_empty_hint')"
+            :badges="store.codexUsage ? [codexPlanBadge] : []"
+            :windows="codexWindows"
+            :last-query-text="store.codexUsageLastQuery ? fmtQueryTime(store.codexUsageLastQuery) : null"
+            @refresh="handleRefreshCodex"
+          >
+            <template v-if="store.codexResetCredits?.credits.length || store.codexUsage?.reset_credits?.available_count" #extra>
+              <div class="text-xs pt-1 flex items-center gap-2" style="color: var(--ink-3)">
+                <span>{{ t('switch.usage_reset_credits') }}</span>
+                <span class="inline-flex items-center px-2 py-0.5 rounded-full" style="background: var(--accent-soft); color: var(--accent)">
+                  {{ t('switch.usage_reset_credits_count', { n: store.codexResetCredits?.available_count ?? store.codexUsage?.reset_credits?.available_count ?? 0 }) }}
                 </span>
               </div>
-            </div>
-
-            <div class="ah-card" style="background: var(--surface); border-color: var(--border)">
-              <div class="flex items-center justify-between mb-3">
-                <span class="text-base font-semibold flex items-center gap-2" style="color: var(--ink)">
-                  <Gauge :size="18" :style="{ color: 'var(--accent)' }" />
-                  {{ t('switch.grok_usage_title', { name: grokAccountName }) }}
-                </span>
-                <button
-                  class="btn btn-secondary btn-sm flex items-center gap-1"
-                  :disabled="store.grokUsageLoading"
-                  @click="handleRefreshGrokUsage"
-                >
-                  <RefreshCw :size="14" :class="{ 'animate-spin': store.grokUsageLoading }" />
-                  {{ t('switch.usage_refresh') }}
-                </button>
-              </div>
-
-              <div v-if="store.grokUsageLoading" class="text-sm py-4" style="color: var(--ink-3)">
-                {{ t('switch.grok_usage_loading') }}
-              </div>
-
-              <div v-else-if="store.grokUsageError" class="ah-notice ah-notice--warning" style="margin: 0">
-                {{ t('switch.usage_failed') }}: {{ store.grokUsageError }}
-              </div>
-
-              <div v-else-if="store.grokUsage" class="space-y-3 text-sm">
-                <div class="text-xs flex items-center gap-2 flex-wrap" style="color: var(--ink-3)">
-                  <span class="inline-flex items-center px-2 py-0.5 rounded-full" style="background: var(--sunken); color: var(--ink-2)">{{ grokPlanBadge }}</span>
+              <div
+                v-for="(credit, idx) in store.codexResetCredits?.credits ?? []"
+                :key="idx"
+                class="p-3 rounded-lg"
+                style="background: var(--sunken)"
+              >
+                <div class="flex justify-between items-center gap-2">
+                  <span class="font-medium truncate" style="color: var(--ink)">
+                    {{ fmtCreditTitle(credit.title) }}
+                  </span>
                   <span
-                    class="inline-flex items-center px-2 py-0.5 rounded-full"
-                    :style="store.grokUsage.source === 'live'
+                    class="text-xs px-2 py-0.5 rounded-full flex-shrink-0"
+                    :style="credit.status === 'available'
                       ? { background: 'var(--accent-soft)', color: 'var(--accent)' }
                       : { background: 'var(--sunken)', color: 'var(--ink-3)' }"
                   >
-                    {{ store.grokUsage.source === 'live' ? t('switch.grok_live_data') : t('switch.grok_cached_data') }}
+                    {{ credit.status === 'available' ? t('switch.usage_credit_available') : t('switch.usage_credit_used') }}
                   </span>
                 </div>
-
-                <!-- Stale: only show guidance, never the expired percentage block -->
-                <div
-                  v-if="store.grokUsage.stale"
-                  class="p-3 rounded-lg space-y-1.5"
-                  style="background: var(--sunken); border: 1px solid color-mix(in srgb, var(--warning, #d97706) 28%, transparent)"
-                >
-                  <div class="text-sm font-medium" style="color: var(--ink)">
-                    {{ t('switch.grok_stale_title') }}
-                  </div>
-                  <p class="text-xs m-0 leading-relaxed" style="color: var(--ink-3)">
-                    {{ t('switch.grok_stale_warning') }}
-                  </p>
-                </div>
-
-                <div v-else class="p-3 rounded-lg" style="background: var(--sunken)">
-                  <div class="flex justify-between items-center">
-                    <span class="font-medium" style="color: var(--ink)">{{ grokPeriodLabel }}</span>
-                    <span class="font-semibold" style="color: var(--accent)">
-                      {{ t('switch.usage_remaining', { n: store.grokUsage.usage_window.remaining_percent }) }}
-                    </span>
-                  </div>
-                  <div class="text-xs mt-1" style="color: var(--ink-3)">
-                    <template v-if="store.grokUsage.used_value != null && store.grokUsage.limit_value != null">
-                      {{ t('switch.grok_used_limit_reset', {
-                        used: fmtGrokValue(store.grokUsage.used_value),
-                        limit: fmtGrokValue(store.grokUsage.limit_value),
-                        reset: fmtReset(store.grokUsage.usage_window.reset_after_seconds, store.grokUsage.usage_window.reset_at),
-                      }) }}
-                    </template>
-                    <template v-else>
-                      {{ t('switch.usage_used_reset', {
-                        used: store.grokUsage.usage_window.used_percent,
-                        reset: fmtReset(store.grokUsage.usage_window.reset_after_seconds, store.grokUsage.usage_window.reset_at),
-                      }) }}
-                    </template>
-                  </div>
-                </div>
-
-                <div class="text-xs pt-2 border-t" style="color: var(--ink-4); border-color: var(--hairline)">
-                  {{ t('switch.usage_last_query', { time: fmtQueryTime(store.grokUsageLastQuery) }) }}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Kimi Code mirrors the read-only model of Grok Build, but exposes
-               the multi-window layout (5h primary + weekly) like Codex. -->
-          <div v-if="isKimiCode" class="space-y-6">
-            <div class="ah-card switch-card--active switch-card--readonly">
-              <div class="flex items-start justify-between gap-3">
-                <div class="min-w-0">
-                  <div class="flex items-center gap-2 mb-1">
-                    <span class="text-sm font-medium truncate" style="color: var(--ink)">{{ kimiAccountName }}</span>
-                    <span class="switch-active-badge">{{ t('switch.active_badge') }}</span>
-                  </div>
-                  <div class="text-xs" style="color: var(--ink-3)">{{ t('switch.kimi_default_account_hint') }}</div>
-                </div>
-                <span class="text-xs px-2 py-1 rounded-full flex-shrink-0" style="background: var(--sunken); color: var(--ink-2)">
-                  {{ t('switch.kimi_read_only') }}
-                </span>
-              </div>
-            </div>
-
-            <div class="ah-card" style="background: var(--surface); border-color: var(--border)">
-              <div class="flex items-center justify-between mb-3">
-                <span class="text-base font-semibold flex items-center gap-2" style="color: var(--ink)">
-                  <Gauge :size="18" :style="{ color: 'var(--accent)' }" />
-                  {{ t('switch.kimi_usage_title', { name: kimiAccountName }) }}
-                </span>
-                <button
-                  class="btn btn-secondary btn-sm flex items-center gap-1"
-                  :disabled="store.kimiUsageLoading"
-                  @click="handleRefreshKimiUsage"
-                >
-                  <RefreshCw :size="14" :class="{ 'animate-spin': store.kimiUsageLoading }" />
-                  {{ t('switch.usage_refresh') }}
-                </button>
-              </div>
-
-              <!-- Only API-key login can query usage; OAuth sign-in has no
-                   officially supported usage endpoint. Always visible so the
-                   credential error below reads as expected, not as a bug. -->
-              <div class="text-xs mb-3 flex items-center gap-1.5" style="color: var(--ink-4)">
-                <Info :size="13" class="flex-shrink-0" />
-                {{ t('switch.kimi_usage_api_only_hint') }}
-              </div>
-
-              <div v-if="store.kimiUsageLoading" class="text-sm py-4" style="color: var(--ink-3)">
-                {{ t('switch.kimi_usage_loading') }}
-              </div>
-
-              <div v-else-if="store.kimiUsageError" class="ah-notice ah-notice--warning" style="margin: 0">
-                {{ t('switch.usage_failed') }}: {{ store.kimiUsageError }}
-              </div>
-
-              <div v-else-if="store.kimiUsage" class="space-y-3 text-sm">
-                <div class="text-xs" style="color: var(--ink-3)">
-                  <span class="inline-flex items-center px-2 py-0.5 rounded-full" style="background: var(--sunken); color: var(--ink-2)">{{ kimiAuthBadge }}</span>
-                </div>
-
-                <!-- 5-hour rolling rate-limit window -->
-                <div v-if="kimiWindow5h" class="p-3 rounded-lg" style="background: var(--sunken)">
-                  <div class="flex justify-between items-center">
-                    <span class="font-medium" style="color: var(--ink)">{{ t('switch.kimi_5h_window') }}</span>
-                    <span class="font-semibold" style="color: var(--accent)">{{ t('switch.usage_remaining', { n: kimiWindow5h.remaining_percent }) }}</span>
-                  </div>
-                  <div class="text-xs mt-1" style="color: var(--ink-3)">
-                    {{ t('switch.kimi_used_reset', {
-                      used: kimiWindow5h.used_percent,
-                      reset: fmtReset(kimiWindow5h.reset_after_seconds, kimiWindow5h.reset_at),
-                    }) }}
-                  </div>
-                </div>
-
-                <!-- Weekly quota window -->
-                <div v-if="kimiWindowWeekly" class="p-3 rounded-lg" style="background: var(--sunken)">
-                  <div class="flex justify-between items-center">
-                    <span class="font-medium" style="color: var(--ink)">{{ t('switch.kimi_weekly_window') }}</span>
-                    <span class="font-semibold" style="color: var(--accent)">{{ t('switch.usage_remaining', { n: kimiWindowWeekly.remaining_percent }) }}</span>
-                  </div>
-                  <div class="text-xs mt-1" style="color: var(--ink-3)">
-                    {{ t('switch.kimi_used_reset', {
-                      used: kimiWindowWeekly.used_percent,
-                      reset: fmtReset(kimiWindowWeekly.reset_after_seconds, kimiWindowWeekly.reset_at),
-                    }) }}
-                  </div>
-                </div>
-
-                <div class="text-xs pt-2 border-t" style="color: var(--ink-4); border-color: var(--hairline)">
-                  {{ t('switch.usage_last_query', { time: fmtQueryTime(store.kimiUsageLastQuery) }) }}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Claude Code official-login usage (OAuth subscription). Shown
-               above the custom-token profile pool it is independent of. -->
-          <div v-if="isClaudeCode" class="ah-card mb-6" style="background: var(--surface); border-color: var(--border)">
-            <div class="flex items-center justify-between mb-3">
-              <span class="text-base font-semibold flex items-center gap-2" style="color: var(--ink)">
-                <Gauge :size="18" :style="{ color: 'var(--accent)' }" />
-                {{ t('switch.claude_usage_title', { name: claudeAccountName }) }}
-              </span>
-              <button
-                class="btn btn-secondary btn-sm flex items-center gap-1"
-                :disabled="store.claudeUsageLoading"
-                @click="handleRefreshClaudeUsage"
-              >
-                <RefreshCw :size="14" :class="{ 'animate-spin': store.claudeUsageLoading }" />
-                {{ t('switch.usage_refresh') }}
-              </button>
-            </div>
-
-            <div class="text-xs mb-3 flex items-center gap-1.5" style="color: var(--ink-4)">
-              <Info :size="13" class="flex-shrink-0" />
-              {{ t('switch.claude_usage_oauth_hint') }}
-            </div>
-
-            <div v-if="store.claudeUsageLoading" class="text-sm py-4" style="color: var(--ink-3)">
-              {{ t('switch.claude_usage_loading') }}
-            </div>
-
-            <!-- No local OAuth credentials: expected sign-out state, shown as
-                 a quiet hint; no query was fired. -->
-            <div v-else-if="store.claudeUsageAvailable === false" class="ah-notice" style="margin: 0">
-              {{ t('switch.claude_usage_login_required') }}
-            </div>
-
-            <div v-else-if="store.claudeUsageError" class="ah-notice ah-notice--warning" style="margin: 0">
-              {{ t('switch.usage_failed') }}: {{ store.claudeUsageError }}
-            </div>
-
-            <div v-else-if="store.claudeUsage" class="space-y-3 text-sm">
-              <div class="text-xs" style="color: var(--ink-3)">
-                <span class="inline-flex items-center px-2 py-0.5 rounded-full" style="background: var(--sunken); color: var(--ink-2)">{{ store.claudeUsage.plan_type }}</span>
-              </div>
-
-              <!-- 5-hour rolling rate-limit window -->
-              <div v-if="claudeWindow5h" class="p-3 rounded-lg" style="background: var(--sunken)">
-                <div class="flex justify-between items-center">
-                  <span class="font-medium" style="color: var(--ink)">{{ t('switch.kimi_5h_window') }}</span>
-                  <span class="font-semibold" style="color: var(--accent)">{{ t('switch.usage_remaining', { n: claudeWindow5h.remaining_percent }) }}</span>
-                </div>
                 <div class="text-xs mt-1" style="color: var(--ink-3)">
-                  {{ t('switch.kimi_used_reset', {
-                    used: claudeWindow5h.used_percent,
-                    reset: fmtReset(claudeWindow5h.reset_after_seconds, claudeWindow5h.reset_at),
-                  }) }}
+                  <template v-if="credit.status === 'available'">
+                    {{ fmtCreditExpiry(credit.expires_at) || t('switch.usage_credit_no_expiry') }}
+                  </template>
+                  <template v-else>
+                    {{ t('switch.usage_credit_redeemed') }}
+                  </template>
                 </div>
-              </div>
-
-              <!-- Weekly quota window -->
-              <div v-if="claudeWindowWeekly" class="p-3 rounded-lg" style="background: var(--sunken)">
-                <div class="flex justify-between items-center">
-                  <span class="font-medium" style="color: var(--ink)">{{ t('switch.kimi_weekly_window') }}</span>
-                  <span class="font-semibold" style="color: var(--accent)">{{ t('switch.usage_remaining', { n: claudeWindowWeekly.remaining_percent }) }}</span>
-                </div>
-                <div class="text-xs mt-1" style="color: var(--ink-3)">
-                  {{ t('switch.kimi_used_reset', {
-                    used: claudeWindowWeekly.used_percent,
-                    reset: fmtReset(claudeWindowWeekly.reset_after_seconds, claudeWindowWeekly.reset_at),
-                  }) }}
-                </div>
-              </div>
-
-              <div class="text-xs pt-2 border-t" style="color: var(--ink-4); border-color: var(--hairline)">
-                {{ t('switch.usage_last_query', { time: fmtQueryTime(store.claudeUsageLastQuery) }) }}
-              </div>
-            </div>
-          </div>
-
-          <!-- Only Claude Code keeps the switchable profile pool. -->
-          <div v-if="!isCodex && !isGrokBuild && !isKimiCode" class="flex gap-2 mb-4 flex-wrap items-center">
-            <button class="btn btn-primary" @click="handleSaveCurrent">{{ t('switch.save_current') }}</button>
-            <button class="btn btn-secondary" @click="store.addFormOpen = !store.addFormOpen">{{ t('switch.add_account') }}</button>
-            <button
-              class="btn btn-danger flex items-center gap-1"
-              :disabled="store.clearActiveLoading"
-              @click="store.openClearActiveModal()"
-            >
-              <Trash2 :size="14" />
-              {{ t('switch.clear_active') }}
-            </button>
-            <div class="flex-1" />
-            <span v-if="store.currentKey" class="text-xs truncate max-w-[200px]" style="color: var(--ink-3); font-family: var(--font-mono)">
-              {{ t('switch.current_key') }}: {{ store.currentKey }}
-            </span>
-          </div>
-
-          <!-- Add Form Card -->
-          <div
-            v-if="!isCodex && !isGrokBuild && !isKimiCode && store.addFormOpen"
-            class="ah-card mb-4 space-y-3"
-            style="background: var(--surface); border-color: var(--border)"
-          >
-            <h3 class="text-sm font-semibold" style="color: var(--ink)">{{ t('switch.add_account') }}</h3>
-            <div class="flex flex-col gap-1">
-              <label class="text-xs" style="color: var(--ink-3)">{{ t('switch.note_placeholder') }}</label>
-              <input
-                v-model="addNote"
-                type="text"
-                class="ah-search-input"
-                :placeholder="t('switch.note_placeholder')"
-              />
-            </div>
-            <div class="flex flex-col gap-1">
-              <label class="text-xs" style="color: var(--ink-3)">{{ t('mcp.config') }} (auth.json key / contents)</label>
-              <textarea
-                v-model="addContent"
-                class="ah-config-editor"
-                placeholder="Paste key content or JSON..."
-                style="min-height: 120px"
-              />
-            </div>
-            <div class="flex justify-end gap-2">
-              <button class="btn btn-secondary btn-sm" @click="store.addFormOpen = false">{{ t('action.cancel') }}</button>
-              <button class="btn btn-primary btn-sm" @click="handleConfirmAdd">{{ t('action.confirm') }}</button>
-            </div>
-          </div>
-
-          <!-- Profiles -->
-          <div v-if="!isCodex && !isGrokBuild && !isKimiCode && store.profiles.length === 0" class="text-center py-12 text-sm" style="color: var(--ink-4)">
-            {{ t('switch.empty') }}
-          </div>
-
-          <div v-if="!isCodex && !isGrokBuild && !isKimiCode" class="space-y-2">
-            <div
-              v-for="(profile, idx) in store.profiles"
-              :key="profile.id"
-              :class="['ah-card', 'switch-card', profile.is_active ? 'switch-card--active' : '']"
-              @click.stop="handleCardClick(profile)"
-              @mouseleave="handleCardLeave(profile)"
-            >
-              <div class="flex items-start justify-between gap-2">
-                <div class="flex-1 min-w-0">
-                  <div class="flex items-center gap-2 mb-0.5">
-                    <span class="text-sm font-medium" style="color: var(--ink)">
-                      {{ profile.note || t('switch.account_fallback', { n: idx + 1 }) }}
-                    </span>
-                    <span
-                      v-if="profile.kind === 'oauth'"
-                      class="text-xs px-2 py-0.5 rounded-full flex-shrink-0"
-                      style="background: var(--accent-soft); color: var(--accent)"
-                    >{{ t('switch.oauth_badge') }}</span>
-                    <span v-if="profile.is_active" class="switch-active-badge">{{ t('switch.active_badge') }}</span>
-                  </div>
-                  <div class="text-xs" style="color: var(--ink-3)">
-                    {{ profile.saved_at ? fmtAbsDate(profile.saved_at) : '' }}
-                    {{ profile.key ? ` · ${profile.key}` : '' }}
-                  </div>
-                </div>
-
-                <div class="flex-shrink-0">
-                  <button class="btn btn-secondary btn-sm" @click.stop="openEditModal(profile)">
-                    {{ t('switch.edit_content_btn') }}
-                  </button>
-                </div>
-              </div>
-
-              <!-- Inline switch confirmation -->
-              <div
-                v-if="store.switchConfirmId === profile.id && !profile.is_active"
-                class="switch-confirm"
-                @click.stop
-              >
-                <span class="text-xs" style="color: var(--accent)">{{ t('switch.confirm_switch', { agent: agentName }) }}</span>
-                <button class="btn btn-primary btn-sm" @click.stop="doSwitch(profile.id)">{{ t('action.confirm') }}</button>
-                <button class="btn btn-ghost btn-sm" @click.stop="store.switchConfirmId = null">{{ t('action.cancel') }}</button>
-              </div>
-            </div>
-          </div>
-
-          <!-- Codex mirrors Kimi/Grok: current CLI account only, with no
-               profile-pool controls or credential mutations. -->
-          <div v-if="isCodex" class="ah-card switch-card--active switch-card--readonly mb-6">
-            <div class="flex items-start justify-between gap-3">
-              <div class="min-w-0">
-                <div class="flex items-center gap-2 mb-1">
-                  <span class="text-sm font-medium truncate" style="color: var(--ink)">{{ codexAccountName }}</span>
-                  <span class="switch-active-badge">{{ t('switch.active_badge') }}</span>
-                </div>
-                <div class="text-xs" style="color: var(--ink-3)">{{ t('switch.codex_default_account_hint') }}</div>
-              </div>
-              <span class="text-xs px-2 py-1 rounded-full flex-shrink-0" style="background: var(--sunken); color: var(--ink-2)">
-                {{ t('switch.codex_read_only') }}
-              </span>
-            </div>
-          </div>
-
-          <!-- Codex usage panel -->
-          <div v-if="isCodex" class="ah-card" style="background: var(--surface); border-color: var(--border)">
-            <div class="flex items-center justify-between mb-3">
-              <span class="text-base font-semibold flex items-center gap-2" style="color: var(--ink)">
-                <Gauge :size="18" :style="{ color: 'var(--accent)' }" />
-                {{ t('switch.usage_title', { name: codexAccountName }) }}
-              </span>
-              <button
-                class="btn btn-secondary btn-sm flex items-center gap-1"
-                :disabled="store.codexUsageLoading"
-                @click="handleRefreshUsage"
-              >
-                <RefreshCw :size="14" :class="{ 'animate-spin': store.codexUsageLoading }" />
-                {{ t('switch.usage_refresh') }}
-              </button>
-            </div>
-
-            <!-- Loading -->
-            <div v-if="store.codexUsageLoading" class="text-sm py-4" style="color: var(--ink-3)">
-              {{ t('switch.usage_loading') }}
-            </div>
-
-            <!-- Error -->
-            <div v-else-if="store.codexUsageError" class="ah-notice ah-notice--warning" style="margin: 0">
-              {{ t('switch.usage_failed') }}: {{ store.codexUsageError }}
-            </div>
-
-            <!-- Empty hint (before first fetch) -->
-            <div v-else-if="!store.codexUsage" class="text-sm py-2" style="color: var(--ink-3)">
-              {{ t('switch.usage_empty_hint') }}
-            </div>
-
-            <!-- No windows returned (e.g. some accounts return rate_limit but no usable windows) -->
-            <div v-else-if="usageWindows.length === 0" class="text-sm py-2 flex items-center justify-between gap-3" style="color: var(--ink-3)">
-              <span>{{ t('switch.usage_no_data') }}</span>
-              <button class="btn btn-secondary btn-sm" @click="handleRefreshUsage">{{ t('switch.usage_retry') }}</button>
-            </div>
-
-            <!-- Data: render every quota window returned by the shared snapshot -->
-            <div v-else class="space-y-3 text-sm">
-              <div class="text-xs" style="color: var(--ink-3)">
-                <span class="inline-flex items-center px-2 py-0.5 rounded-full" style="background: var(--sunken); color: var(--ink-2)">{{ planBadge }}</span>
               </div>
               <div
-                v-for="win in usageWindows"
-                :key="win.key"
+                v-if="!store.codexResetCredits?.credits.length && store.codexUsage?.reset_credits"
                 class="p-3 rounded-lg"
                 style="background: var(--sunken)"
               >
                 <div class="flex justify-between items-center">
-                  <span class="font-medium" style="color: var(--ink)">{{ win.label }}</span>
-                  <span class="font-semibold" style="color: var(--accent)">{{ t('switch.usage_remaining', { n: win.w.remaining_percent }) }}</span>
-                </div>
-                <div class="text-xs mt-1" style="color: var(--ink-3)">
-                  {{ t('switch.usage_used_reset', { used: win.w.used_percent, reset: fmtReset(win.w.reset_after_seconds, win.w.reset_at) }) }}
-                </div>
-              </div>
-              <!-- Rate-limit reset credits — one card per banked credit.
-                   Each credit has its own expiry (valid ~30d from grant), so we
-                   list them individually rather than collapsing to a total.
-                   Falls back to a single summary card when the detailed list
-                   endpoint returned no per-credit entries but usage still
-                   reported a count. -->
-              <template v-if="store.codexResetCredits?.credits.length || store.codexUsage?.reset_credits?.available_count">
-                <div class="text-xs pt-1 flex items-center gap-2" style="color: var(--ink-3)">
-                  <span>{{ t('switch.usage_reset_credits') }}</span>
-                  <span class="inline-flex items-center px-2 py-0.5 rounded-full" style="background: var(--accent-soft); color: var(--accent)">
-                    {{ t('switch.usage_reset_credits_count', { n: store.codexResetCredits?.available_count ?? store.codexUsage?.reset_credits?.available_count ?? 0 }) }}
+                  <span class="font-medium" style="color: var(--ink)">{{ t('switch.usage_reset_credits') }}</span>
+                  <span class="font-semibold" style="color: var(--accent)">
+                    {{ t('switch.usage_reset_credits_count', { n: store.codexUsage.reset_credits.available_count }) }}
                   </span>
                 </div>
+              </div>
+            </template>
+          </AccountUsagePanel>
 
-                <!-- One card per credit (from the detailed reset-credits endpoint) -->
-                <div
-                  v-for="(credit, idx) in store.codexResetCredits?.credits ?? []"
-                  :key="idx"
-                  class="p-3 rounded-lg"
-                  style="background: var(--sunken)"
-                >
-                  <div class="flex justify-between items-center gap-2">
-                    <span class="font-medium truncate" style="color: var(--ink)">
-                      {{ fmtCreditTitle(credit.title) }}
-                    </span>
-                    <span
-                      class="text-xs px-2 py-0.5 rounded-full flex-shrink-0"
-                      :style="credit.status === 'available'
-                        ? { background: 'var(--accent-soft)', color: 'var(--accent)' }
-                        : { background: 'var(--sunken)', color: 'var(--ink-3)' }"
-                    >
-                      {{ credit.status === 'available' ? t('switch.usage_credit_available') : t('switch.usage_credit_used') }}
-                    </span>
-                  </div>
-                  <div class="text-xs mt-1" style="color: var(--ink-3)">
-                    <template v-if="credit.status === 'available'">
-                      {{ fmtCreditExpiry(credit.expires_at) || t('switch.usage_credit_no_expiry') }}
-                    </template>
-                    <template v-else>
-                      {{ t('switch.usage_credit_redeemed') }}
-                    </template>
-                  </div>
-                </div>
+          <AccountUsagePanel
+            v-else-if="isGrokBuild"
+            :account-name="grokAccountName"
+            :account-hint="t('switch.grok_default_account_hint')"
+            :account-status-label="t('switch.grok_read_only')"
+            :usage-title="t('switch.grok_usage_title', { name: grokAccountName })"
+            :loading="store.grokUsageLoading && !store.grokUsage"
+            :refreshing="store.grokUsageLoading"
+            :loading-text="t('switch.grok_usage_loading')"
+            :error="store.grokUsageError"
+            :badges="store.grokUsage ? [grokPlanBadge] : []"
+            :windows="grokWindows"
+            :last-query-text="store.grokUsageLastQuery ? fmtQueryTime(store.grokUsageLastQuery) : null"
+            @refresh="handleRefreshGrok"
+          />
 
-                <!-- Fallback: detailed endpoint returned nothing but usage reported a count -->
-                <div
-                  v-if="!store.codexResetCredits?.credits.length && store.codexUsage?.reset_credits"
-                  class="p-3 rounded-lg"
-                  style="background: var(--sunken)"
-                >
-                  <div class="flex justify-between items-center">
-                    <span class="font-medium" style="color: var(--ink)">{{ t('switch.usage_reset_credits') }}</span>
-                    <span class="font-semibold" style="color: var(--accent)">
-                      {{ t('switch.usage_reset_credits_count', { n: store.codexUsage.reset_credits.available_count }) }}
-                    </span>
-                  </div>
-                </div>
-              </template>
-              <div class="text-xs pt-2 border-t" style="color: var(--ink-4); border-color: var(--hairline)">
-                {{ t('switch.usage_last_query', { time: fmtLastQuery() }) }}
+          <AccountUsagePanel
+            v-else-if="isKimiCode"
+            :account-name="kimiAccountName"
+            :account-hint="t('switch.kimi_default_account_hint')"
+            :account-status-label="t('switch.kimi_read_only')"
+            :usage-title="t('switch.kimi_usage_title', { name: kimiAccountName })"
+            :loading="store.kimiUsageLoading && !store.kimiUsage"
+            :refreshing="store.kimiUsageLoading"
+            :loading-text="t('switch.kimi_usage_loading')"
+            :error="store.kimiUsageError"
+            :tip="t('switch.kimi_usage_api_only_hint')"
+            :badges="store.kimiUsage ? [kimiAuthBadge] : []"
+            :windows="kimiWindows"
+            :last-query-text="store.kimiUsageLastQuery ? fmtQueryTime(store.kimiUsageLastQuery) : null"
+            @refresh="handleRefreshKimi"
+          />
+
+          <AccountUsagePanel
+            v-else-if="isClaudeCode"
+            :account-name="claudeAccountName"
+            :account-hint="t('switch.claude_default_account')"
+            :account-status-label="t('switch.oauth_badge')"
+            :usage-title="t('switch.claude_usage_title', { name: claudeAccountName })"
+            :loading="store.claudeUsageLoading && !store.claudeUsage"
+            :refreshing="store.claudeUsageLoading"
+            :loading-text="t('switch.claude_usage_loading')"
+            :error="store.claudeUsageError"
+            :soft-notice="store.claudeUsageAvailable === false ? t('switch.claude_usage_login_required') : null"
+            :tip="t('switch.claude_usage_oauth_hint')"
+            :badges="store.claudeUsage?.plan_type ? [store.claudeUsage.plan_type] : []"
+            :windows="claudeWindows"
+            :last-query-text="store.claudeUsageLastQuery ? fmtQueryTime(store.claudeUsageLastQuery) : null"
+            @refresh="handleRefreshClaude"
+          />
+
+          <!-- Claude-only: switchable custom-token profile pool. -->
+          <template v-if="isClaudeCode">
+            <div class="flex gap-2 flex-wrap items-center">
+              <button class="btn btn-primary" @click="handleSaveCurrent">{{ t('switch.save_current') }}</button>
+              <button class="btn btn-secondary" @click="store.addFormOpen = !store.addFormOpen">{{ t('switch.add_account') }}</button>
+              <button
+                class="btn btn-danger flex items-center gap-1"
+                :disabled="store.clearActiveLoading"
+                @click="store.openClearActiveModal()"
+              >
+                <Trash2 :size="14" />
+                {{ t('switch.clear_active') }}
+              </button>
+              <div class="flex-1" />
+              <span v-if="store.currentKey" class="text-xs truncate max-w-[200px]" style="color: var(--ink-3); font-family: var(--font-mono)">
+                {{ t('switch.current_key') }}: {{ store.currentKey }}
+              </span>
+            </div>
+
+            <div
+              v-if="store.addFormOpen"
+              class="ah-card space-y-3"
+              style="background: var(--surface); border-color: var(--border)"
+            >
+              <h3 class="text-sm font-semibold" style="color: var(--ink)">{{ t('switch.add_account') }}</h3>
+              <div class="flex flex-col gap-1">
+                <label class="text-xs" style="color: var(--ink-3)">{{ t('switch.note_placeholder') }}</label>
+                <input
+                  v-model="addNote"
+                  type="text"
+                  class="ah-search-input"
+                  :placeholder="t('switch.note_placeholder')"
+                />
+              </div>
+              <div class="flex flex-col gap-1">
+                <label class="text-xs" style="color: var(--ink-3)">{{ t('mcp.config') }} (auth.json key / contents)</label>
+                <textarea
+                  v-model="addContent"
+                  class="ah-config-editor"
+                  placeholder="Paste key content or JSON..."
+                  style="min-height: 120px"
+                />
+              </div>
+              <div class="flex justify-end gap-2">
+                <button class="btn btn-secondary btn-sm" @click="store.addFormOpen = false">{{ t('action.cancel') }}</button>
+                <button class="btn btn-primary btn-sm" @click="handleConfirmAdd">{{ t('action.confirm') }}</button>
               </div>
             </div>
-          </div>
+
+            <div v-if="store.profiles.length === 0" class="text-center py-12 text-sm" style="color: var(--ink-4)">
+              {{ t('switch.empty') }}
+            </div>
+
+            <div v-else class="space-y-2">
+              <div
+                v-for="(profile, idx) in store.profiles"
+                :key="profile.id"
+                :class="['ah-card', 'switch-card', profile.is_active ? 'switch-card--active' : '']"
+                @click.stop="handleCardClick(profile)"
+                @mouseleave="handleCardLeave(profile)"
+              >
+                <div class="flex items-start justify-between gap-2">
+                  <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2 mb-0.5">
+                      <span class="text-sm font-medium" style="color: var(--ink)">
+                        {{ profile.note || t('switch.account_fallback', { n: idx + 1 }) }}
+                      </span>
+                      <span
+                        v-if="profile.kind === 'oauth'"
+                        class="text-xs px-2 py-0.5 rounded-full flex-shrink-0"
+                        style="background: var(--accent-soft); color: var(--accent)"
+                      >{{ t('switch.oauth_badge') }}</span>
+                      <span v-if="profile.is_active" class="switch-active-badge">{{ t('switch.active_badge') }}</span>
+                    </div>
+                    <div class="text-xs" style="color: var(--ink-3)">
+                      {{ profile.saved_at ? fmtAbsDate(profile.saved_at) : '' }}
+                      {{ profile.key ? ` · ${profile.key}` : '' }}
+                    </div>
+                  </div>
+                  <div class="flex-shrink-0">
+                    <button class="btn btn-secondary btn-sm" @click.stop="openEditModal(profile)">
+                      {{ t('switch.edit_content_btn') }}
+                    </button>
+                  </div>
+                </div>
+                <div
+                  v-if="store.switchConfirmId === profile.id && !profile.is_active"
+                  class="switch-confirm"
+                  @click.stop
+                >
+                  <span class="text-xs" style="color: var(--accent)">{{ t('switch.confirm_switch', { agent: agentName }) }}</span>
+                  <button class="btn btn-primary btn-sm" @click.stop="doSwitch(profile.id)">{{ t('action.confirm') }}</button>
+                  <button class="btn btn-ghost btn-sm" @click.stop="store.switchConfirmId = null">{{ t('action.cancel') }}</button>
+                </div>
+              </div>
+            </div>
+          </template>
         </div>
       </template>
     </div>
 
-    <!-- Edit Modal -->
     <AppModal
       :show="store.editModalOpen"
       :title="t('switch.edit_modal_title')"
       width-class="w-[44rem]"
       @close="closeEditModal"
     >
-      <!-- body -->
       <div class="flex flex-col gap-4">
         <div class="flex flex-col gap-1.5">
           <label class="text-xs font-semibold" style="color: var(--ink-2)">{{ t('switch.note_label') }}</label>
@@ -974,7 +702,6 @@ async function handleConfirmClear() {
       </template>
     </AppModal>
 
-    <!-- Clear Active Account Modal -->
     <AppModal
       :show="store.clearActiveModalOpen"
       :title="t('switch.clear_active_title')"
@@ -988,7 +715,6 @@ async function handleConfirmClear() {
           {{ t('switch.clear_active_warning_pool') }}
         </p>
       </div>
-
       <template #footer>
         <div class="flex items-center gap-2 w-full">
           <button
@@ -1015,31 +741,31 @@ async function handleConfirmClear() {
 <style scoped>
 .switch-card {
   cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.switch-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+.switch-card--active {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 .switch-card--readonly {
   cursor: default;
 }
-.switch-card:hover {
-  border-color: var(--border);
-  box-shadow: var(--shadow-soft);
-}
-.switch-card--active {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent-mid) inset;
-}
 .switch-active-badge {
-  background: var(--accent);
-  color: var(--on-accent);
-  font-weight: 600;
-  padding: 2px 8px;
-  border-radius: 999px;
   font-size: 11px;
+  line-height: 1;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  flex-shrink: 0;
 }
 .switch-confirm {
   margin-top: 10px;
   padding-top: 10px;
-  border-top: 1px dashed var(--hairline);
+  border-top: 1px solid var(--hairline);
   display: flex;
   align-items: center;
   gap: 8px;

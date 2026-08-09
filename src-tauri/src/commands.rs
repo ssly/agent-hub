@@ -1890,6 +1890,49 @@ pub fn apply_antigravity_hook_change(
     .map_err(CommandError::General)
 }
 
+#[tauri::command]
+pub fn get_kiro_session_monitor_snapshot(
+    monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
+) -> MonitorSnapshot {
+    monitor.snapshot(AgentKind::Kiro)
+}
+
+#[tauri::command]
+pub fn delete_kiro_session_monitor_session(
+    monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
+    session_id: String,
+) -> Result<(), CommandError> {
+    monitor
+        .remove_session(AgentKind::Kiro, &session_id)
+        .map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn get_kiro_hook_status() -> Result<crate::session_monitor::HookStatus, CommandError> {
+    crate::session_monitor::get_hook_status(AgentKind::Kiro).map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn preview_kiro_hook_change(
+    action: String,
+) -> Result<crate::session_monitor::HookChangePreview, CommandError> {
+    crate::session_monitor::preview_hook_change(AgentKind::Kiro, parse_hook_action(&action)?)
+        .map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn apply_kiro_hook_change(
+    action: String,
+    expected_before_hash: String,
+) -> Result<crate::session_monitor::HookStatus, CommandError> {
+    crate::session_monitor::apply_hook_change(
+        AgentKind::Kiro,
+        parse_hook_action(&action)?,
+        &expected_before_hash,
+    )
+    .map_err(CommandError::General)
+}
+
 /// ZCode 插件市场只读列表。目录不存在（未安装 ZCode）时返回空列表，不报错。
 #[tauri::command]
 pub fn get_zcode_plugins() -> Vec<crate::zcode_plugin::ZCodePluginView> {

@@ -1098,11 +1098,8 @@ pub struct GrokUsageResponse {
     pub on_demand_cap: Option<f64>,
     pub on_demand_used: Option<f64>,
     pub on_demand_enabled: Option<bool>,
-    /// `live` comes from /v1/billing?format=credits; `cache` comes from Grok's own structured log.
-    pub source: String,
+    /// Unix seconds when this live billing response was fetched.
     pub fetched_at: u64,
-    /// Cached data is stale when its billing period has already ended.
-    pub stale: bool,
 }
 
 struct GrokAuth {
@@ -1228,11 +1225,10 @@ fn json_timestamp(node: Option<&serde_json::Value>) -> Option<u64> {
 fn map_grok_usage(
     raw: &serde_json::Value,
     account_name: Option<String>,
-    source: &str,
     fetched_at: u64,
 ) -> Result<GrokUsageResponse, String> {
-    // Live responses expose the config directly. Structured logs wrap it in
-    // ctx.config, and some CLI builds use a top-level config wrapper.
+    // Live /v1/billing responses expose the config directly. Some older
+    // shapes wrap it under config / ctx.config.
     let payload = raw
         .get("config")
         .or_else(|| raw.get("ctx").and_then(|ctx| ctx.get("config")))
@@ -1321,90 +1317,89 @@ fn map_grok_usage(
             .get("onDemandEnabled")
             .or_else(|| raw.get("ctx").and_then(|ctx| ctx.get("onDemandEnabled")))
             .and_then(|value| value.as_bool()),
-        source: source.to_string(),
         fetched_at,
-        stale: source == "cache" && reset_at <= now,
     })
 }
 
-fn read_cached_grok_usage(
-    grok_home: &std::path::Path,
-    account_name: Option<String>,
-) -> Result<GrokUsageResponse, String> {
-    let log_path = join_relative(grok_home.to_path_buf(), "logs/unified.jsonl");
-    let content =
-        std::fs::read_to_string(&log_path).map_err(|e| format!("读取 Grok 用量缓存失败: {e}"))?;
-
-    for line in content.lines().rev() {
-        let Ok(raw) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
-        if raw.get("msg").and_then(|value| value.as_str())
-            != Some("billing: fetched credits config")
-        {
-            continue;
-        }
-        let fetched_at =
-            json_timestamp(raw.get("ts").or_else(|| raw.get("timestamp"))).unwrap_or_default();
-        if let Ok(usage) = map_grok_usage(&raw, account_name.clone(), "cache", fetched_at) {
-            return Ok(usage);
-        }
-    }
-
-    Err("Grok 日志中没有可用的额度缓存".to_string())
+/// Outcome of a live Grok billing request (no CLI-log fallback).
+enum GrokFetchOutcome {
+    Ok(GrokUsageResponse),
+    /// Auth missing, network timeout, HTTP error — caller surfaces the error.
+    Transport(String),
+    /// Body arrived but JSON/schema mapping failed — keep previous usage.
+    Parse(String),
 }
 
-async fn fetch_grok_usage() -> Result<GrokUsageResponse, String> {
-    let grok_home = grok_home_dir()?;
-    let auth = resolve_grok_auth(&grok_home);
-    let account_name = auth
-        .as_ref()
-        .ok()
-        .and_then(|value| value.account_name.clone());
-
-    let live_result = match auth {
-        Ok(auth) => {
-            let client = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(15))
-                .build()
-                .map_err(|e| e.to_string())?;
-            match client
-                .get(GROK_BILLING_URL)
-                .header("Authorization", format!("Bearer {}", auth.bearer))
-                .header("Accept", "application/json")
-                .header("User-Agent", "Grok CLI")
-                .send()
-                .await
-            {
-                Ok(response) if response.status().is_success() => {
-                    match response.json::<serde_json::Value>().await {
-                        Ok(raw) => map_grok_usage(
-                            &raw,
-                            auth.account_name,
-                            "live",
-                            u64::try_from(Utc::now().timestamp()).unwrap_or(0),
-                        ),
-                        Err(error) => Err(format!("解析 Grok 用量响应失败: {error}")),
-                    }
-                }
-                Ok(response) => Err(format!("Grok 用量接口返回错误: HTTP {}", response.status())),
-                Err(error) => Err(format!("请求 Grok 用量接口失败: {error}")),
-            }
-        }
-        Err(error) => Err(error),
+/// Always hits Grok's live billing API. Never reads CLI log caches.
+async fn fetch_grok_usage() -> GrokFetchOutcome {
+    let grok_home = match grok_home_dir() {
+        Ok(path) => path,
+        Err(error) => return GrokFetchOutcome::Transport(error),
     };
-
-    match live_result {
-        Ok(usage) => Ok(usage),
-        Err(live_error) => read_cached_grok_usage(&grok_home, account_name)
-            .map_err(|cache_error| format!("{live_error}；{cache_error}")),
+    let auth = match resolve_grok_auth(&grok_home) {
+        Ok(auth) => auth,
+        Err(error) => return GrokFetchOutcome::Transport(error),
+    };
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => return GrokFetchOutcome::Transport(error.to_string()),
+    };
+    let response = match client
+        .get(GROK_BILLING_URL)
+        .header("Authorization", format!("Bearer {}", auth.bearer))
+        .header("Accept", "application/json")
+        .header("User-Agent", "Grok CLI")
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            return GrokFetchOutcome::Transport(if error.is_timeout() {
+                "请求 Grok 用量接口超时（10s）。请检查网络后重试。".to_string()
+            } else {
+                format!("请求 Grok 用量接口失败: {error}")
+            });
+        }
+    };
+    if !response.status().is_success() {
+        return GrokFetchOutcome::Transport(format!(
+            "Grok 用量接口返回错误: HTTP {}",
+            response.status()
+        ));
     }
+    let raw = match response.json::<serde_json::Value>().await {
+        Ok(raw) => raw,
+        Err(error) => {
+            return GrokFetchOutcome::Parse(format!("解析 Grok 用量响应失败: {error}"));
+        }
+    };
+    match map_grok_usage(
+        &raw,
+        auth.account_name,
+        u64::try_from(Utc::now().timestamp()).unwrap_or(0),
+    ) {
+        Ok(usage) => GrokFetchOutcome::Ok(usage),
+        Err(error) => GrokFetchOutcome::Parse(error),
+    }
+}
+
+fn clone_cached_grok_usage(now: u64) -> Option<GrokUsageResponse> {
+    let guard = GROK_USAGE_CACHE.lock().ok()?;
+    let entry = guard.as_ref()?;
+    let mut usage = entry.data.clone();
+    apply_grok_usage_timers(&mut usage, now);
+    Some(usage)
 }
 
 /// Grok Build usage. Shared by the Accounts view and tray popup.
 ///
-/// When `force` is false/omitted, returns the in-memory cache if it is younger
-/// than 10 minutes. Manual refresh buttons should pass `force: true`.
+/// Only live `/v1/billing` data is written. A short in-process TTL avoids
+/// hammering the API on rapid tray reopen. On parse failures the previous
+/// successful snapshot is kept and returned; transport errors surface as Err
+/// without clearing that snapshot. Manual refresh should pass `force: true`.
 #[tauri::command]
 pub async fn get_grok_usage(force: Option<bool>) -> Result<GrokUsageResponse, String> {
     let force = force.unwrap_or(false);
@@ -1421,14 +1416,26 @@ pub async fn get_grok_usage(force: Option<bool>) -> Result<GrokUsageResponse, St
         }
     }
 
-    let usage = fetch_grok_usage().await?;
-    if let Ok(mut guard) = GROK_USAGE_CACHE.lock() {
-        *guard = Some(UsageCacheEntry {
-            fetched_at: usage.fetched_at.max(now),
-            data: usage.clone(),
-        });
+    match fetch_grok_usage().await {
+        GrokFetchOutcome::Ok(usage) => {
+            if let Ok(mut guard) = GROK_USAGE_CACHE.lock() {
+                *guard = Some(UsageCacheEntry {
+                    fetched_at: usage.fetched_at.max(now),
+                    data: usage.clone(),
+                });
+            }
+            Ok(usage)
+        }
+        GrokFetchOutcome::Parse(error) => {
+            // Keep the last good numbers; only report the parse problem when
+            // there is nothing previous to show.
+            if let Some(previous) = clone_cached_grok_usage(now) {
+                return Ok(previous);
+            }
+            Err(error)
+        }
+        GrokFetchOutcome::Transport(error) => Err(error),
     }
-    Ok(usage)
 }
 
 // --- Kimi Code quota via the Kimi CLI usages endpoint -----------------------
@@ -2348,7 +2355,7 @@ mod tests {
             "subscriptionTier": "SuperGrok"
         });
 
-        let usage = map_grok_usage(&raw, Some("user@example.com".to_string()), "live", 1)
+        let usage = map_grok_usage(&raw, Some("user@example.com".to_string()), 1)
             .expect("maps Grok credits billing response");
         assert_eq!(usage.plan_type, "SuperGrok");
         assert_eq!(usage.period_type, "weekly");
@@ -2359,7 +2366,6 @@ mod tests {
         assert_eq!(usage.limit_value, None);
         assert_eq!(usage.prepaid_balance, Some(0.0));
         assert_eq!(usage.on_demand_cap, Some(0.0));
-        assert!(!usage.stale);
     }
 
     #[test]
@@ -2386,7 +2392,7 @@ mod tests {
     #[test]
     fn map_grok_usage_reads_legacy_monthly_billing_payload() {
         // Bare /v1/billing still returns this monthly-credit shape; keep
-        // parsing support so cached/older payloads do not break the UI.
+        // parsing support so older live payloads do not break the UI.
         let raw = serde_json::json!({
             "config": {
                 "monthlyLimit": { "val": 15000 },
@@ -2397,7 +2403,7 @@ mod tests {
             }
         });
 
-        let usage = map_grok_usage(&raw, None, "live", 1)
+        let usage = map_grok_usage(&raw, None, 1)
             .expect("maps legacy Grok monthly billing response");
         assert_eq!(usage.plan_type, "Grok");
         assert_eq!(usage.period_type, "monthly");
@@ -2406,8 +2412,6 @@ mod tests {
         assert_eq!(usage.usage_window.used_percent, 5);
         assert_eq!(usage.usage_window.remaining_percent, 95);
         assert_eq!(usage.usage_window.window_seconds, 2_678_400);
-        assert_eq!(usage.source, "live");
-        assert!(!usage.stale);
     }
 
     const CODEX_AUTH: &str = r#"{

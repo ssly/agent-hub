@@ -10,7 +10,14 @@ export const usePluginsStore = defineStore('plugins', () => {
   const mcpStore = useMcpStore()
   const claudePluginsStore = useClaudePluginsStore()
   const zcodePluginsStore = useZCodePluginsStore()
-  const selectedPlatformId = ref<string | null>(localStorage.getItem('ah-plugin-platform'))
+  // Migrate pre-rename platform id so the last selection still opens.
+  const storedPlatformId = localStorage.getItem('ah-plugin-platform')
+  const initialPlatformId =
+    storedPlatformId === 'shared-pool' ? 'shared' : storedPlatformId
+  if (storedPlatformId === 'shared-pool') {
+    localStorage.setItem('ah-plugin-platform', 'shared')
+  }
+  const selectedPlatformId = ref<string | null>(initialPlatformId)
   const workspaceDirectory = ref(localStorage.getItem('ah-plugin-workspace-dir') || '')
   const isLoading = ref(false)
 
@@ -25,10 +32,8 @@ export const usePluginsStore = defineStore('plugins', () => {
       'grok-build': '.grok/skills',
       'kimi-code': '.kimi-code/skills',
       zcode: '.zcode/skills',
-      hermes: '.hermes/skills',
-      trae: '.trae/skills',
       kiro: '.kiro/skills',
-      'shared-pool': '.agents/skills',
+      shared: '.agents/skills',
     }
     const relative = relativeByPlatform[platformId]
     if (!relative || !workspaceDirectory.value) return ''

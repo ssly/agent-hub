@@ -8,8 +8,8 @@
 
 const PLATFORMS = [
   {
-    id: 'shared-pool',
-    display_name: 'Shared Pool',
+    id: 'shared',
+    display_name: 'Shared',
     skill_dir: '~/.agents/skills',
     skill_count: 8,
   },
@@ -488,9 +488,7 @@ export async function getGrokUsage(force = false) {
     on_demand_cap: 0,
     on_demand_used: 0,
     on_demand_enabled: false,
-    source: 'live',
     fetched_at: now,
-    stale: false,
   }
   mockGrokUsage = { at: Date.now(), data: payload }
   return structuredClone(payload)
@@ -964,6 +962,50 @@ export async function applyAntigravityHookChange(action: 'install' | 'uninstall'
   await delay(300)
   antigravityHookInstalled = action === 'install'
   return getAntigravityHookStatus()
+}
+
+const KIRO_HOOK_COMMAND = "'/Applications/AGENT HUB.app/Contents/MacOS/agent-hub' --agent-hub-kiro-hook"
+let kiroHookInstalled = false
+let kiroMonitorSessions = [
+  {
+    sessionId: 'kiro-mock-1',
+    turnId: 'turn-1',
+    source: 'terminal',
+    status: 'running',
+    cwd: '/Users/demo/projects/agent-hub',
+    userPrompt: '给 Kiro 加上会话监听。',
+    assistantReply: null,
+    updatedAt: Date.now() - 15_000,
+  },
+]
+
+export async function getKiroSessionMonitorSnapshot() {
+  await delay()
+  return {
+    revision: 1,
+    sessions: kiroMonitorSessions,
+  }
+}
+
+export async function deleteKiroSessionMonitorSession(sessionId: string) {
+  await delay()
+  kiroMonitorSessions = kiroMonitorSessions.filter(session => session.sessionId !== sessionId)
+}
+
+export async function getKiroHookStatus() {
+  await delay()
+  return makeHookStatus(kiroHookInstalled, '~/.kiro/hooks/agent-hub.json', KIRO_HOOK_COMMAND)
+}
+
+export async function previewKiroHookChange(action: 'install' | 'uninstall') {
+  await delay()
+  return makeHookPreview(action, '~/.kiro/hooks/agent-hub.json', KIRO_HOOK_COMMAND)
+}
+
+export async function applyKiroHookChange(action: 'install' | 'uninstall', _expectedBeforeHash: string) {
+  await delay(300)
+  kiroHookInstalled = action === 'install'
+  return getKiroHookStatus()
 }
 
 // App

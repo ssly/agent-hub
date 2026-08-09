@@ -241,6 +241,16 @@ export const previewAntigravityHookChange = (action: 'install' | 'uninstall') =>
 export const applyAntigravityHookChange = (action: 'install' | 'uninstall', expectedBeforeHash: string) =>
   invoke<any>('apply_antigravity_hook_change', { action, expectedBeforeHash })
 
+export const getKiroSessionMonitorSnapshot = () =>
+  invoke<any>('get_kiro_session_monitor_snapshot')
+export const deleteKiroSessionMonitorSession = (sessionId: string) =>
+  invoke<void>('delete_kiro_session_monitor_session', { sessionId })
+export const getKiroHookStatus = () => invoke<any>('get_kiro_hook_status')
+export const previewKiroHookChange = (action: 'install' | 'uninstall') =>
+  invoke<any>('preview_kiro_hook_change', { action })
+export const applyKiroHookChange = (action: 'install' | 'uninstall', expectedBeforeHash: string) =>
+  invoke<any>('apply_kiro_hook_change', { action, expectedBeforeHash })
+
 // Switch
 export const listSwitchProfiles = (agentType: string) => invoke<any>('list_switch_profiles', { agentType })
 export const saveCurrentAuthProfile = (agentType: string, note: string) =>
@@ -325,8 +335,9 @@ export const setUsageTrayPinned = (pinned: boolean) =>
 export const openUsageTray = () => invoke<void>('open_usage_tray')
 
 // Grok Build uses only the CLI's current/default account. Agent Hub does not
-// manage or switch Grok credentials; this endpoint is read-only.
-// Backend caches for 10 minutes unless `force` is true (manual refresh).
+// manage or switch Grok credentials; this endpoint is read-only and only
+// returns live /v1/billing data (no CLI-log fallback).
+// Backend reuses a short in-process TTL unless `force` is true (manual refresh).
 export interface GrokUsage {
   account_name: string | null
   plan_type: string
@@ -338,9 +349,7 @@ export interface GrokUsage {
   on_demand_cap: number | null
   on_demand_used: number | null
   on_demand_enabled: boolean | null
-  source: 'live' | 'cache'
   fetched_at: number
-  stale: boolean
 }
 export const getGrokUsage = (force = false) =>
   invoke<GrokUsage>('get_grok_usage', { force })

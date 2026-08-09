@@ -29,7 +29,7 @@ const showClaudeSection = computed(() => isClaudeCode.value
   && (pluginsStore.isGlobalScope || claudePluginsStore.plugins.length > 0))
 // ZCode 插件市场只有用户级数据，项目目录范围不展示该区块。
 const showZCodeSection = computed(() => isZCode.value && pluginsStore.isGlobalScope)
-// Codex officially keeps user-level skills in the Shared Pool; show a jump
+// Codex officially keeps user-level skills in Shared; show a jump
 // note instead of a duplicated skills section.
 const showSkillsSection = computed(() => !isCodex.value
   && (pluginsStore.isGlobalScope || skillCount.value > 0))
@@ -39,9 +39,14 @@ const platformNote = computed(() => {
   const key = `plugin.notes.${id}`
   return te(key) ? t(key) : ''
 })
+const platformTitle = computed(() => {
+  const p = pluginsStore.selectedPlatform
+  if (!p) return ''
+  return p.id === 'shared' ? t('plugin.platform_shared') : p.display_name
+})
 
-function jumpToSharedPool() {
-  pluginsStore.selectPlatform('shared-pool')
+function jumpToShared() {
+  pluginsStore.selectPlatform('shared')
 }
 </script>
 
@@ -57,7 +62,7 @@ function jumpToSharedPool() {
           <p class="ah-plugin-eyebrow">
             {{ pluginsStore.isGlobalScope ? t('plugin.workspace') : t('plugin.scope_project') }}
           </p>
-          <h1 class="ah-page-title truncate">{{ pluginsStore.selectedPlatform.display_name }}</h1>
+          <h1 class="ah-page-title truncate">{{ platformTitle }}</h1>
           <p class="ah-plugin-summary">
             {{ isClaudeCode
               ? t('plugin.summary_claude', { plugins: claudePluginsStore.plugins.length, skills: skillCount, servers: serverCount })
@@ -134,7 +139,7 @@ function jumpToSharedPool() {
                 <code>{{ pluginsStore.selectedPlatform.skill_dir }}</code>
               </div>
             </div>
-            <button class="btn btn-secondary btn-sm" @click="jumpToSharedPool">
+            <button class="btn btn-secondary btn-sm" @click="jumpToShared">
               {{ t('plugin.jump_to_pool') }}
             </button>
           </div>

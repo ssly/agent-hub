@@ -12,6 +12,7 @@ pub const GROK_HOOK_ARG: &str = "--agent-hub-grok-hook";
 pub const KIMI_HOOK_ARG: &str = "--agent-hub-kimi-hook";
 pub const ZCODE_HOOK_ARG: &str = "--agent-hub-zcode-hook";
 pub const ANTIGRAVITY_HOOK_ARG: &str = "--agent-hub-antigravity-hook";
+pub const KIRO_HOOK_ARG: &str = "--agent-hub-kiro-hook";
 const MAX_HOOK_INPUT_BYTES: u64 = 256 * 1024;
 const MAX_IGNORED_SESSIONS: usize = 200;
 /// Kimi sub-agent markers older than this are treated as stale: the matching
@@ -58,6 +59,8 @@ pub fn try_capture_hook_event() -> bool {
         AgentKind::ZCode
     } else if std::env::args().any(|arg| arg == ANTIGRAVITY_HOOK_ARG) {
         AgentKind::Antigravity
+    } else if std::env::args().any(|arg| arg == KIRO_HOOK_ARG) {
+        AgentKind::Kiro
     } else {
         return false;
     };
@@ -79,20 +82,32 @@ fn capture_stdin_event(agent: AgentKind) -> Result<(), String> {
         .take(MAX_HOOK_INPUT_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(|error| format!("unable to read hook input: {error}"))?;
-    if bytes.is_empty() {
+    // Kiro IDE Prompt Submit may put the user text in USER_PROMPT and still
+    // send a JSON envelope (or an empty body on older builds). Allow empty
+    // stdin only for Kiro when env context is enough to build an event.
+    if bytes.is_empty() && agent != AgentKind::Kiro {
         return Err(
             "hook stdin was empty (Windows GUI-subsystem / shell spawn often causes this; \
-             reinstall Grok hooks after upgrading Agent Hub so the .cmd runner is used)"
+             reinstall hooks after upgrading Agent Hub so the .cmd runner is used)"
                 .to_string(),
         );
     }
     if bytes.len() as u64 > MAX_HOOK_INPUT_BYTES {
         return Err("hook input exceeded 256 KiB".to_string());
     }
-    debug_dump_payload(agent, &bytes);
+    if !bytes.is_empty() {
+        debug_dump_payload(agent, &bytes);
+    }
 
-    let input: serde_json::Value =
-        serde_json::from_slice(&bytes).map_err(|error| format!("invalid hook JSON: {error}"))?;
+    let mut input: serde_json::Value = if bytes.is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_slice(&bytes).map_err(|error| format!("invalid hook JSON: {error}"))?
+    };
+    // IDE docs: user prompt also available as USER_PROMPT for shell actions.
+    if agent == AgentKind::Kiro {
+        merge_kiro_env_fields(&mut input);
+    }
 
     // Provenance guard: Grok CLI also executes hooks configured for other
     // agents (~/.claude/settings.json, ~/.cursor/hooks.json) but feeds them
@@ -264,15 +279,78 @@ fn capture_stdin_event(agent: AgentKind) -> Result<(), String> {
 /// are normalized to Stop because the turn is over either way.
 fn canonical_event_name(name: &str) -> Option<&'static str> {
     match name {
-        "UserPromptSubmit" | "user_prompt_submit" | "PreInvocation" | "pre_invocation" => {
-            Some("UserPromptSubmit")
-        }
+        "UserPromptSubmit"
+        | "user_prompt_submit"
+        | "userPromptSubmit"
+        | "PreInvocation"
+        | "pre_invocation" => Some("UserPromptSubmit"),
         "beforeSubmitPrompt" => Some("UserPromptSubmit"),
         "afterAgentResponse" => Some("AssistantResponse"),
-        "Stop" | "stop" | "Interrupt" | "interrupt" | "StopFailure" | "stop_failure" => {
-            Some("Stop")
-        }
+        // Kiro docs also call this "Agent Stop"; CLI payloads may use camelCase.
+        "Stop"
+        | "stop"
+        | "agentStop"
+        | "AgentStop"
+        | "Interrupt"
+        | "interrupt"
+        | "StopFailure"
+        | "stop_failure" => Some("Stop"),
         _ => None,
+    }
+}
+
+/// Fill missing Kiro fields from process environment (IDE shell hooks).
+fn merge_kiro_env_fields(input: &mut serde_json::Value) {
+    let Some(object) = input.as_object_mut() else {
+        return;
+    };
+    if !object.contains_key("prompt") && !object.contains_key("promptText") {
+        if let Ok(prompt) = std::env::var("USER_PROMPT") {
+            if !prompt.trim().is_empty() {
+                object.insert("prompt".to_string(), serde_json::Value::String(prompt));
+            }
+        }
+    }
+    if !object.contains_key("session_id")
+        && !object.contains_key("sessionId")
+        && !object.contains_key("conversation_id")
+    {
+        for key in ["KIRO_SESSION_ID", "SESSION_ID"] {
+            if let Ok(session_id) = std::env::var(key) {
+                if !session_id.trim().is_empty() {
+                    object.insert(
+                        "session_id".to_string(),
+                        serde_json::Value::String(session_id),
+                    );
+                    break;
+                }
+            }
+        }
+    }
+    if !object.contains_key("hook_event_name") && !object.contains_key("hookEventName") {
+        if let Ok(event) = std::env::var("HOOK_EVENT_NAME")
+            .or_else(|_| std::env::var("KIRO_HOOK_EVENT"))
+        {
+            if !event.trim().is_empty() {
+                object.insert("hook_event_name".to_string(), serde_json::Value::String(event));
+            }
+        } else if object.get("prompt").is_some() {
+            // Prompt Submit with env-only text and no event name.
+            object.insert(
+                "hook_event_name".to_string(),
+                serde_json::Value::String("UserPromptSubmit".to_string()),
+            );
+        }
+    }
+    if !object.contains_key("cwd") {
+        if let Ok(cwd) = std::env::var("PWD") {
+            object.insert("cwd".to_string(), serde_json::Value::String(cwd));
+        } else if let Ok(cwd) = std::env::current_dir() {
+            object.insert(
+                "cwd".to_string(),
+                serde_json::Value::String(cwd.display().to_string()),
+            );
+        }
     }
 }
 
@@ -428,7 +506,17 @@ fn last_transcript_role(path: &str, want_type: &str) -> Option<String> {
 }
 
 fn assistant_reply_field(agent: AgentKind, input: &serde_json::Value) -> Option<String> {
-    let reply = string_field_any(input, &["last_assistant_message", "lastAssistantMessage"]);
+    // Kiro CLI 2.x agent-embedded hooks send `assistant_response` on stop;
+    // IDE / CLI 3.0 / KAS v2 use last_assistant_message (snake or camel).
+    let reply = string_field_any(
+        input,
+        &[
+            "last_assistant_message",
+            "lastAssistantMessage",
+            "assistant_response",
+            "assistantResponse",
+        ],
+    );
     if agent == AgentKind::Cursor {
         reply.or_else(|| string_field(input, "text"))
     } else {
@@ -915,6 +1003,17 @@ mod tests {
         assert_eq!(
             assistant_reply_field(AgentKind::ZCode, &aliased).as_deref(),
             Some("done")
+        );
+
+        // Kiro CLI 2.x agent-embedded stop payload.
+        let kiro_stop = serde_json::json!({
+            "hook_event_name": "stop",
+            "cwd": "/tmp",
+            "assistant_response": "pong"
+        });
+        assert_eq!(
+            assistant_reply_field(AgentKind::Kiro, &kiro_stop).as_deref(),
+            Some("pong")
         );
     }
 
