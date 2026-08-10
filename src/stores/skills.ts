@@ -9,8 +9,8 @@ export const useSkillsStore = defineStore('skills', () => {
   const workspaceDirectory = ref('')
   const selectedSkillName = ref<string | null>(null)
   const selectedFolder = ref('')
-  const skillSortBy = ref<'size' | 'name'>('size')
-  const skillSortDir = ref<'asc' | 'desc'>('desc')
+  const skillSortBy = ref<'size' | 'name'>('name')
+  const skillSortDir = ref<'asc' | 'desc'>('asc')
   const collapsedFolders = ref(new Set<string>())
   const diffResult = ref<any>(null)
   const searchResults = ref<any[]>([])
@@ -100,12 +100,12 @@ export const useSkillsStore = defineStore('skills', () => {
     }
   }
 
-  function toggleSort() {
-    if (skillSortBy.value === 'size') {
-      skillSortDir.value = skillSortDir.value === 'desc' ? 'asc' : 'desc'
+  function toggleSort(field: 'size' | 'name' = 'size') {
+    if (skillSortBy.value === field) {
+      skillSortDir.value = skillSortDir.value === 'asc' ? 'desc' : 'asc'
     } else {
-      skillSortBy.value = 'size'
-      skillSortDir.value = 'desc'
+      skillSortBy.value = field
+      skillSortDir.value = field === 'name' ? 'asc' : 'desc'
     }
   }
 

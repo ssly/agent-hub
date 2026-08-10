@@ -374,6 +374,10 @@
   top: 100%; right: 0;
   margin-top: 4px;
 }
+.ah-kebab-menu--inline.ah-kebab-menu--up {
+  top: auto; bottom: 100%;
+  margin-top: 0; margin-bottom: 4px;
+}
 .ah-kebab-item {
   display: block; width: 100%;
   padding: 7px 14px; font-size: 13px;

@@ -10,6 +10,7 @@ import { useSwitchStore } from '@/stores/switch'
 import { platform } from '@/lib/utils'
 
 import { useToast } from '@/composables/useToast'
+import { useHoverResetBool } from '@/composables/useHoverReset'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -82,6 +83,26 @@ const showDiff = computed(() => pluginsStore.isGlobalScope
 const showSync = computed(() => pluginsStore.isGlobalScope
   && appStore.currentTab === 'plugins'
   && appStore.currentView === 'detail')
+const showDelete = showSync
+
+const { armed: confirmingDelete, arm: armConfirmDelete, reset: resetConfirmDelete } = useHoverResetBool()
+
+async function handleDeleteClick() {
+  if (!skillsStore.selectedSkillName) return
+  if (!confirmingDelete.value) {
+    armConfirmDelete()
+    return
+  }
+  resetConfirmDelete()
+  try {
+    await skillsStore.performDeleteSkill(skillsStore.selectedSkillName, skillsStore.selectedFolder)
+    showToast(t('skill.deleted'), 'success')
+    appStore.refreshTrashCount()
+    appStore.setView('plugins')
+  } catch (e: any) {
+    showToast(t('skill.delete_failed', { error: e?.message || e?.SyncError || String(e) }), 'error')
+  }
+}
 
 function handleBack() {
   skillsStore.backToList()
@@ -134,6 +155,15 @@ async function handleSyncClick() {
 
     <button v-if="showSync" class="btn btn-secondary btn-sm" @click="handleSyncClick">
       {{ t('action.sync') }}
+    </button>
+
+    <button
+      v-if="showDelete"
+      :class="['btn btn-sm', confirmingDelete ? 'btn-danger' : 'btn-secondary']"
+      @click="handleDeleteClick"
+      @mouseleave="resetConfirmDelete"
+    >
+      {{ confirmingDelete ? t('skill.confirm_delete') : t('skill.delete') }}
     </button>
 
     <!-- Custom window controls (Windows only; frame is removed at startup) -->

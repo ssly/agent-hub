@@ -31,10 +31,12 @@ const groupedSkills = computed(() => {
   }
   if (groups.get('')!.length === 0) groups.delete('')
 
-  if (store.skillSortBy === 'size') {
-    const dir = store.skillSortDir === 'desc' ? -1 : 1
-    for (const arr of groups.values()) {
+  const dir = store.skillSortDir === 'desc' ? -1 : 1
+  for (const arr of groups.values()) {
+    if (store.skillSortBy === 'size') {
       arr.sort((a: any, b: any) => dir * ((a.total_size || 0) - (b.total_size || 0)))
+    } else {
+      arr.sort((a: any, b: any) => dir * String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' }))
     }
   }
   return groups
@@ -46,12 +48,27 @@ function handleRowClick(name: string, folder: string) {
 }
 
 const activeKebabSkill = ref<{ name: string; folder: string } | null>(null)
+const kebabOpensUp = ref(false)
 const { armedId: confirmingDeleteSkill, arm: armConfirmDelete, reset: resetConfirmDelete } = useHoverResetId()
 
-function toggleKebab(skill: any) {
+// Rough rendered height of the 3-item kebab menu; used to decide whether the
+// dropdown fits below the button or must flip upward to stay inside the view.
+const KEBAB_MENU_HEIGHT = 110
+
+function toggleKebab(skill: any, event: MouseEvent) {
   if (activeKebabSkill.value?.name === skill.name && activeKebabSkill.value?.folder === skill.folder) {
     activeKebabSkill.value = null
   } else {
+    // The menu is clipped by .ah-table-wrap (overflow: hidden) as well as the
+    // window, so measure the free space against whichever edge comes first;
+    // flip upward when it cannot fit below.
+    const target = event.currentTarget as HTMLElement
+    const rect = target.getBoundingClientRect()
+    const wrapRect = target.closest('.ah-table-wrap')?.getBoundingClientRect()
+    const bottomLimit = Math.min(window.innerHeight, wrapRect?.bottom ?? window.innerHeight)
+    const topLimit = Math.max(0, wrapRect?.top ?? 0)
+    kebabOpensUp.value =
+      bottomLimit - rect.bottom < KEBAB_MENU_HEIGHT && rect.top - topLimit > KEBAB_MENU_HEIGHT
     activeKebabSkill.value = { name: skill.name, folder: skill.folder || '' }
   }
   resetConfirmDelete()
@@ -165,11 +182,20 @@ onUnmounted(() => {
         <div class="ah-table-wrap">
           <!-- Header -->
           <div class="ah-thead">
-            <div class="ah-th">{{ t('skill.name') }}</div>
+            <div
+              :class="['ah-th sortable', store.skillSortBy === 'name' ? 'sorted' : '']"
+              @click="store.toggleSort('name')"
+            >
+              {{ t('skill.name') }}
+              <svg class="ah-sort-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline v-if="store.skillSortDir === 'asc'" points="18 15 12 9 6 15"/>
+                <polyline v-else points="6 9 12 15 18 9"/>
+              </svg>
+            </div>
             <div class="ah-th">{{ t('skill.description') }}</div>
             <div
               :class="['ah-th ah-th--size sortable', store.skillSortBy === 'size' ? 'sorted' : '']"
-              @click="store.toggleSort"
+              @click="store.toggleSort('size')"
             >
               {{ t('skill.size') }}
               <svg class="ah-sort-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -217,14 +243,14 @@ onUnmounted(() => {
 
                 <!-- Actions -->
                 <div class="ah-row__actions relative">
-                  <button v-if="!readonly" class="ah-kebab" @click.stop="toggleKebab(skill)">
+                  <button v-if="!readonly" class="ah-kebab" @click.stop="toggleKebab(skill, $event)">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="19" r="1" fill="currentColor"/></svg>
                   </button>
 
                   <!-- Kebab Dropdown Menu -->
                   <div
                     v-if="activeKebabSkill && activeKebabSkill.name === skill.name && activeKebabSkill.folder === (skill.folder || '')"
-                    class="ah-kebab-menu ah-kebab-menu--inline"
+                    :class="['ah-kebab-menu ah-kebab-menu--inline', kebabOpensUp ? 'ah-kebab-menu--up' : '']"
                   >
                     <button
                       class="ah-kebab-item"
