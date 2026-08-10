@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Tray quota-area loading state: the shared AppLoading wave ball inside a
-// 132px-tall container that matches the orb graph, so the panel does not
+// 112px-tall container that matches the orb graph, so the panel does not
 // jump when real data arrives.
 import AppLoading from '@/components/ui/AppLoading.vue'
 </script>
@@ -13,7 +13,7 @@ import AppLoading from '@/components/ui/AppLoading.vue'
 
 <style scoped>
 .tray-wave-loader {
-  height: 132px;
+  height: 112px;
   display: flex;
   align-items: center;
   justify-content: center;

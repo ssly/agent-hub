@@ -403,5 +403,22 @@ export interface UsageProviderAvailability {
 export const getUsageProviderAvailability = () =>
   invoke<UsageProviderAvailability>('get_usage_provider_availability')
 
+// Shared usage-monitor settings (backend in-memory, both windows sync via the
+// `usage-monitor-settings-changed` event). refreshMinutes is clamped to 1–10;
+// a missing `listening` key means the agent is listened (default on).
+export interface UsageMonitorSettings {
+  refreshMinutes: number
+  selectedAgent: string | null
+  listening: Record<string, boolean>
+}
+export const getUsageMonitorSettings = () =>
+  invoke<UsageMonitorSettings>('get_usage_monitor_settings')
+export const setUsageRefreshMinutes = (minutes: number) =>
+  invoke<UsageMonitorSettings>('set_usage_refresh_minutes', { minutes })
+export const setUsageSelectedAgent = (agent: string | null) =>
+  invoke<UsageMonitorSettings>('set_usage_selected_agent', { agent })
+export const setUsageAgentListening = (agent: string, enabled: boolean) =>
+  invoke<UsageMonitorSettings>('set_usage_agent_listening', { agent, enabled })
+
 // App
 export const getAppVersion = () => invoke<string>('get_app_version')

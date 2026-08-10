@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { Activity, BarChart3, Blend, Maximize2, Minimize2, Pin, PinOff, RefreshCw } from 'lucide-vue-next'
+import { Activity, BarChart3, Blend, Maximize2, Minimize2, Pin, PinOff, RefreshCw, Timer } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { useToast } from '@/composables/useToast'
 import AppToast from '@/components/layout/AppToast.vue'
@@ -18,8 +18,11 @@ import {
   getKimiUsage,
   getKiroSessionMonitorSnapshot,
   getUsageProviderAvailability,
+  getUsageMonitorSettings,
   getZCodeSessionMonitorSnapshot,
   resizeUsageTray,
+  setUsageRefreshMinutes,
+  setUsageSelectedAgent,
   setUsageTrayPinned,
 } from '@/lib/api'
 import type {
@@ -28,6 +31,7 @@ import type {
   GrokUsage,
   KimiUsage,
   ResetCreditEntry,
+  UsageMonitorSettings,
   UsageProviderAvailability,
   UsageWindow,
 } from '@/lib/api'
@@ -356,6 +360,7 @@ function toggleMonitorHidden() {
 }
 
 function toggleOpacityOpen() {
+  intervalOpen.value = false
   opacityOpen.value = !opacityOpen.value
 }
 
@@ -369,32 +374,87 @@ function persistOpacity() {
   localStorage.setItem(OPACITY_STORAGE_KEY, String(panelOpacity.value))
 }
 
+// --- Shared usage-monitor settings (backend in-memory) ---------------------
+// The same snapshot drives the Accounts view and its sidebar settings modal;
+// `usage-monitor-settings-changed` keeps this popup in sync live.
+const monitorSettings = ref<UsageMonitorSettings | null>(null)
+const refreshMinutes = computed(() => monitorSettings.value?.refreshMinutes ?? 5)
+/** Absent key = listened (default on). */
+function isListened(provider: UsageProvider) {
+  return monitorSettings.value?.listening?.[provider] ?? true
+}
+/** Applies a settings snapshot; follows a selected-agent change from the
+ *  other window like a local tab click (queries when unheard). A paused
+ *  agent is never followed — its tab is not even visible. */
+function applySharedSettings(next: UsageMonitorSettings) {
+  monitorSettings.value = next
+  const shared = next.selectedAgent as UsageProvider | null
+  if (shared && PROVIDER_ORDER.includes(shared) && isListened(shared) && shared !== selectedProvider.value) {
+    if (!availability.value || providerAvailable(shared, availability.value)) {
+      selectedProvider.value = shared
+      if (!queriedProviders.value[shared] && document.visibilityState === 'visible') {
+        void refresh(false, false, false)
+      }
+    }
+  }
+}
+
+// Refresh-interval popover (1–10 min slider), sibling of the opacity one.
+const intervalOpen = ref(false)
+const intervalDraft = ref<number | null>(null)
+function toggleIntervalOpen() {
+  intervalOpen.value = !intervalOpen.value
+  if (intervalOpen.value) {
+    opacityOpen.value = false
+    intervalDraft.value = null
+  }
+}
+function onIntervalInput(event: Event) {
+  const value = Number((event.target as HTMLInputElement).value)
+  if (Number.isFinite(value)) intervalDraft.value = Math.min(10, Math.max(1, Math.round(value)))
+}
+async function persistInterval() {
+  if (intervalDraft.value == null) return
+  monitorSettings.value = await setUsageRefreshMinutes(intervalDraft.value)
+  intervalDraft.value = null
+}
+
 // Providers the panel can actually query right now — only these appear as tabs.
 const queryableProviders = computed<UsageProvider[]>(() =>
   PROVIDER_ORDER.filter(provider =>
     availability.value ? providerAvailable(provider, availability.value) : false,
   ),
 )
-// Whole usage section is either shown or gone; no per-provider hide list.
-const visibleProviders = computed<UsageProvider[]>(() => queryableProviders.value)
+// Tabs = queryable AND listened providers. An agent paused in Accounts
+// (listening off) disappears from the switch entirely.
+const visibleProviders = computed<UsageProvider[]>(() =>
+  queryableProviders.value.filter(provider => isListened(provider)),
+)
 
-// A provider that becomes unavailable can no longer be selected.
+// A provider that becomes unavailable (or paused) can no longer be selected;
+// fall to the first visible tab and query it if unheard. Skipped while the
+// popup is hidden — opening it re-queries anyway.
 watch(visibleProviders, list => {
   if (list.length && !list.includes(selectedProvider.value)) {
     selectedProvider.value = list[0]
+    if (!queriedProviders.value[list[0]] && document.visibilityState === 'visible') {
+      void refresh(false, false, false)
+    }
   }
 })
 
-// While pinned, re-query the quota every 5 minutes (force=true bypasses the
-// shared 10-minute backend cache). Monitor rows stay event-driven real-time.
+// While pinned, re-query the quota on the shared refresh interval (force=true
+// bypasses the shared backend cache). Monitor rows stay event-driven
+// real-time. A paused agent (listening off) is never auto-queried.
 let quotaTimer: number | undefined
-watch(pinned, isPinned => {
+watch([pinned, refreshMinutes], ([isPinned, minutes]) => {
   window.clearInterval(quotaTimer)
   quotaTimer = undefined
   if (isPinned) {
     quotaTimer = window.setInterval(() => {
+      if (!isListened(selectedProvider.value)) return
       void refresh(false, false, true)
-    }, 5 * 60_000)
+    }, minutes * 60_000)
   }
 })
 
@@ -436,8 +496,6 @@ function providerAvailable(provider: UsageProvider, status: UsageProviderAvailab
   return status.kimi_code
 }
 
-// Fallback order mirrors the provider-switch tab order so a preferred provider
-// that is signed out falls back to the next available one deterministically.
 const PROVIDER_LABELS: Record<UsageProvider, string> = {
   codex: 'Codex',
   'claude-code': 'Claude Code',
@@ -448,13 +506,18 @@ function providerLabel(provider: UsageProvider) {
   return PROVIDER_LABELS[provider]
 }
 
+// Fallback order mirrors the provider-switch tab order so a preferred provider
+// that is signed out OR paused falls back to the next usable one
+// deterministically.
 function availableProvider(
   preferred: UsageProvider,
   status: UsageProviderAvailability,
 ): UsageProvider | null {
-  if (providerAvailable(preferred, status)) return preferred
+  if (providerAvailable(preferred, status) && isListened(preferred)) return preferred
   for (const candidate of PROVIDER_ORDER) {
-    if (candidate !== preferred && providerAvailable(candidate, status)) return candidate
+    if (candidate !== preferred && providerAvailable(candidate, status) && isListened(candidate)) {
+      return candidate
+    }
   }
   return null
 }
@@ -560,7 +623,7 @@ function clampHeight(height: number) {
   return Math.min(620, Math.max(120, height))
 }
 
-// Mini width ≈ one usage orb (132, same as normal) + panel/shell pad. Normal is 400.
+// Mini width ≈ one usage orb (112, same as normal) + panel/shell pad. Normal is 400.
 const TRAY_NORMAL_WIDTH = 400
 const TRAY_MINI_WIDTH = 160
 
@@ -577,11 +640,17 @@ async function applyContentHeight() {
   if (sequence !== resizeSequence || compactLoading.value) return
   const panel = panelRef.value
   if (!panel) return
+  const width = miniMode.value ? TRAY_MINI_WIDTH : TRAY_NORMAL_WIDTH
+  // Measure at the TARGET width, not the window's current width: after a
+  // mini↔normal switch the native window is still at the old width, and
+  // content (legend rows, credit chips) wraps taller at the narrow width —
+  // measuring there leaves dead space at the bottom once the window widens.
+  panel.style.width = `${width - 16}px` // shell padding 8×2
   // Force synchronous layout at natural height, then restore before paint.
   panel.style.height = 'auto'
   const measured = panel.offsetHeight
   panel.style.height = ''
-  const width = miniMode.value ? TRAY_MINI_WIDTH : TRAY_NORMAL_WIDTH
+  panel.style.width = ''
   try {
     // + shell padding 8×2 on height
     await resizeUsageTray(clampHeight(measured + 16), width)
@@ -731,11 +800,17 @@ async function refresh(compact = false, syncWithAccounts = false, force = false)
 /// we reuse data younger than 10 minutes instead of hitting the network again).
 async function handleTrayOpened() {
   opacityOpen.value = false
+  intervalOpen.value = false
   void loadMonitorSnapshots()
+  // Fresh shared settings first: the Accounts view may have changed the
+  // selected agent or paused listening while this popup was hidden.
+  monitorSettings.value = await getUsageMonitorSettings()
   const status = await getUsageProviderAvailability()
   availability.value = status
 
-  const preferred = preferredProviderFromAccounts()
+  const preferred =
+    (monitorSettings.value?.selectedAgent as UsageProvider | null)
+    ?? preferredProviderFromAccounts()
   const available = availableProvider(preferred, status)
   if (!available) {
     loginUnavailable.value = true
@@ -768,6 +843,8 @@ async function selectProvider(provider: UsageProvider) {
   if (provider === selectedProvider.value || loading.value) return
   if (availability.value && !providerAvailable(provider, availability.value)) return
   selectedProvider.value = provider
+  // Share the selection with the Accounts view (backend memory + event).
+  void setUsageSelectedAgent(provider)
   if (!queriedProviders.value[provider]) {
     await refresh(false, false, false)
   }
@@ -777,6 +854,7 @@ onMounted(async () => {
   // Browser-only mock route should be immediately previewable. The real hidden
   // tray window waits for a tray click so startup never consumes a query.
   if (import.meta.env.MODE === 'web') {
+    applySharedSettings(await getUsageMonitorSettings())
     await Promise.all([refresh(true, true), loadMonitorSnapshots()])
     return
   }
@@ -787,6 +865,11 @@ onMounted(async () => {
     listen<string>('theme-changed', event => {
       document.documentElement.setAttribute('data-theme', event.payload)
     }),
+    // Shared usage-monitor settings (interval / selected agent / listening)
+    // changed in the main window.
+    listen<UsageMonitorSettings>('usage-monitor-settings-changed', event => {
+      applySharedSettings(event.payload)
+    }),
     // Live monitor rows: same backend events the Monitor tab consumes.
     ...MONITOR_AGENTS_LIST.map(agent =>
       listen<MonitorSnapshot>(MONITOR_CHANGED_EVENTS[agent], event => {
@@ -795,6 +878,7 @@ onMounted(async () => {
     ),
   ])
   unlisteners.push(...listeners)
+  monitorSettings.value = await getUsageMonitorSettings()
   void loadMonitorSnapshots()
 })
 
@@ -808,7 +892,7 @@ onBeforeUnmount(() => {
   <main
     class="tray-shell"
     data-tauri-drag-region="deep"
-    @click="opacityOpen = false"
+    @click="opacityOpen = false; intervalOpen = false"
   >
     <section
       ref="panelRef"
@@ -846,6 +930,32 @@ onBeforeUnmount(() => {
                 :aria-label="t('tray.opacity')"
                 @input="onOpacityInput"
                 @change="persistOpacity"
+              >
+            </div>
+          </div>
+          <div v-if="!miniMode" class="tray-control">
+            <button
+              v-tooltip:top="t('tray.refresh_interval')"
+              class="tray-control-btn"
+              :class="{ 'is-active': intervalOpen }"
+              @click="toggleIntervalOpen"
+            >
+              <Timer :size="13" />
+            </button>
+            <div v-if="intervalOpen" class="tray-opacity-popover tray-interval-popover" @click.stop>
+              <span class="tray-opacity-popover__value tray-interval-popover__value">
+                {{ t('usage_settings.minutes', { n: intervalDraft ?? refreshMinutes }) }}
+              </span>
+              <input
+                class="tray-opacity-slider"
+                type="range"
+                min="1"
+                max="10"
+                step="1"
+                :value="intervalDraft ?? refreshMinutes"
+                :aria-label="t('tray.refresh_interval')"
+                @input="onIntervalInput"
+                @change="persistInterval"
               >
             </div>
           </div>
@@ -906,7 +1016,9 @@ onBeforeUnmount(() => {
         <!-- Usage section: whole block gone when hidden (not an empty placeholder). -->
         <template v-if="!usageHidden">
           <template v-if="visibleProviders.length">
+            <!-- A single usable provider makes the switcher redundant. -->
             <div
+              v-if="visibleProviders.length > 1"
               class="provider-switch"
               :class="{ 'provider-switch--icons': miniMode }"
               role="tablist"
@@ -1177,11 +1289,16 @@ onBeforeUnmount(() => {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  padding: 14px 16px 10px;
+  padding: 12px 14px 8px;
   overflow: hidden;
-  border-radius: 25px;
+  /* Standard macOS window corner radius (~10px), not an oversized card. */
+  border-radius: 10px;
   background: var(--tray-panel-bg);
   box-shadow: var(--tray-panel-shadow);
+}
+/* Windows draws square corners for transparent undecorated windows. */
+:global(html[data-platform="windows"] .tray-panel) {
+  border-radius: 0;
 }
 
 /* No title bar: the content gets a slim top band instead, which hosts the
@@ -1266,7 +1383,7 @@ onBeforeUnmount(() => {
   height: 22px;
   padding: 0;
   border: 0;
-  border-radius: 7px;
+  border-radius: 4px;
   color: var(--tray-ink-4);
   background: transparent;
   cursor: pointer;
@@ -1290,7 +1407,7 @@ onBeforeUnmount(() => {
   height: 30px;
   padding: 0 10px;
   border: 1px solid var(--tray-border);
-  border-radius: 10px;
+  border-radius: 4px;
   background: var(--tray-surface);
   box-shadow: var(--tray-panel-shadow);
 }
@@ -1332,6 +1449,10 @@ onBeforeUnmount(() => {
   cursor: grab;
 }
 .tray-opacity-slider:active::-webkit-slider-thumb { cursor: grabbing; }
+
+/* Interval popover: same pattern as opacity, wider to fit "10 分钟". */
+.tray-interval-popover { width: 172px; }
+.tray-interval-popover__value { min-width: 46px; }
 .tray-opacity-slider::-moz-range-track {
   height: 3px;
   border: 0;
@@ -1360,7 +1481,7 @@ onBeforeUnmount(() => {
   height: 22px;
   padding: 0;
   border: 0;
-  border-radius: 7px;
+  border-radius: 4px;
   color: var(--tray-accent);
   background: transparent;
   cursor: pointer;
@@ -1385,7 +1506,7 @@ onBeforeUnmount(() => {
   height: 22px;
   padding: 0;
   border: 0;
-  border-radius: 7px;
+  border-radius: 4px;
   color: var(--tray-ink-4);
   background: transparent;
   cursor: pointer;
@@ -1439,7 +1560,7 @@ onBeforeUnmount(() => {
   grid-auto-columns: 1fr;
   gap: 3px;
   padding: 3px;
-  border-radius: 999px;
+  border-radius: 5px;
   background: var(--tray-inset);
 }
 
@@ -1452,7 +1573,7 @@ onBeforeUnmount(() => {
   min-width: 0;
   overflow: hidden;
   border: 0;
-  border-radius: 999px;
+  border-radius: 4px;
   padding: 0 14px;
   color: var(--tray-ink-2);
   background: transparent;
@@ -1483,10 +1604,10 @@ onBeforeUnmount(() => {
 }
 
 /* Fixed empty state for the quota area: nothing queryable or every provider
-   hidden. Same 132px height as the orb/loader so the panel never jumps. */
+   hidden. Same 112px height as the orb/loader so the panel never jumps. */
 .tray-empty {
   flex: 0 0 auto;
-  height: 132px;
+  height: 112px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1520,8 +1641,8 @@ onBeforeUnmount(() => {
 
 .quota-wrap {
   flex: 0 0 auto;
-  min-height: 132px;
-  padding: 12px 0 10px;
+  min-height: 112px;
+  padding: 6px 0;
   transition: opacity .18s ease;
 }
 .quota-wrap.is-loading { opacity: .72; }
@@ -1543,7 +1664,7 @@ onBeforeUnmount(() => {
   align-items: center;
   padding: 2px 6px;
   border: 1px solid var(--tray-hairline);
-  border-radius: 6px;
+  border-radius: 3px;
   background: var(--tray-inset);
 }
 /* Full validity floats above the chip on hover; the chip itself stays a
@@ -1562,7 +1683,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 1px;
   padding: 5px 9px;
-  border-radius: 6px;
+  border-radius: 3px;
   background: var(--tray-ink);
   color: var(--tray-canvas);
   font-size: 10px;
@@ -1589,7 +1710,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 8px 0 2px;
+  padding: 6px 0 0;
   border-top: 1px solid var(--tray-hairline);
 }
 .monitor-strip.is-mini {

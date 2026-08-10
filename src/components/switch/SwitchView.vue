@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSwitchStore } from '@/stores/switch'
 import { useToast } from '@/composables/useToast'
 import * as api from '@/lib/api'
 import AppModal from '@/components/ui/AppModal.vue'
 import AccountUsagePanel, { type UsageWindowRow } from '@/components/switch/AccountUsagePanel.vue'
+import ListeningToggle from '@/components/switch/ListeningToggle.vue'
 import { Trash2 } from 'lucide-vue-next'
 
 const { t, locale } = useI18n()
@@ -306,8 +307,36 @@ function handleCardLeave(profile: any) {
 
 onMounted(() => {
   window.addEventListener('click', handleOutsideClick)
+  startAutoTimer()
 })
-onUnmounted(() => window.removeEventListener('click', handleOutsideClick))
+onUnmounted(() => {
+  window.removeEventListener('click', handleOutsideClick)
+  window.clearInterval(autoTimer)
+})
+
+// --- Shared listening state + shared-interval auto refresh ------------------
+// The toggle itself lives in ListeningToggle (panel header, next to refresh).
+// Paused agents are never auto-queried here or in the tray popup.
+const listened = computed(() =>
+  store.selectedAgent ? store.isAgentListened(store.selectedAgent) : true,
+)
+
+let autoTimer: number | undefined
+function startAutoTimer() {
+  window.clearInterval(autoTimer)
+  autoTimer = window.setInterval(() => {
+    // Fire only while this window is actually visible (not hidden/minimized).
+    // The tray side has the symmetric rule: it must be pinned.
+    if (document.visibilityState !== 'visible') return
+    const agent = store.selectedAgent
+    if (!agent || !store.isAgentListened(agent)) return
+    if (agent === 'codex') void store.refreshCodexUsage(true)
+    else if (agent === 'grok-build') void store.refreshGrokUsage(true)
+    else if (agent === 'kimi-code') void store.refreshKimiUsage(true)
+    else if (agent === 'claude-code') void store.refreshClaudeUsage(true)
+  }, store.refreshMinutes * 60_000)
+}
+watch(() => store.refreshMinutes, startAutoTimer)
 
 async function doSwitch(id: string) {
   if (!store.selectedAgent) return
@@ -441,8 +470,10 @@ async function handleConfirmClear() {
             :badges="store.codexUsage ? [codexPlanBadge] : []"
             :windows="codexWindows"
             :last-query-text="store.codexUsageLastQuery ? fmtQueryTime(store.codexUsageLastQuery) : null"
+            :paused="!listened"
             @refresh="handleRefreshCodex"
           >
+            <template #headerActions><ListeningToggle /></template>
             <template v-if="store.codexResetCredits?.credits.length || store.codexUsage?.reset_credits?.available_count" #extra>
               <div class="text-xs pt-1 flex items-center gap-2" style="color: var(--ink-3)">
                 <span>{{ t('switch.usage_reset_credits') }}</span>
@@ -506,8 +537,11 @@ async function handleConfirmClear() {
             :badges="store.grokUsage ? [grokPlanBadge] : []"
             :windows="grokWindows"
             :last-query-text="store.grokUsageLastQuery ? fmtQueryTime(store.grokUsageLastQuery) : null"
+            :paused="!listened"
             @refresh="handleRefreshGrok"
-          />
+          >
+            <template #headerActions><ListeningToggle /></template>
+          </AccountUsagePanel>
 
           <AccountUsagePanel
             v-else-if="isKimiCode"
@@ -523,8 +557,11 @@ async function handleConfirmClear() {
             :badges="store.kimiUsage ? [kimiAuthBadge] : []"
             :windows="kimiWindows"
             :last-query-text="store.kimiUsageLastQuery ? fmtQueryTime(store.kimiUsageLastQuery) : null"
+            :paused="!listened"
             @refresh="handleRefreshKimi"
-          />
+          >
+            <template #headerActions><ListeningToggle /></template>
+          </AccountUsagePanel>
 
           <AccountUsagePanel
             v-else-if="isClaudeCode"
@@ -541,8 +578,11 @@ async function handleConfirmClear() {
             :badges="store.claudeUsage?.plan_type ? [store.claudeUsage.plan_type] : []"
             :windows="claudeWindows"
             :last-query-text="store.claudeUsageLastQuery ? fmtQueryTime(store.claudeUsageLastQuery) : null"
+            :paused="!listened"
             @refresh="handleRefreshClaude"
-          />
+          >
+            <template #headerActions><ListeningToggle /></template>
+          </AccountUsagePanel>
 
           <!-- Claude-only: switchable custom-token profile pool. -->
           <template v-if="isClaudeCode">

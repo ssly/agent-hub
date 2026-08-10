@@ -638,10 +638,8 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </div>
-
-      <template #footer>
-        <button class="btn btn-secondary" @click="appStore.aboutModalOpen = false">{{ t('action.close') }}</button>
-      </template>
+      <!-- No footer close button: backdrop click (and Esc) closes the modal.
+           close-on-outside stays disabled while an install is in flight. -->
     </AppModal>
   </div>
 </template>

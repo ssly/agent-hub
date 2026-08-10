@@ -31,6 +31,25 @@ function hide() {
   tipEl?.classList.remove('is-visible')
 }
 
+function clampToThreeLines(tip: HTMLElement, text: string) {
+  const style = getComputedStyle(tip)
+  const limit =
+    parseFloat(style.lineHeight) * 3 +
+    parseFloat(style.paddingTop) +
+    parseFloat(style.paddingBottom)
+  if (tip.scrollHeight <= limit + 1) return
+  // Binary search the longest prefix that, with an ellipsis appended, still
+  // fits three lines.
+  let lo = 0
+  let hi = text.length
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1
+    tip.textContent = `${text.slice(0, mid)}…`
+    if (tip.scrollHeight <= limit + 1) lo = mid
+    else hi = mid - 1
+  }
+}
+
 function show(
   el: HTMLElement,
   text: string,
@@ -39,21 +58,27 @@ function show(
 ) {
   if (!text) return
   const tip = ensureTip()
-  // Clamped tips wrap as normal text (pre-wrap + line-clamp leaks a ghost
-  // 4th line in WebKit). Preserve newlines as spaces so one paragraph clamps cleanly.
-  tip.textContent = clamp ? text.replace(/\s*\n+\s*/g, ' ').trim() : text
+  // Clamped tips wrap as normal text (white-space: normal collapses the
+  // newlines); the 3-line cut itself is JS because CSS line-clamp paints a
+  // ghost 4th line in WebKit/Blink.
+  const content = clamp ? text.replace(/\s*\n+\s*/g, ' ').trim() : text
+  tip.textContent = content
   tip.classList.toggle('is-clamped', clamp)
   tip.classList.add('is-visible')
 
+  const margin = 16
+
   // Reset geometry before measuring: shrink-to-fit would otherwise size the
-  // box against the previous show's leftover position.
+  // box against the previous show's leftover position. Keep a real margin
+  // from the window edges — in the 400px usage tray an edge-to-edge bubble
+  // reads as broken.
   tip.style.left = '0px'
   tip.style.top = '0px'
-  tip.style.maxWidth = `${window.innerWidth - 16}px`
+  tip.style.maxWidth = `${window.innerWidth - margin * 2}px`
+  if (clamp) clampToThreeLines(tip, content)
 
   const rect = el.getBoundingClientRect()
   const tipRect = tip.getBoundingClientRect()
-  const margin = 8
 
   const placeBeside = (prefer: 'left' | 'right'): boolean => {
     const placeAt = (left: number, height: number) => {

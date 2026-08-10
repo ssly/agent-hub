@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Activity, Blocks, FolderOpen, Gauge, Globe2, MessagesSquare, UserRound, X } from 'lucide-vue-next'
+import { Activity, Blocks, FolderOpen, Gauge, Globe2, MessagesSquare, Settings, UserRound, X } from 'lucide-vue-next'
 import { useAppStore } from '@/stores/app'
 import { useSkillsStore } from '@/stores/skills'
 import { usePluginsStore } from '@/stores/plugins'
@@ -11,6 +11,7 @@ import { useSwitchStore } from '@/stores/switch'
 import { useToast } from '@/composables/useToast'
 import { openUsageTray, pickPluginDirectory } from '@/lib/api'
 import AgentIcon from '@/components/agents/AgentIcon.vue'
+import AppModal from '@/components/ui/AppModal.vue'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -21,6 +22,30 @@ const sessionMonitorStore = useSessionMonitorStore()
 const switchStore = useSwitchStore()
 const { showToast } = useToast()
 const isPickingDirectory = ref(false)
+
+// Usage settings modal (auto-refresh interval slider, 1–10 min). The value is
+// shared with the tray popup through backend in-memory settings; the
+// `usage-monitor-settings-changed` listener in the switch store keeps this
+// modal in sync when the tray changes it.
+const usageSettingsOpen = ref(false)
+const refreshMinutesDraft = ref<number | null>(null)
+
+async function openUsageSettings() {
+  await switchStore.loadMonitorSettings()
+  refreshMinutesDraft.value = null
+  usageSettingsOpen.value = true
+}
+
+function onRefreshMinutesInput(event: Event) {
+  const value = Number((event.target as HTMLInputElement).value)
+  if (Number.isFinite(value)) refreshMinutesDraft.value = Math.min(10, Math.max(1, Math.round(value)))
+}
+
+async function persistRefreshMinutes() {
+  if (refreshMinutesDraft.value == null) return
+  await switchStore.updateRefreshMinutes(refreshMinutesDraft.value)
+  refreshMinutesDraft.value = null
+}
 
 const workspaceName = computed(() => {
   if (!pluginsStore.workspaceDirectory) return t('plugin.scope_global')
@@ -287,6 +312,13 @@ function handleSessionSearch(e: Event) {
       >
         <div class="sidebar-footer-actions">
           <button
+            v-tooltip="t('ui.settings')"
+            class="sidebar-footer-btn"
+            @click.stop="openUsageSettings"
+          >
+            <Settings :size="12" />
+          </button>
+          <button
             v-tooltip="t('tray.open_usage')"
             class="sidebar-footer-btn"
             @click.stop="openUsageTray"
@@ -327,6 +359,37 @@ function handleSessionSearch(e: Event) {
         </span>
       </div>
     </template>
+
+    <!-- Usage settings: shared auto-refresh interval (1–10 min), synced with
+         the tray popup through the backend settings snapshot. -->
+    <AppModal
+      :show="usageSettingsOpen"
+      :title="t('usage_settings.title')"
+      width-class="w-[22rem]"
+      @close="usageSettingsOpen = false"
+    >
+      <div class="flex flex-col gap-2">
+        <label class="text-xs font-semibold" style="color: var(--ink-2)">
+          {{ t('usage_settings.refresh_interval') }}
+        </label>
+        <div class="flex items-center gap-3">
+          <input
+            type="range"
+            class="usage-settings-slider flex-1"
+            min="1"
+            max="10"
+            step="1"
+            :value="refreshMinutesDraft ?? switchStore.refreshMinutes"
+            :aria-label="t('usage_settings.refresh_interval')"
+            @input="onRefreshMinutesInput"
+            @change="persistRefreshMinutes"
+          >
+          <span class="usage-settings-value">
+            {{ t('usage_settings.minutes', { n: refreshMinutesDraft ?? switchStore.refreshMinutes }) }}
+          </span>
+        </div>
+      </div>
+    </AppModal>
   </aside>
 </template>
 
@@ -456,5 +519,54 @@ function handleSessionSearch(e: Event) {
 }
 @keyframes about-spin {
   to { transform: rotate(360deg); }
+}
+
+/* Usage settings modal slider (mirrors the tray popup's slider look). */
+.usage-settings-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 14px;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.usage-settings-slider:focus { outline: none; }
+.usage-settings-slider::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--border);
+}
+.usage-settings-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -4.5px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: grab;
+}
+.usage-settings-slider::-moz-range-track {
+  height: 3px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--border);
+}
+.usage-settings-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: grab;
+}
+.usage-settings-value {
+  min-width: 46px;
+  text-align: right;
+  font-size: 12px;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
 }
 </style>

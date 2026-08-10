@@ -211,6 +211,8 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocumentMousedown)
   max-width: min(24rem, 80vw);
   max-height: 240px;
   overflow-y: auto;
+  /* Don't chain wheel scrolls into the page once the list hits its end. */
+  overscroll-behavior: contain;
   margin: 0;
   padding: 4px;
   list-style: none;

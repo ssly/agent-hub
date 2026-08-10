@@ -3,7 +3,7 @@ import { CircleAlert, Gauge } from 'lucide-vue-next'
 
 /**
  * Empty / error stand-in for UsageOrb.
- * Same 132px graph footprint (+ optional side column) so the tray does not
+ * Same 112px graph footprint (+ optional side column) so the tray does not
  * collapse when a provider returns no usage windows or the query fails.
  */
 withDefaults(defineProps<{
@@ -26,16 +26,16 @@ withDefaults(defineProps<{
   >
     <div class="usage-orb-ph__graph" aria-hidden="true">
       <svg viewBox="0 0 180 180">
-        <!-- Outer track matches orb ring radius -->
+        <!-- Thin echo of the orb ring: keeps the footprint without alarm. -->
         <circle class="ph-ring" cx="90" cy="90" r="80" />
-        <!-- Inner tank outline matches single-window bubble -->
-        <circle class="ph-tank" cx="90" cy="90" r="64" />
         <!-- Soft dashed fill hint -->
         <circle class="ph-dash" cx="90" cy="90" r="72" />
+        <!-- Soft badge disc anchoring the center icon -->
+        <circle class="ph-badge" cx="90" cy="90" r="40" />
       </svg>
       <div class="usage-orb-ph__center">
-        <CircleAlert v-if="kind === 'error'" :size="mini ? 22 : 26" class="usage-orb-ph__icon" />
-        <Gauge v-else :size="mini ? 22 : 26" class="usage-orb-ph__icon" />
+        <CircleAlert v-if="kind === 'error'" :size="mini ? 20 : 22" class="usage-orb-ph__icon" />
+        <Gauge v-else :size="mini ? 22 : 24" class="usage-orb-ph__icon" />
       </div>
     </div>
 
@@ -52,7 +52,7 @@ withDefaults(defineProps<{
   display: flex;
   align-items: center;
   gap: 14px;
-  min-height: 132px;
+  min-height: 112px;
 }
 .usage-orb-ph.is-mini {
   flex-direction: column;
@@ -60,45 +60,46 @@ withDefaults(defineProps<{
   gap: 8px;
 }
 
-/* Match UsageOrb graph size exactly */
+/* Match UsageOrb graph size exactly. Child combinator: the center overlay's
+   lucide icon is also an svg and must keep its own size. */
 .usage-orb-ph__graph {
   position: relative;
   flex: 0 0 auto;
-  width: 132px;
+  width: 112px;
 }
-.usage-orb-ph__graph svg {
+.usage-orb-ph__graph > svg {
   display: block;
   width: 100%;
   height: auto;
 }
 
 .ph-ring,
-.ph-tank,
 .ph-dash {
   fill: none;
   stroke-linecap: round;
 }
 .ph-ring {
-  stroke: var(--tray-ring-track, color-mix(in srgb, var(--tray-ink-3) 22%, transparent));
-  stroke-width: 10;
-}
-.ph-tank {
-  stroke: color-mix(in srgb, var(--tray-ink-3) 16%, transparent);
+  stroke: color-mix(in srgb, var(--tray-ink-3) 18%, transparent);
   stroke-width: 2.5;
-  fill: color-mix(in srgb, var(--tray-inset, var(--tray-ink-3)) 35%, transparent);
 }
 .ph-dash {
-  stroke: color-mix(in srgb, var(--tray-ink-3) 28%, transparent);
+  stroke: color-mix(in srgb, var(--tray-ink-3) 24%, transparent);
   stroke-width: 1.5;
-  stroke-dasharray: 5 7;
-  opacity: .85;
+  stroke-dasharray: 4 8;
+  opacity: .8;
+}
+
+.ph-badge {
+  fill: var(--tray-inset, var(--tray-sunken));
+}
+.is-error .ph-badge {
+  fill: color-mix(in srgb, var(--tray-danger, #e05) 14%, transparent);
 }
 
 .is-error .ph-ring {
-  stroke: color-mix(in srgb, var(--tray-danger, #e05) 28%, transparent);
+  stroke: color-mix(in srgb, var(--tray-danger, #e05) 30%, transparent);
 }
-.is-error .ph-tank {
-  fill: color-mix(in srgb, var(--tray-danger, #e05) 8%, transparent);
+.is-error .ph-dash {
   stroke: color-mix(in srgb, var(--tray-danger, #e05) 22%, transparent);
 }
 
@@ -115,8 +116,8 @@ withDefaults(defineProps<{
   opacity: .72;
 }
 .is-error .usage-orb-ph__icon {
-  color: color-mix(in srgb, var(--tray-danger, #e05) 78%, var(--tray-ink-3));
-  opacity: .9;
+  color: color-mix(in srgb, var(--tray-danger, #e05) 68%, var(--tray-ink-3));
+  opacity: .85;
 }
 
 .usage-orb-ph__side {

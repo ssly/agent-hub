@@ -4,7 +4,7 @@ Agent Hub 的项目上下文文档，供 AI Agent 和开发者快速了解项目
 
 ## 项目概述
 
-Agent Hub 是一个基于 Tauri 2.x 的桌面应用，用于统一管理本地多个 AI Agent 平台的插件（Skill、MCP Server、Claude Code 原生插件）、会话和账号。当前版本 **0.19.0**。
+Agent Hub 是一个基于 Tauri 2.x 的桌面应用，用于统一管理本地多个 AI Agent 平台的插件（Skill、MCP Server、Claude Code 原生插件）、会话和账号。当前版本 **0.23.0**。
 
 ## 架构
 
@@ -35,7 +35,7 @@ src/
     mcp/                  # McpListView
     sessions/             # SessionListView + 会话/监听共用组件（SessionCard、SessionMessagesModal、SessionResumeModal，仅组件共用、数据不共用）
     switch/               # SwitchView（含各平台用量面板）
-    tray/                 # 托盘监控面板：CodexTrayView + UsageOrb（泡泡水 + 圆环可视化）+ TrayWaveLoader（查询中水波 loading）；左上角控件（不透明度滑块 / 隐藏使用量 / 隐藏监听 / mini，localStorage 持久化；两区不可同时隐藏；mini 仅圆环+短名+恢复正常），区域无内容时展示固定空状态
+    tray/                 # 托盘监控面板：CodexTrayView + UsageOrb（泡泡水 + 圆环可视化）+ TrayWaveLoader（查询中水波 loading）；左上角控件（不透明度滑块 / 刷新间隔滑块（后端内存共享，非 localStorage）/ 隐藏使用量 / 隐藏监听 / mini，localStorage 持久化；两区不可同时隐藏；mini 仅圆环+短名+恢复正常），区域无内容时展示固定空状态
     diff/                 # DiffView
     search/               # SearchResults
   stores/                 # Pinia stores
@@ -95,6 +95,7 @@ src-tauri/src/
   switch/                 # 账号切换 + 用量查询（Codex/Claude/Grok/Kimi）
     model.rs              # AuthProfile, ProfileMeta
     commands.rs           # Profile CRUD + 切换 + get_codex_usage / get_claude_usage / get_grok_usage / get_kimi_usage
+    monitor_settings.rs   # 用量监听共享设置（仅进程内存）：刷新间隔 1–10 分钟（默认 5）、当前选中 Agent、按 Agent 监听启停；setter 发 usage-monitor-settings-changed 事件，主窗口与托盘双窗口同步
   monitor/                # Agent 监控（未启用）
 
 locales/
@@ -160,7 +161,7 @@ Monitor 标签页实时展示各 Agent 的进行中/已结束会话（用户问�
 
 - **Codex**：向 `~/.codex/hooks.json` 注入 command Hook，调用自身二进制 `--agent-hub-codex-hook` 把 stdin JSON 原子写入 `~/.agent-hub/session-monitor/inbox/`。注意 Codex 有 Hook 信任门：用户级 hooks.json 的 handler 只有在 `~/.codex/config.toml` 的 `hooks.state."<hooks.json路径>:<event>:<组>:<序号>"` 里留下 `trusted_hash` 才会执行（TUI 启动审查 / 桌面端设置 → 钩子 里确认）；安装后未信任时 Hook 静默不触发，`get_hook_status` 会检测这种状态并在 `issue` 中提示（无法复算 Codex 的信任哈希，只查条目存在性）。来源标记约定：监听行按 Hook originator（`CODEX_INTERNAL_ORIGINATOR_OVERRIDE` 含 desktop/chatgpt）标记为 "ChatGPT 客户端"；会话浏览按 `threads.source` 列映射（`vscode`→chatgpt、`cli`/`codex_cli`→terminal，其余 None 回退 "Codex"），`SessionSummary.source` 透传给前端 badge。
 - **Claude Code**：同一机制，写入 `~/.claude/settings.json` 的 `hooks` 字段（热加载无需重启），Hook 参数为 `--agent-hub-claude-hook`。capture 有来源校验：Claude 载荷必须是 snake_case（`hook_event_name`），纯 camelCase 载荷直接丢弃——因为 Grok CLI 会兼容执行 `~/.claude/settings.json` 里的 hook 并喂自己的 camelCase 载荷（实测），不拦截的话一次 Grok 运行会在 Claude 监听里种出幻影会话。
-- **Grok Build**：官方支持 hooks（`~/.grok/hooks/*.json` 全局免信任门，新会话生效），Agent Hub 使用独立受管文件 `~/.grok/hooks/agent-hub.json`（不编辑共享配置），Hook 参数 `--agent-hub-grok-hook`。注册五个事件：`UserPromptSubmit`、`Stop`、`StopFailure`、`SubagentStart`、`SubagentStop`。注意 Grok 的 stdin 载荷是 camelCase（`hookEventName`/`sessionId`/`lastAssistantMessage`，事件值为 `user_prompt_submit`/`stop`/`stop_failure`），capture 统一归一化为 PascalCase。**Windows**：release 是 GUI 子系统，直接 spawn 二进制时 stdin 常为空导致监听静默失败；安装 Hook 时写 `~/.agent-hub/hook-runner/agent-hub-hook.cmd` 作为命令入口（由 cmd 转发到 exe），升级/重装后需在监听页卸载再安装 Grok Hook。失败时看 `~/.agent-hub/session-monitor/hook-capture-error.log`。实测（grok 0.2.x）三个坑都已处理：① 用户 prompt 在载荷里被 `<user_query>` 标签包裹，capture 解包后再展示；② Grok 子 agent 是独立子会话（自己的 sessionId），会发自己的 `user_prompt_submit` 但永不发 `stop`——不过滤的话每次 Task 工具调用都种出一个永远"进行中"、显示内部任务 prompt 的幻影行；capture 用 `SubagentStart` 载荷里的 `subagentId`（即子会话 sessionId）把子会话记入 ignored-sessions.json，其后续事件全部丢弃（Grok 子轮结束只发 `subagent_stop`，不发普通 `stop`，无需 Kimi 那种标记过滤）；③ 主轮结束后还会追加一个 `reason: "shutdown"` 的第二个 `stop`（会话关闭信号，重复标已结束，无害保留）。
+- **Grok Build**：官方支持 hooks（`~/.grok/hooks/*.json` 全局免信任门，新会话生效），Agent Hub 使用独立受管文件 `~/.grok/hooks/agent-hub.json`（不编辑共享配置），Hook 参数 `--agent-hub-grok-hook`。注册五个事件：`UserPromptSubmit`、`Stop`、`StopFailure`、`SubagentStart`、`SubagentStop`。注意 Grok 的 stdin 载荷是 camelCase（`hookEventName`/`sessionId`/`lastAssistantMessage`，事件值为 `user_prompt_submit`/`stop`/`stop_failure`），capture 统一归一化为 PascalCase。**Windows**：release 是 GUI 子系统，直接 spawn 二进制时 stdin 常为空导致监听静默失败；安装 Hook 时写 `~/.agent-hub/hook-runner/agent-hub-hook.cmd` 作为命令入口（由 cmd 转发到 exe），升级/重装后需在监听页卸载再安装 Grok Hook。失败时看 `~/.agent-hub/session-monitor/hook-capture-error.log`。实测（grok 0.2.x）三个坑都已处理：① 用户 prompt 在载荷里被 `<user_query>` 标签包裹，capture 解包后再展示；② Grok 子 agent 是独立子会话（自己的 sessionId），会发自己的 `user_prompt_submit` 但永不发 `stop`——不过滤的话每次 Task 工具调用都种出一个永远"进行中"、显示内部任务 prompt 的幻影行；capture 用 `SubagentStart` 载荷里的 `subagentId`（即子会话 sessionId）把子会话记入 ignored-sessions.json，其后续事件全部丢弃（Grok 子轮结束只发 `subagent_stop`，不发普通 `stop`，无需 Kimi 那种标记过滤）；③ 主轮结束后还会追加一个 `reason: "shutdown"` 的第二个 `stop`（会话关闭信号），capture 直接丢弃——对已知会话它只是重复标已结束，而对 hook 覆盖前创建的内部会话（如实测发现的 `grok-build-plan` 会话）它是唯一事件，不过滤会种出一条"暂未捕获用户问题"的噪音行。另外 Kimi 的 UserPromptSubmit 会把粘贴图片以 base64 塞进 prompt content parts，capture 的 stdin 上限因此是 8 MiB（只提取 text part），debug 日志对超 64 KiB 的载荷只留预览；hook-debug.jsonl / hook-capture-error.log 均整行单次 write_all 追加（writeln! 分块写会被并发 hook 进程交织损坏）。
 - **Cursor**：官方 hooks（`~/.cursor/hooks.json`，IDE 与 CLI 共用；CLI 需 ≥2026-01-16 才有生命周期事件，旧版页内有升级提示），事件为 camelCase 生命周期名：`beforeSubmitPrompt`（归一化为 UserPromptSubmit）、`afterAgentResponse`（归一化为 AssistantResponse）、`stop`（载荷带 `status: completed|aborted|error`，覆盖正常/中断/出错，无需单独失败事件）。关键语义：**只有 `stop` 决定轮次结束**——`afterAgentResponse` 在一个 generation 内可能触发多次（每条助手消息一次），service 里 AssistantResponse 只填回复文本、不动状态（无前置 prompt 的新行默认 Ended，避免残留"进行中"）。会话关联用 `conversation_id`，轮次关联用 `generation_id`；capture 要求载荷必须含 `conversation_id`（Grok 兼容执行 `~/.cursor/hooks.json` 时喂的载荷没有它，以此拦截幻影事件）。子 agent 官方有独立 `subagentStart`/`subagentStop` 事件（与 Claude 同构，主 `stop` 应不受子 agent 影响），但因本机 CLI 版本过旧未实测，如有异常先查 hook-debug.jsonl。
 - **Kimi Code**：官方支持 hooks（`~/.kimi-code/config.toml` 的 `[[hooks]]` 表，新会话生效），Hook 参数 `--agent-hub-kimi-hook`。注册六个事件：`UserPromptSubmit`、`Stop`、`Interrupt`（Kimi 在用户 Esc/Ctrl+C 中断时不发 Stop 只发 Interrupt，capture 归一化为 Stop；进程被直接杀死则无事件，"进行中"状态会残留——hook 方案固有限制）、`StopFailure`、`SubagentStart`、`SubagentStop`。后两者用于修正一个实测缺陷：Kimi 在**子 agent 的模型轮次结束时也发普通 `Stop`**（载荷与主轮 `Stop` 完全相同——只有 `stop_hook_active`，无法按字段区分；实测定序为 SubagentStart → 子 agent Stop（可能多个）→ SubagentStop → 主轮 Stop），不过滤的话每次 Agent 工具调用都会把监听卡片误标"已结束"。capture 用标记文件过滤：`~/.agent-hub/session-monitor/kimi-subagents/<sessionId>/<millis>-<uuid>` 每个在飞子 agent 一个文件（建/删免锁，并发安全），SubagentStart 建、SubagentStop 删最旧一个，带活标记时的 `Stop` 直接丢弃；`Interrupt`/`StopFailure` 永不过滤（关乎整轮，丢了会卡在"进行中"）。SubagentStop 丢失（进程被杀）时标记 1 小时过期自动清理。因 config.toml 是用户主配置，安装/卸载走纯文本块增删（按 `--agent-hub-kimi-hook` 标记识别受管 `[[hooks]]` 块），不做 TOML 全量序列化，注释和格式原样保留。注意 Kimi 的 `prompt` 字段是 content-part 数组（`[{type:"text",text:…}]`），capture 的 `prompt_field` 负责拼接文本部分；`Stop` 载荷只有 `stop_hook_active`，不带助手回复文本。监听捕获的 sessionId 即 `session_<uuid>` 目录名，与会话浏览适配器互通，监听卡片可查看消息/恢复。
 - **Kiro**：官方 hooks（全局 `~/.kiro/hooks/` + 项目 `.kiro/hooks/`，IDE 与 CLI 共用；Web/Mobile 无 hooks）。Agent Hub 写独立受管文件 `~/.kiro/hooks/agent-hub.json`（v1 schema：`hooks[]` + `trigger` + `action.command`），Hook 参数 `--agent-hub-kiro-hook`。注册 `UserPromptSubmit` + `Stop`；command 成功时 **stdout 必须为空**（Kiro 会把 stdout 注入上下文）。覆盖 Kiro IDE + Kiro CLI，不覆盖 Web/Mobile。
@@ -175,6 +176,8 @@ Monitor 标签页实时展示各 Agent 的进行中/已结束会话（用户问�
 Profile 存储在 `~/.agent-hub/switch/<agent-type>/<uuid>/`，按平台稳定身份检测当前活跃账号（Codex 用 `account_id`，Claude Code 用 `env.ANTHROPIC_AUTH_TOKEN`）。切换时原子替换（tmp + rename）。Switch 视图还提供 Codex 用量查询（`get_codex_usage` 命令，调用 ChatGPT 内部 usage 接口返回 5h/7d 窗口配额）。
 
 Claude Code 同时支持官方 `/login` OAuth 订阅账号（meta.json `kind` 为 `token`|`oauth`，老 profile 默认 `token`）：settings.json 无 env token 且凭证存在（macOS keychain `Claude Code-credentials` 或 `<CLAUDE_CONFIG_DIR|~/.claude>/.credentials.json`）即视为 oauth 模式，身份用 `~/.claude.json` 的 `oauthAccount.accountUuid`（回退 email）。oauth profile 的 config.json 存凭证 JSON 原文，切换时写回 keychain（`security add-generic-password -U`，失败回落原子写 `.credentials.json` 0600）并从 settings.json 移除 env token；清除/删除当前账号对 oauth 模式拒绝（须先在 Claude Code 中 /logout）。Token 策略只读不刷新，过期提示用户打开一次 Claude Code。`get_claude_usage` 命令用 OAuth access token 调 `https://api.anthropic.com/api/oauth/usage` 返回 5h/7d 窗口（`UsageProviderAvailability.claude_code` 标记凭证可用）。
+
+**用量监听共享设置**（`switch/monitor_settings.rs`）：主窗口（账号页 + 侧栏版本号旁的设置弹窗）与托盘监控面板是两个独立 webview，共享状态全部放在后端进程内存（重启归零）：刷新间隔（1–10 分钟，默认 5）、当前选中 Agent、按 Agent 的监听启停（缺省=启用）。setter 返回完整快照并广播 `usage-monitor-settings-changed`，两端各自监听套用；选中 Agent 双向同步（托盘 tab 点击 ↔ 账号页 selectAgent，事件回环按相等值幂等终止）。启停按钮在账号页用量面板头部（刷新按钮旁，`ListeningToggle.vue`）；停用时面板内容收起为提示行，且账号页进入、托盘打开不再自动查询（手动刷新按钮仍可用）；托盘的 provider tab 直接隐藏被停用的 Agent（选中项被停用时回落到第一个仍启用的 tab，全部停用时显示固定空状态）。自动刷新只在"活跃面板"发生：账号页定时器要求主窗口可见（`document.visibilityState`），托盘定时器要求 pinned，两侧间隔同为共享值。
 
 ## 测试
 

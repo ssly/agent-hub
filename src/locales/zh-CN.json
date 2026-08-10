@@ -16,7 +16,8 @@
     "search_placeholder": "搜索技能...",
     "search_results": "搜索结果",
     "no_results": "未找到匹配结果。",
-    "searching": "正在搜索所有平台..."
+    "searching": "正在搜索所有平台...",
+    "settings": "设置"
   },
   "plugin": {
     "title": "插件",
@@ -384,7 +385,12 @@
     "claude_usage_loading": "正在查询 Claude Code 用量…",
     "claude_usage_oauth_hint": "用量来自官方登录（OAuth 订阅）账号，与下方的自定义 API 账号相互独立。",
     "claude_usage_login_required": "未检测到 Claude Code 登录凭证，未发起查询。在 Claude Code 中运行 /login 后，点击刷新即可。",
-    "oauth_badge": "官方登录"
+    "oauth_badge": "官方登录",
+    "listening_enable": "启用监听",
+    "listening_disable": "停用监听",
+    "listening_on": "监听中",
+    "listening_off": "已停用",
+    "listening_off_hint": "监听已停用，启用后才会自动查询并展示用量。"
   },
   "tray": {
     "pin": "置顶",
@@ -426,7 +432,8 @@
     "show_monitor": "显示监听",
     "cannot_hide_both": "不能同时隐藏使用量和监听，请至少保留一块。",
     "no_query_items": "你没有查询的项目",
-    "no_monitor_items": "你没有启用的监听"
+    "no_monitor_items": "你没有启用的监听",
+    "refresh_interval": "刷新间隔"
   },
   "monitor": {
     "title": "监控",
@@ -556,5 +563,10 @@
     "new_version_toast": "发现新版本 v{version}，点击左侧版本号查看详情并更新",
     "update_available_short": "有更新",
     "downloading_title": "正在下载更新 {percent}%，点击查看"
+  },
+  "usage_settings": {
+    "title": "用量设置",
+    "refresh_interval": "自动刷新间隔",
+    "minutes": "{n} 分钟"
   }
 }

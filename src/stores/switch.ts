@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import * as api from '@/lib/api'
-import type { ClaudeUsage, CodexUsage, CodexResetCredits, GrokUsage, KimiUsage } from '@/lib/api'
+import type { ClaudeUsage, CodexUsage, CodexResetCredits, GrokUsage, KimiUsage, UsageMonitorSettings } from '@/lib/api'
 
 export const useSwitchStore = defineStore('switch', () => {
   const selectedAgent = ref<string | null>(localStorage.getItem('ah-switch-agent'))
@@ -65,6 +65,8 @@ export const useSwitchStore = defineStore('switch', () => {
   async function selectAgent(agentType: string) {
     selectedAgent.value = agentType
     localStorage.setItem('ah-switch-agent', agentType)
+    // Share the selection with the tray popup (backend memory + event).
+    void api.setUsageSelectedAgent(agentType).then(s => { monitorSettings.value = s }).catch(() => {})
     addFormOpen.value = false
     switchConfirmId.value = null
     editModalOpen.value = false
@@ -76,6 +78,26 @@ export const useSwitchStore = defineStore('switch', () => {
     deleteArmed.value = false
     clearActiveModalOpen.value = false
     await loadSelectedAgent()
+  }
+
+  // --- Shared usage-monitor settings (backend in-memory, synced with the
+  // tray popup via the `usage-monitor-settings-changed` event) --------------
+  const monitorSettings = ref<UsageMonitorSettings | null>(null)
+  const refreshMinutes = computed(() => monitorSettings.value?.refreshMinutes ?? 5)
+  /** Absent key = listened (default on). */
+  function isAgentListened(agent: string) {
+    return monitorSettings.value?.listening?.[agent] ?? true
+  }
+  async function loadMonitorSettings() {
+    try {
+      monitorSettings.value = await api.getUsageMonitorSettings()
+    } catch { /* keep defaults */ }
+  }
+  async function updateRefreshMinutes(minutes: number) {
+    monitorSettings.value = await api.setUsageRefreshMinutes(minutes)
+  }
+  async function setAgentListening(agent: string, enabled: boolean) {
+    monitorSettings.value = await api.setUsageAgentListening(agent, enabled)
   }
 
   // Shared with the tray popup via backend 10-minute cache.
@@ -173,6 +195,13 @@ export const useSwitchStore = defineStore('switch', () => {
         if (event.payload.provider === 'kimi-code') void refreshKimiUsage(false)
         if (event.payload.provider === 'claude-code') void refreshClaudeUsage(false)
       })
+      // Tray-side settings changes (interval slider, provider tabs) land here.
+      await listen<UsageMonitorSettings>('usage-monitor-settings-changed', event => {
+        monitorSettings.value = event.payload
+        const shared = event.payload.selectedAgent
+        if (shared && shared !== selectedAgent.value) void selectAgent(shared)
+      })
+      monitorSettings.value ??= await api.getUsageMonitorSettings()
     } catch {
       usageListenerReady = false
     }
@@ -203,13 +232,18 @@ export const useSwitchStore = defineStore('switch', () => {
 
   // Entering the selected account section loads the shared usage snapshot
   // (backend serves cache when younger than 10 minutes) or Claude profiles.
+  // A paused agent (listening off) is never auto-queried; the manual refresh
+  // buttons stay available.
   async function loadSelectedAgent() {
     void ensureUsageListener()
+    if (!monitorSettings.value) await loadMonitorSettings()
     await loadProfiles()
-    if (selectedAgent.value === 'codex') await refreshCodexUsage(false)
-    if (selectedAgent.value === 'grok-build') await refreshGrokUsage(false)
-    if (selectedAgent.value === 'kimi-code') await refreshKimiUsage(false)
-    if (selectedAgent.value === 'claude-code') await refreshClaudeUsage(false)
+    const agent = selectedAgent.value
+    if (!agent || !isAgentListened(agent)) return
+    if (agent === 'codex') await refreshCodexUsage(false)
+    if (agent === 'grok-build') await refreshGrokUsage(false)
+    if (agent === 'kimi-code') await refreshKimiUsage(false)
+    if (agent === 'claude-code') await refreshClaudeUsage(false)
   }
 
   async function openEditModal(profile: any) {
@@ -289,6 +323,8 @@ export const useSwitchStore = defineStore('switch', () => {
     grokUsage, grokUsageLoading, grokUsageError, grokUsageLastQuery,
     kimiUsage, kimiUsageLoading, kimiUsageError, kimiUsageLastQuery,
     claudeUsage, claudeUsageLoading, claudeUsageError, claudeUsageLastQuery, claudeUsageAvailable,
+    monitorSettings, refreshMinutes, isAgentListened,
+    loadMonitorSettings, updateRefreshMinutes, setAgentListening,
     selectAgent, loadProfiles, loadSelectedAgent, openEditModal, closeEditModal, resetState,
     refreshCodexUsage, refreshGrokUsage, refreshKimiUsage, refreshClaudeUsage,
     openClearActiveModal, closeClearActiveModal, deleteActiveAuth,

@@ -16,7 +16,8 @@
     "search_placeholder": "Search skills...",
     "search_results": "Search Results",
     "no_results": "No results found.",
-    "searching": "Searching all platforms..."
+    "searching": "Searching all platforms...",
+    "settings": "Settings"
   },
   "plugin": {
     "title": "Plugins",
@@ -384,7 +385,12 @@
     "claude_usage_loading": "Querying Claude Code usage…",
     "claude_usage_oauth_hint": "Usage comes from the official sign-in (OAuth subscription), independent of the custom API accounts below.",
     "claude_usage_login_required": "No Claude Code credentials found, so no query was made. Run /login in Claude Code, then hit refresh.",
-    "oauth_badge": "Official"
+    "oauth_badge": "Official",
+    "listening_enable": "Enable Monitoring",
+    "listening_disable": "Disable Monitoring",
+    "listening_on": "Monitoring",
+    "listening_off": "Paused",
+    "listening_off_hint": "Monitoring is paused. Enable it to auto-query and show usage."
   },
   "tray": {
     "pin": "Pin on top",
@@ -426,7 +432,8 @@
     "show_monitor": "Show monitor",
     "cannot_hide_both": "You can't hide both usage and monitor. Keep at least one visible.",
     "no_query_items": "No queryable providers",
-    "no_monitor_items": "No monitors enabled"
+    "no_monitor_items": "No monitors enabled",
+    "refresh_interval": "Refresh interval"
   },
   "monitor": {
     "title": "Monitor",
@@ -556,5 +563,10 @@
     "new_version_toast": "New version v{version} found. Click the version in the sidebar to view details and update.",
     "update_available_short": "Update",
     "downloading_title": "Downloading update {percent}% — click to view"
+  },
+  "usage_settings": {
+    "title": "Usage Settings",
+    "refresh_interval": "Auto-refresh interval",
+    "minutes": "{n} min"
   }
 }

@@ -29,6 +29,9 @@ const props = withDefaults(defineProps<{
   emptyHint?: string | null
   /** Special product tip above usage body (Kimi API-only, Claude OAuth, …). */
   tip?: string | null
+  /** Listening paused: body collapses to a quiet hint, no usage content. */
+  paused?: boolean
+  pausedText?: string | null
   badges?: string[]
   windows?: UsageWindowRow[]
   lastQueryText?: string | null
@@ -41,6 +44,8 @@ const props = withDefaults(defineProps<{
   softNotice: null,
   emptyHint: null,
   tip: null,
+  paused: false,
+  pausedText: null,
   badges: () => [],
   windows: () => [],
   lastQueryText: null,
@@ -97,16 +102,24 @@ const showEmpty = computed(
           <Gauge :size="18" class="flex-shrink-0" :style="{ color: 'var(--accent)' }" />
           <span class="truncate">{{ usageTitle }}</span>
         </span>
-        <button
-          class="btn btn-secondary btn-sm flex items-center gap-1 flex-shrink-0"
-          :disabled="refreshing || loading"
-          @click="emit('refresh')"
-        >
-          <RefreshCw :size="14" :class="{ 'animate-spin': refreshing || loading }" />
-          {{ t('switch.usage_refresh') }}
-        </button>
+        <div class="flex items-center gap-2 flex-shrink-0">
+          <slot name="headerActions" />
+          <button
+            class="btn btn-secondary btn-sm flex items-center gap-1 flex-shrink-0"
+            :disabled="refreshing || loading"
+            @click="emit('refresh')"
+          >
+            <RefreshCw :size="14" :class="{ 'animate-spin': refreshing || loading }" />
+            {{ t('switch.usage_refresh') }}
+          </button>
+        </div>
       </div>
 
+      <div v-if="paused" class="text-sm py-2" style="color: var(--ink-4)">
+        {{ pausedText || t('switch.listening_off_hint') }}
+      </div>
+
+      <template v-else>
       <div
         v-if="tip"
         class="text-xs mb-3 flex items-start gap-1.5"
@@ -177,6 +190,7 @@ const showEmpty = computed(
           {{ t('switch.usage_last_query', { time: lastQueryText }) }}
         </div>
       </div>
+      </template>
     </div>
   </div>
 </template>

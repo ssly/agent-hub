@@ -835,7 +835,10 @@
 .ah-sidebar--collapsed { width: 3.5rem; min-width: 3.5rem; }
 
 .ah-sidebar__header {
-  padding: 12px 12px 12px 14px;
+  /* Fixed height shared with .ah-toolbar so the hairlines under both top
+     bars sit on the same line. */
+  height: 45px;
+  padding: 0 12px 0 14px;
   border-bottom: 1px solid var(--hairline);
   display: flex; align-items: center; justify-content: space-between;
   gap: 6px;
@@ -927,10 +930,12 @@
    § 15. Toolbar
    ============================================================ */
 .ah-toolbar {
+  /* Same fixed height as .ah-sidebar__header: their bottom hairlines align. */
+  height: 45px;
   background: var(--surface);
   border-bottom: 1px solid var(--hairline);
   box-shadow: var(--shadow-mist);
-  padding: 8px 18px;
+  padding: 0 18px;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -990,7 +995,8 @@
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-modal);
   color: var(--ink);
-  width: 48rem;
+  /* Width comes from AppModal's widthClass utility. This stylesheet is
+     unlayered, so a width here would beat every @layer utilities width. */
   max-width: 90vw;
   /* Content-sized modal: grow with content, capped at 85vh;
      header/footer stay pinned while the body scrolls. */
@@ -1278,12 +1284,12 @@ button:active:not(:disabled) {
 /* Optional 3-line clamp (v-tooltip.clamp). Avoid pre-wrap here — WebKit
    line-clamp + pre-wrap leaks a ghost 4th line. */
 .ah-tooltip.is-clamped {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  overflow: hidden;
   white-space: normal;
-  /* Hard cap as a second guard against partial-line bleed. */
-  max-height: calc(12px * 1.45 * 3);
+  overflow: hidden;
+  /* Guard only. The actual 3-line truncation happens in JS (tooltip.ts):
+     CSS line-clamp paints a partial ghost 4th line into the padding area in
+     WebKit/Blink, and no max-height value both keeps line 3 whole and hides
+     the ghost. Cap = 3 lines + vertical padding (7px × 2, border-box). */
+  max-height: calc(12px * 1.45 * 3 + 14px);
 }
 .ah-tooltip.is-visible { opacity: 0.96; }

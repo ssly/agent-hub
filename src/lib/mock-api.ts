@@ -500,6 +500,28 @@ export async function resizeUsageTray() {}
 export async function setUsageTrayPinned() {}
 export async function openUsageTray() {}
 
+// Shared usage-monitor settings mock (backend in-memory in the real app).
+const mockUsageMonitorSettings = {
+  refreshMinutes: 5,
+  selectedAgent: null as string | null,
+  listening: {} as Record<string, boolean>,
+}
+export async function getUsageMonitorSettings() {
+  return structuredClone(mockUsageMonitorSettings)
+}
+export async function setUsageRefreshMinutes(minutes: number) {
+  mockUsageMonitorSettings.refreshMinutes = Math.min(10, Math.max(1, Math.round(minutes)))
+  return structuredClone(mockUsageMonitorSettings)
+}
+export async function setUsageSelectedAgent(agent: string | null) {
+  mockUsageMonitorSettings.selectedAgent = agent
+  return structuredClone(mockUsageMonitorSettings)
+}
+export async function setUsageAgentListening(agent: string, enabled: boolean) {
+  mockUsageMonitorSettings.listening[agent] = enabled
+  return structuredClone(mockUsageMonitorSettings)
+}
+
 let mockClaudeUsage: { at: number; data: any } | null = null
 export async function getClaudeUsage(force = false) {
   if (!force && mockCacheFresh(mockClaudeUsage)) {

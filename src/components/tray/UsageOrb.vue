@@ -20,7 +20,7 @@ const props = withDefaults(defineProps<{
 })
 const { t, locale } = useI18n()
 
-// Fixed viewBox; the graph renders at ~132px wide via CSS.
+// Fixed viewBox; the graph renders at ~112px wide via CSS.
 const CX = 90
 const CY = 90
 const WAVE_LEN = 52
@@ -205,7 +205,7 @@ const centerUsed = computed(() => Math.round(usedPercent(bubbleWindow.value.wind
 .usage-orb { display: flex; align-items: center; gap: 14px; }
 .usage-orb.is-mini { justify-content: center; }
 /* Same graph size in mini and normal so the orb does not jump on mode switch. */
-.usage-orb__graph { position: relative; flex: 0 0 auto; width: 132px; }
+.usage-orb__graph { position: relative; flex: 0 0 auto; width: 112px; }
 .usage-orb__graph svg { display: block; width: 100%; height: auto; }
 .usage-orb__side {
   flex: 1 1 auto;
@@ -277,7 +277,7 @@ const centerUsed = computed(() => Math.round(usedPercent(bubbleWindow.value.wind
 }
 .usage-orb__center strong {
   color: var(--tray-ink);
-  font-size: 19px;
+  font-size: 17px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   line-height: 1.1;
