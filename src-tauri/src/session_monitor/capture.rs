@@ -13,7 +13,10 @@ pub const KIMI_HOOK_ARG: &str = "--agent-hub-kimi-hook";
 pub const ZCODE_HOOK_ARG: &str = "--agent-hub-zcode-hook";
 pub const ANTIGRAVITY_HOOK_ARG: &str = "--agent-hub-antigravity-hook";
 pub const KIRO_HOOK_ARG: &str = "--agent-hub-kiro-hook";
-const MAX_HOOK_INPUT_BYTES: u64 = 256 * 1024;
+/// Runaway-stdin guard, not a payload policy: Kimi embeds pasted images as
+/// base64 in the prompt content parts, so a legitimate UserPromptSubmit can
+/// reach several MiB. The monitor only extracts the text parts anyway.
+const MAX_HOOK_INPUT_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_IGNORED_SESSIONS: usize = 200;
 /// Kimi sub-agent markers older than this are treated as stale: the matching
 /// SubagentStop presumably never arrived (killed process), so they must not
@@ -93,7 +96,10 @@ fn capture_stdin_event(agent: AgentKind) -> Result<(), String> {
         );
     }
     if bytes.len() as u64 > MAX_HOOK_INPUT_BYTES {
-        return Err("hook input exceeded 256 KiB".to_string());
+        return Err(format!(
+            "hook input exceeded {} MiB",
+            MAX_HOOK_INPUT_BYTES / (1024 * 1024)
+        ));
     }
     if !bytes.is_empty() {
         debug_dump_payload(agent, &bytes);
@@ -167,6 +173,12 @@ fn capture_stdin_event(agent: AgentKind) -> Result<(), String> {
                 return Ok(());
             }
             "subagent_stop" | "SubagentStop" => return Ok(()),
+            // Grok appends a second Stop with `reason: "shutdown"` when the
+            // session closes. For sessions the hooks saw it only re-marks the
+            // row ended; for sessions whose turns predate the hooks (e.g.
+            // internal grok-build-plan sessions) it is the ONLY event and
+            // would plant a prompt-less noise row. Drop it either way.
+            "stop" | "Stop" if is_grok_session_close(&input) => return Ok(()),
             _ => {}
         }
         if is_session_ignored(&session_id) {
@@ -406,6 +418,12 @@ fn unwrap_grok_user_query(prompt: &str) -> String {
         .map(str::trim)
         .filter(|text| !text.is_empty());
     inner.unwrap_or(prompt).to_owned()
+}
+
+/// Grok fires a second Stop carrying `reason: "shutdown"` when the session
+/// closes (the per-turn Stop already ended the row).
+fn is_grok_session_close(input: &serde_json::Value) -> bool {
+    string_field_any(input, &["reason"]).as_deref() == Some("shutdown")
 }
 
 /// Extract the user prompt from the hook payload. Codex/Claude/Grok send a
@@ -742,6 +760,19 @@ fn now_millis() -> i64 {
         .unwrap_or_default()
 }
 
+/// Append one line with a single write_all. write_fmt (writeln!) chunks large
+/// lines into multiple write(2) syscalls, and concurrent hook processes (Grok
+/// fires both its own hook and the Claude hook at session close) interleave
+/// those chunks and corrupt the log.
+fn append_line(path: &std::path::Path, line: &str) {
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let mut bytes = Vec::with_capacity(line.len() + 1);
+        bytes.extend_from_slice(line.as_bytes());
+        bytes.push(b'\n');
+        let _ = file.write_all(&bytes);
+    }
+}
+
 /// Always-on breadcrumb for capture failures (empty stdin, bad JSON, IO).
 /// Lives next to hook-debug.jsonl so Windows users can diagnose silent hooks
 /// without enabling AGENT_HUB_HOOK_DEBUG.
@@ -752,15 +783,10 @@ fn log_capture_error(agent: AgentKind, error: &str) {
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
-        let _ = writeln!(
-            file,
-            "{} agent={} error={}",
-            now_millis(),
-            agent.as_str(),
-            error
-        );
-    }
+    append_line(
+        &path,
+        &format!("{} agent={} error={}", now_millis(), agent.as_str(), error),
+    );
 }
 
 /// Development aid: append every raw hook payload to
@@ -781,14 +807,26 @@ fn debug_dump_payload(agent: AgentKind, bytes: &[u8]) {
         let _ = fs::create_dir_all(parent);
     }
     let raw: serde_json::Value = serde_json::from_slice(bytes).unwrap_or_default();
-    let line = serde_json::json!({
-        "ts": now_millis(),
-        "agent": agent.as_str(),
-        "raw": raw,
-    });
-    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
-        let _ = writeln!(file, "{line}");
-    }
+    // Huge payloads (base64 screenshots in Kimi prompts) would bury the log;
+    // keep a bounded preview instead of the full JSON.
+    const MAX_DUMP_BYTES: usize = 64 * 1024;
+    let line = if bytes.len() <= MAX_DUMP_BYTES {
+        serde_json::json!({
+            "ts": now_millis(),
+            "agent": agent.as_str(),
+            "raw": raw,
+        })
+        .to_string()
+    } else {
+        serde_json::json!({
+            "ts": now_millis(),
+            "agent": agent.as_str(),
+            "raw_bytes": bytes.len(),
+            "raw_preview": String::from_utf8_lossy(&bytes[..MAX_DUMP_BYTES]),
+        })
+        .to_string()
+    };
+    append_line(&path, &line);
 }
 
 #[cfg(test)]
@@ -822,6 +860,27 @@ mod tests {
             prompt_field(&serde_json::json!({"prompt": [{"type": "image", "source": {}}]})),
             None
         );
+    }
+
+    #[test]
+    fn prompt_field_skips_kimi_image_url_parts() {
+        // Real Kimi payload when the user pastes a screenshot: the image rides
+        // along as a base64 image_url part, the text part still carries the
+        // question (this payload shape is also why the stdin cap is 8 MiB).
+        let input = serde_json::json!({
+            "prompt": [
+                {"type": "image_url", "imageUrl": {"url": "data:image/png;base64,AAAA"}},
+                {"type": "text", "text": "这张图里哪里不对"}
+            ]
+        });
+        assert_eq!(prompt_field(&input).as_deref(), Some("这张图里哪里不对"));
+    }
+
+    #[test]
+    fn grok_session_close_detection() {
+        assert!(is_grok_session_close(&serde_json::json!({"reason": "shutdown"})));
+        assert!(!is_grok_session_close(&serde_json::json!({})));
+        assert!(!is_grok_session_close(&serde_json::json!({"reason": "complete"})));
     }
 
     #[test]

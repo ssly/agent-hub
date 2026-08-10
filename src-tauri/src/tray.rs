@@ -198,9 +198,25 @@ fn setup_desktop(app: &mut App) -> tauri::Result<()> {
     let window_to_hide = window.clone();
     window.on_window_event(move |event| match event {
         WindowEvent::Focused(false) => {
-            if !TRAY_PINNED.load(std::sync::atomic::Ordering::Relaxed) {
-                let _ = window_to_hide.hide();
-            }
+            // Windows: tao's drag-region implementation fakes an HTCAPTION
+            // click, which fires a spurious Focused(false) immediately
+            // followed by Focused(true) on every mousedown (tauri#10767,
+            // unfixed upstream). Hiding here would make the popup vanish as
+            // soon as the user tries to drag it. Recheck the live focus state
+            // after a short delay — the fake blur has recovered by then,
+            // while a real click-away stays unfocused and still hides.
+            let window = window_to_hide.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(80));
+                if TRAY_PINNED.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                // On query failure, err on the side of staying visible.
+                if window.is_focused().unwrap_or(true) {
+                    return;
+                }
+                let _ = window.hide();
+            });
         }
         WindowEvent::Moved(position) => {
             if let Ok(mut stored) = TRAY_POSITION.lock() {
