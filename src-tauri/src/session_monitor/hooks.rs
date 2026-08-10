@@ -561,6 +561,31 @@ fn ensure_windows_hook_runner() -> Result<PathBuf, String> {
     Ok(runner)
 }
 
+/// Windows hook command string.
+///
+/// Codex executes hook commands through the *session shell* — codex-rs
+/// `core/src/session/mod.rs::build_hooks_for_config` derives the shell from
+/// the session environment (PowerShell by default on Windows) and runs
+/// `powershell.exe -NoProfile -Command "<command>"`. A bare quoted path like
+/// `"C:\…\agent-hub-hook.cmd" --agent-hub-codex-hook` is a PowerShell *parse
+/// error* ("Unexpected token '--agent-hub-codex-hook'") because invoking a
+/// quoted string needs the `&` call operator; the hook exits with code 1
+/// before our binary ever runs. Prefixing `cmd /c` turns the string into a
+/// native command invocation, which parses in PowerShell and still resolves
+/// under a cmd session shell (cmd's /c quote rules tolerate the nesting).
+/// The cmd hop is also what keeps piped stdin attached to our GUI-subsystem
+/// binary. Other agents spawn hook commands through cmd (or direct
+/// CreateProcess of the .cmd shim) and are verified with the bare quoted
+/// form, so only Codex gets the prefix.
+#[cfg(any(target_os = "windows", test))]
+fn windows_hook_command(arg: &str, runner_path: &str) -> String {
+    if arg == CODEX_HOOK_ARG {
+        format!("cmd /c \"{runner_path}\" {arg}")
+    } else {
+        format!("\"{runner_path}\" {arg}")
+    }
+}
+
 fn expected_command(arg: &str) -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
@@ -568,7 +593,7 @@ fn expected_command(arg: &str) -> Result<String, String> {
         // shim path for spaces under %USERPROFILE%; arg has no spaces.
         let runner = ensure_windows_hook_runner()?;
         let runner_path = runner.to_string_lossy().replace('"', "");
-        return Ok(format!("\"{runner_path}\" {arg}"));
+        return Ok(windows_hook_command(arg, &runner_path));
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -2483,5 +2508,22 @@ enabled = false
         );
         assert_eq!(managed_handler_position(&root, STOP), Some((0, 0)));
         assert_eq!(managed_handler_position(&root, "SessionStart"), None);
+    }
+
+    #[test]
+    fn windows_hook_command_routes_codex_through_cmd() {
+        let runner = r"C:\Users\u\.agent-hub\hook-runner\agent-hub-hook.cmd";
+        // Codex runs hook commands via the session shell (PowerShell on
+        // Windows), where a bare quoted path is a parse error exiting 1 —
+        // the command must be a native invocation: `cmd /c "<shim>" <arg>`.
+        assert_eq!(
+            windows_hook_command(CODEX_HOOK_ARG, runner),
+            format!("cmd /c \"{runner}\" {CODEX_HOOK_ARG}")
+        );
+        // Other agents are verified with the bare quoted shim form.
+        assert_eq!(
+            windows_hook_command(GROK_HOOK_ARG, runner),
+            format!("\"{runner}\" {GROK_HOOK_ARG}")
+        );
     }
 }
