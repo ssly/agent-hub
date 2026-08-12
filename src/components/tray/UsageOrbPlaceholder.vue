@@ -30,20 +30,22 @@ withDefaults(defineProps<{
         <circle class="ph-ring" cx="90" cy="90" r="80" />
         <!-- Soft dashed fill hint -->
         <circle class="ph-dash" cx="90" cy="90" r="72" />
-        <!-- Soft badge disc anchoring the center icon -->
-        <circle class="ph-badge" cx="90" cy="90" r="40" />
+        <!-- Soft badge disc anchoring the center icon (empty state only — the
+             error state floats a bare, slightly larger "!"). -->
+        <circle v-if="kind !== 'error'" class="ph-badge" cx="90" cy="90" r="40" />
       </svg>
       <div class="usage-orb-ph__center">
-        <CircleAlert v-if="kind === 'error'" :size="mini ? 20 : 22" class="usage-orb-ph__icon" />
+        <CircleAlert v-if="kind === 'error'" :size="mini ? 26 : 28" class="usage-orb-ph__icon" />
         <Gauge v-else :size="mini ? 22 : 24" class="usage-orb-ph__icon" />
       </div>
     </div>
 
+    <!-- Mini mode shows no message text at all: the orb alone carries the
+         state, and the strip below already lists what happened. -->
     <div v-if="!mini" class="usage-orb-ph__side">
       <p class="usage-orb-ph__title">{{ title }}</p>
       <p class="usage-orb-ph__message">{{ message }}</p>
     </div>
-    <p v-else class="usage-orb-ph__mini-msg">{{ message }}</p>
   </div>
 </template>
 
@@ -92,9 +94,6 @@ withDefaults(defineProps<{
 .ph-badge {
   fill: var(--tray-inset, var(--tray-sunken));
 }
-.is-error .ph-badge {
-  fill: color-mix(in srgb, var(--tray-danger, #e05) 14%, transparent);
-}
 
 .is-error .ph-ring {
   stroke: color-mix(in srgb, var(--tray-danger, #e05) 30%, transparent);
@@ -142,13 +141,5 @@ withDefaults(defineProps<{
   color: var(--tray-ink-3);
   font-size: 12px;
   line-height: 1.45;
-}
-.usage-orb-ph__mini-msg {
-  margin: 0;
-  max-width: 12em;
-  color: var(--tray-ink-3);
-  font-size: 11px;
-  line-height: 1.35;
-  text-align: center;
 }
 </style>

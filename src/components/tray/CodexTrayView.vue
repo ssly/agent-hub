@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { Activity, BarChart3, Blend, Maximize2, Minimize2, Pin, PinOff, RefreshCw, Timer } from 'lucide-vue-next'
+import { Activity, BarChart3, Blend, Maximize2, Minimize2, RefreshCw, Timer, X } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { useToast } from '@/composables/useToast'
 import AppToast from '@/components/layout/AppToast.vue'
@@ -17,13 +17,18 @@ import {
   getKimiSessionMonitorSnapshot,
   getKimiUsage,
   getKiroSessionMonitorSnapshot,
+  getQwenSessionMonitorSnapshot,
   getUsageProviderAvailability,
   getUsageMonitorSettings,
   getZCodeSessionMonitorSnapshot,
+  listAvailableMonitorAgents,
   resizeUsageTray,
+  resizeUsageTrayDock,
+  closeUsageTray,
   setUsageRefreshMinutes,
   setUsageSelectedAgent,
-  setUsageTrayPinned,
+  setUsageTrayHovered,
+  setUsageTrayOverlay,
 } from '@/lib/api'
 import type {
   ClaudeUsage,
@@ -41,6 +46,7 @@ import SessionClientIcon from '@/components/sessions/SessionClientIcon.vue'
 import UsageOrb, { type OrbTone, type OrbWindow } from './UsageOrb.vue'
 import UsageOrbPlaceholder from './UsageOrbPlaceholder.vue'
 import TrayWaveLoader from './TrayWaveLoader.vue'
+import { useTrayDock } from './useTrayDock'
 
 const { t, locale } = useI18n()
 const { showToast } = useToast()
@@ -79,9 +85,6 @@ const queriedProviders = ref<Record<UsageProvider, boolean>>({
 })
 const unlisteners: UnlistenFn[] = []
 const initialLoading = computed(() => compactLoading.value)
-// Pin: the popup hides on blur by default; pinning keeps it visible until the
-// user unpins and clicks elsewhere. Flag lives in backend memory only.
-const pinned = ref(false)
 // Compact tray layout: ring-only usage, short labels, no opacity control.
 const MINI_STORAGE_KEY = 'ah-tray-mini'
 const miniMode = ref(localStorage.getItem(MINI_STORAGE_KEY) === '1')
@@ -91,6 +94,10 @@ function setMiniMode(next: boolean) {
   localStorage.setItem(MINI_STORAGE_KEY, next ? '1' : '0')
   opacityOpen.value = false
 }
+// The mini toggle is hidden from the UI (the code path stays intact for a
+// future re-enable). Never leave a stored mini=1 behind with no way out.
+const SHOW_MINI_TOGGLE = false
+if (!SHOW_MINI_TOGGLE && miniMode.value) setMiniMode(false)
 let refreshSequence = 0
 let resizeSequence = 0
 
@@ -98,7 +105,7 @@ let resizeSequence = 0
 // Same data the Monitor tab shows (backend snapshots + change events), but
 // reduced to one line per session: status dot + agent + user question.
 // Same order as MONITOR_AGENTS / platform registry (monitor subset).
-const MONITOR_AGENTS_LIST: MonitorAgent[] = ['codex', 'claude', 'cursor', 'antigravity', 'grok', 'kimi', 'zcode', 'kiro']
+const MONITOR_AGENTS_LIST: MonitorAgent[] = ['codex', 'claude', 'cursor', 'antigravity', 'grok', 'kimi', 'qwen', 'zcode', 'kiro']
 const MONITOR_CHANGED_EVENTS: Record<MonitorAgent, string> = {
   codex: 'session-monitor:codex-changed',
   claude: 'session-monitor:claude-changed',
@@ -106,6 +113,7 @@ const MONITOR_CHANGED_EVENTS: Record<MonitorAgent, string> = {
   antigravity: 'session-monitor:antigravity-changed',
   grok: 'session-monitor:grok-changed',
   kimi: 'session-monitor:kimi-changed',
+  qwen: 'session-monitor:qwen-changed',
   zcode: 'session-monitor:zcode-changed',
   kiro: 'session-monitor:kiro-changed',
 }
@@ -116,6 +124,7 @@ const MONITOR_SNAPSHOT_API: Record<MonitorAgent, () => Promise<MonitorSnapshot>>
   antigravity: getAntigravitySessionMonitorSnapshot,
   grok: getGrokSessionMonitorSnapshot,
   kimi: getKimiSessionMonitorSnapshot,
+  qwen: getQwenSessionMonitorSnapshot,
   zcode: getZCodeSessionMonitorSnapshot,
   kiro: getKiroSessionMonitorSnapshot,
 }
@@ -126,9 +135,28 @@ const monitorSnapshots = ref<Record<MonitorAgent, MonitorSnapshot>>({
   antigravity: { revision: 0, sessions: [] },
   grok: { revision: 0, sessions: [] },
   kimi: { revision: 0, sessions: [] },
+  qwen: { revision: 0, sessions: [] },
   zcode: { revision: 0, sessions: [] },
   kiro: { revision: 0, sessions: [] },
 })
+
+// Agents whose platform presence directory exists (backend probe). null =
+// not loaded yet / probe failed → show every agent, matching the Monitor tab.
+const availableMonitorAgents = ref<MonitorAgent[] | null>(null)
+const visibleMonitorAgents = computed<MonitorAgent[]>(() =>
+  availableMonitorAgents.value === null
+    ? MONITOR_AGENTS_LIST
+    : MONITOR_AGENTS_LIST.filter(agent => availableMonitorAgents.value!.includes(agent)),
+)
+
+async function loadMonitorAvailability() {
+  try {
+    const ids = await listAvailableMonitorAgents()
+    availableMonitorAgents.value = MONITOR_AGENTS_LIST.filter(agent => ids.includes(agent))
+  } catch {
+    // Degrade to the full list — availability must never blank the strip.
+  }
+}
 
 // Merged like the Monitor tab's "all" view: running first, newest activity
 // first within each group, capped so the strip never dominates the panel.
@@ -137,7 +165,7 @@ const MONITOR_STRIP_LIMIT = 6
 const MONITOR_TIP_SPLIT = 3
 
 const monitorRows = computed<AgentSessionState[]>(() =>
-  MONITOR_AGENTS_LIST
+  visibleMonitorAgents.value
     .flatMap(agent => monitorSnapshots.value[agent].sessions.map(session => ({ ...session, agent })))
     .sort((a, b) => {
       if (a.status !== b.status) return a.status === 'running' ? -1 : 1
@@ -145,6 +173,65 @@ const monitorRows = computed<AgentSessionState[]>(() =>
     })
     .slice(0, MONITOR_STRIP_LIMIT),
 )
+
+// --- Edge dock (吸附) -------------------------------------------------------
+// macOS-Dock style: drag the panel to a monitor's outer left/right edge and
+// the backend (tray.rs) tweens it into a thin strip with a tiny traffic
+// light; hovering the strip slides the panel back out, moving the cursor
+// away slides it in again; dragging the expanded panel away from the edge
+// leaves dock mode. The strip never auto-hides on blur and dock state is
+// backend-memory-only (same "forgotten on exit" semantics as the position).
+const { docked, dockExpanded, dockAnimating, expand: expandDock, collapse: collapseDock, init: initDock, dispose: disposeDock } =
+  useTrayDock({
+    onUndock: () => {
+      void applyContentHeight()
+    },
+  })
+
+// Collapse on hover-leave with a small grace delay (cancelled on re-enter),
+// and never while a popover slider is open.
+let collapseTimer: ReturnType<typeof setTimeout> | undefined
+
+// Cursor left the window: tell the backend (edge snap fires only after the
+// cursor has stayed out for 500ms — never mid-drag, never while hovering);
+// a docked panel additionally slides back into the strip (grace delay,
+// cancelled on re-enter).
+function handleShellMouseLeave() {
+  void setUsageTrayHovered(false).catch(() => {})
+  if (docked.value) {
+    scheduleDockCollapse()
+  }
+}
+
+function handleShellMouseEnter() {
+  void setUsageTrayHovered(true).catch(() => {})
+  cancelDockCollapse()
+}
+
+function scheduleDockCollapse() {
+  if (!docked.value || !dockExpanded.value) return
+  if (opacityOpen.value || intervalOpen.value) return
+  if (collapseTimer) clearTimeout(collapseTimer)
+  collapseTimer = setTimeout(() => collapseDock(), 350)
+}
+
+function cancelDockCollapse() {
+  if (collapseTimer) {
+    clearTimeout(collapseTimer)
+    collapseTimer = undefined
+  }
+}
+
+/** Strip content: usage bar on top (smallest quota window of the visible
+ *  provider) + one dot per monitor session below — each half follows the
+ *  panel's own hide toggles (usageHidden / monitorHidden). The native strip
+ *  height follows whatever is actually shown; the watcher lives next to
+ *  stripUsage (see below) because watch getters evaluate eagerly and must
+ *  not touch TDZ bindings. */
+const STRIP_DOT_PX = 5
+const STRIP_GAP_PX = 4
+const STRIP_PAD_PX = 8
+const STRIP_BAR_HEIGHT = 48
 
 /** Top 3 rows: tip below; bottom 3: tip above — keeps long prompts inside the panel. */
 function monitorTipPlacement(index: number): 'top' | 'bottom' {
@@ -173,10 +260,11 @@ function monitorIsChatgpt(row: AgentSessionState) {
 }
 
 async function loadMonitorSnapshots() {
+  const agents = visibleMonitorAgents.value
   const results = await Promise.allSettled(
-    MONITOR_AGENTS_LIST.map(agent => MONITOR_SNAPSHOT_API[agent]()),
+    agents.map(agent => MONITOR_SNAPSHOT_API[agent]()),
   )
-  MONITOR_AGENTS_LIST.forEach((agent, index) => {
+  agents.forEach((agent, index) => {
     const result = results[index]
     if (result.status === 'fulfilled' && result.value) {
       monitorSnapshots.value[agent] = result.value
@@ -419,6 +507,12 @@ async function persistInterval() {
   intervalDraft.value = null
 }
 
+// While a popover slider is open the cursor may legitimately leave the panel
+// bounds — tell the backend's dock hover watcher to suspend auto-collapse.
+watch([opacityOpen, intervalOpen], ([opacity, interval]) => {
+  void setUsageTrayOverlay(opacity || interval).catch(() => {})
+})
+
 // Providers the panel can actually query right now — only these appear as tabs.
 const queryableProviders = computed<UsageProvider[]>(() =>
   PROVIDER_ORDER.filter(provider =>
@@ -443,27 +537,25 @@ watch(visibleProviders, list => {
   }
 })
 
-// While pinned, re-query the quota on the shared refresh interval (force=true
-// bypasses the shared backend cache). Monitor rows stay event-driven
-// real-time. A paused agent (listening off) is never auto-queried.
+// Re-query the quota on the shared refresh interval whenever the window is
+// visible (floating open, or docked — the strip shows the usage bar). A
+// paused agent (listening off) is never auto-queried. Monitor rows stay
+// event-driven real-time.
 let quotaTimer: number | undefined
-watch([pinned, refreshMinutes], ([isPinned, minutes]) => {
+watch(refreshMinutes, minutes => {
   window.clearInterval(quotaTimer)
-  quotaTimer = undefined
-  if (isPinned) {
-    quotaTimer = window.setInterval(() => {
-      if (!isListened(selectedProvider.value)) return
-      void refresh(false, false, true)
-    }, minutes * 60_000)
-  }
-})
+  quotaTimer = window.setInterval(() => {
+    if (document.visibilityState !== 'visible') return
+    if (!isListened(selectedProvider.value)) return
+    void refresh(false, false, true)
+  }, minutes * 60_000)
+}, { immediate: true })
 
-async function togglePinned() {
-  pinned.value = !pinned.value
+async function closeTray() {
   try {
-    await setUsageTrayPinned(pinned.value)
+    await closeUsageTray()
   } catch {
-    // Browser preview has no native window to pin.
+    // Browser preview has no native window to close.
   }
 }
 
@@ -619,6 +711,50 @@ const grokWindows = computed<TrayUsageWindow[]>(() => {
   }]
 })
 
+/** Docked strip usage bars: up to two smallest quota windows of the visible
+ *  provider (5h first, then 7d), drawn as slim vertical bars side by side —
+ *  first bar tank-green like the orb's water, second accent-blue like the
+ *  ring. Empty when the provider has no usable data. */
+const stripUsageBars = computed<{ percent: number }[]>(() => {
+  const windows = selectedProvider.value === 'codex'
+    ? usageWindows.value
+    : selectedProvider.value === 'kimi-code'
+      ? kimiWindows.value
+      : selectedProvider.value === 'claude-code'
+        ? claudeWindows.value
+        : grokWindows.value
+  return windows.slice(0, 2).map(entry => ({
+    percent: Math.min(100, Math.max(0, entry.window.used_percent)),
+  }))
+})
+
+// Strip height follows its content (bar segment + dots). Registered here,
+// after every referenced binding exists: watch getters run once eagerly.
+watch(
+  [
+    () => monitorRows.value.length,
+    () => stripUsageBars.value.length > 0,
+    () => usageHidden.value,
+    () => monitorHidden.value,
+    docked,
+    dockExpanded,
+  ],
+  ([count, hasUsage, usageOff, monitorOff]) => {
+    if (!docked.value || dockExpanded.value) return
+    const showBar = !usageOff && hasUsage
+    const dots = monitorOff ? 0 : count
+    const items = (showBar ? 1 : 0) + dots
+    const height = items === 0
+      ? 24
+      : STRIP_PAD_PX * 2
+        + (showBar ? STRIP_BAR_HEIGHT : 0)
+        + dots * STRIP_DOT_PX
+        + STRIP_GAP_PX * (items - 1)
+    void resizeUsageTrayDock(height).catch(() => {})
+  },
+  { flush: 'post' },
+)
+
 function clampHeight(height: number) {
   return Math.min(620, Math.max(120, height))
 }
@@ -634,6 +770,9 @@ const panelRef = ref<HTMLElement | null>(null)
 // (e.g. last-query time) can never be clipped by the sections above.
 // Mini mode also shrinks the native window width to roughly one orb.
 async function applyContentHeight() {
+  // The collapsed dock strip owns its window size; only the floating panel
+  // and the slid-out dock panel re-measure.
+  if (docked.value && !dockExpanded.value) return
   const sequence = ++resizeSequence
   await nextTick()
   await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
@@ -855,6 +994,7 @@ onMounted(async () => {
   // tray window waits for a tray click so startup never consumes a query.
   if (import.meta.env.MODE === 'web') {
     applySharedSettings(await getUsageMonitorSettings())
+    await loadMonitorAvailability()
     await Promise.all([refresh(true, true), loadMonitorSnapshots()])
     return
   }
@@ -864,6 +1004,12 @@ onMounted(async () => {
     // Theme toggle in the main window repaints this popup live.
     listen<string>('theme-changed', event => {
       document.documentElement.setAttribute('data-theme', event.payload)
+    }),
+    // Language toggle in the main window: this popup has its own vue-i18n
+    // instance and must switch too (backend broadcasts locale-changed).
+    listen<string>('locale-changed', event => {
+      locale.value = event.payload
+      localStorage.setItem('ah-locale', event.payload)
     }),
     // Shared usage-monitor settings (interval / selected agent / listening)
     // changed in the main window.
@@ -879,22 +1025,61 @@ onMounted(async () => {
   ])
   unlisteners.push(...listeners)
   monitorSettings.value = await getUsageMonitorSettings()
+  await loadMonitorAvailability()
   void loadMonitorSnapshots()
+  void initDock()
 })
 
 onBeforeUnmount(() => {
   unlisteners.forEach(unlisten => unlisten())
   window.clearInterval(quotaTimer)
+  disposeDock()
 })
 </script>
 
 <template>
   <main
     class="tray-shell"
+    :class="{ 'tray-shell--dock-anim': dockAnimating }"
     data-tauri-drag-region="deep"
+    @mouseenter="handleShellMouseEnter"
+    @mouseleave="handleShellMouseLeave"
     @click="opacityOpen = false; intervalOpen = false"
   >
+    <!-- Docked edge strip: one status dot per monitored session (same data
+         as the monitor strip below — green working, gray ended). Height
+         follows the dot count. Hovering slides the panel out. -->
     <section
+      v-if="docked && !dockExpanded"
+      class="tray-dock-strip"
+      data-tauri-drag-region="deep"
+      :style="{ opacity: panelOpacity / 100 }"
+      @mouseenter="expandDock"
+    >
+      <span
+        v-if="!usageHidden && stripUsageBars.length"
+        class="tray-dock-bars"
+      >
+        <span
+          v-for="(bar, index) in stripUsageBars"
+          :key="index"
+          class="tray-dock-bar"
+          :class="index === 0 ? 'tray-dock-bar--tank' : 'tray-dock-bar--ring'"
+        >
+          <span class="tray-dock-bar__fill" :style="{ height: `${bar.percent}%` }" />
+        </span>
+      </span>
+      <template v-if="!monitorHidden">
+        <span
+          v-for="row in monitorRows"
+          :key="monitorRowKey(row)"
+          class="tray-dock-dot"
+          :class="{ 'tray-dock-dot--running': row.status === 'running' }"
+        />
+      </template>
+    </section>
+    <section
+      v-else
       ref="panelRef"
       class="tray-panel"
       :class="{
@@ -976,6 +1161,7 @@ onBeforeUnmount(() => {
             <Activity :size="13" />
           </button>
           <button
+            v-if="SHOW_MINI_TOGGLE"
             v-tooltip:top="miniMode ? t('tray.expand') : t('tray.mini')"
             class="tray-control-btn"
             @click="setMiniMode(!miniMode)"
@@ -996,15 +1182,13 @@ onBeforeUnmount(() => {
         >
           <RefreshCw :size="13" :class="{ 'is-spinning': loading }" />
         </button>
-        <!-- Pin stays visible in mini even when other title icons are hidden. -->
+        <!-- Close replaces the old pin: docking is how the panel persists. -->
         <button
-          v-tooltip:top="pinned ? t('tray.unpin') : t('tray.pin')"
+          v-tooltip:top="t('action.close')"
           class="tray-pin"
-          :class="{ 'is-pinned': pinned }"
-          @click="togglePinned"
+          @click="closeTray"
         >
-          <Pin v-if="pinned" :size="13" />
-          <PinOff v-else :size="13" />
+          <X :size="13" />
         </button>
       </div>
 
@@ -1291,15 +1475,76 @@ onBeforeUnmount(() => {
   flex-direction: column;
   padding: 12px 14px 8px;
   overflow: hidden;
-  /* Standard macOS window corner radius (~10px), not an oversized card. */
-  border-radius: 10px;
+  /* Square corners on every platform, matching the Windows look. */
+  border-radius: 0;
   background: var(--tray-panel-bg);
   box-shadow: var(--tray-panel-shadow);
 }
-/* Windows draws square corners for transparent undecorated windows. */
-:global(html[data-platform="windows"] .tray-panel) {
-  border-radius: 0;
+
+/* Dock size tweens: the window card keeps its background and shrinks/grows
+   as before; only the inner content hides for the duration so nothing looks
+   squeezed (notably the traffic-light dots). The new state's content appears
+   when the tween lands (dock-changed event). */
+.tray-shell--dock-anim .tray-panel > *,
+.tray-shell--dock-anim .tray-dock-strip > * {
+  visibility: hidden;
 }
+
+/* Docked edge strip: thin bar at the screen edge showing one status dot per
+   monitored session (green working, gray ended); height follows dot count.
+   Fills the whole window (fixed, inset 0) so the shell inset doesn't
+   squeeze the dots. */
+.tray-dock-strip {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  cursor: pointer;
+  border-radius: 0;
+  background: var(--tray-panel-bg);
+  box-shadow: var(--tray-panel-shadow);
+}
+.tray-dock-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--tray-ink-4);
+}
+.tray-dock-dot--running {
+  background: var(--tray-success);
+  box-shadow: 0 0 4px var(--tray-success);
+}
+/* Usage half of the strip: up to two slim vertical bars side by side
+   (smallest window tank-green, next window accent-blue — mirroring the
+   orb's water/ring colors). Fills rise from the bottom. */
+.tray-dock-bars {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 3px;
+  height: 48px;
+}
+.tray-dock-bar {
+  position: relative;
+  flex: 0 0 auto;
+  width: 3px;
+  height: 100%;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--tray-ink) 12%, transparent);
+  overflow: hidden;
+}
+.tray-dock-bar__fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border-radius: 2px;
+  transition: height 300ms var(--ease-soft, ease);
+}
+.tray-dock-bar--tank .tray-dock-bar__fill { background: var(--tray-success); }
+.tray-dock-bar--ring .tray-dock-bar__fill { background: var(--tray-accent); }
 
 /* No title bar: the content gets a slim top band instead, which hosts the
    pin button and doubles as a comfortable drag area. */
@@ -1468,7 +1713,7 @@ onBeforeUnmount(() => {
   cursor: grab;
 }
 
-/* Pin: unpinned = accent (invite to pin); pinned = quiet gray (persistent). */
+/* Close button (top-right ✕): quiet gray, accent on hover. */
 .tray-pin {
   position: absolute;
   top: 7px;
@@ -1482,14 +1727,12 @@ onBeforeUnmount(() => {
   padding: 0;
   border: 0;
   border-radius: 4px;
-  color: var(--tray-accent);
+  color: var(--tray-ink-4);
   background: transparent;
   cursor: pointer;
   transition: color .15s ease, background-color .15s ease;
 }
-.tray-pin:hover { color: var(--tray-accent); background: var(--tray-accent-soft); }
-.tray-pin.is-pinned { color: var(--tray-ink-4); background: transparent; }
-.tray-pin.is-pinned:hover { color: var(--tray-ink-2); background: var(--tray-inset); }
+.tray-pin:hover { color: var(--tray-ink-2); background: var(--tray-inset); }
 
 /* Refresh sits immediately left of the pin; the icon spins while a query is
    in flight. Force refresh also feeds the shared backend cache the Accounts

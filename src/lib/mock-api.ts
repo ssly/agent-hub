@@ -50,6 +50,12 @@ const PLATFORMS = [
     skill_count: 6,
   },
   {
+    id: 'qwen',
+    display_name: 'Qwen Code',
+    skill_dir: '~/.qwen/skills',
+    skill_count: 3,
+  },
+  {
     id: 'zcode',
     display_name: 'ZCode',
     skill_dir: '~/.zcode/skills',
@@ -92,6 +98,7 @@ const MCP_PLATFORMS = [
   { id: 'antigravity', display_name: 'Antigravity', server_count: 2, config_path: '~/.gemini/config/mcp_config.json', format: 'json' },
   { id: 'grok-build', display_name: 'Grok Build', server_count: 1, config_path: '~/.grok/config.toml', format: 'toml' },
   { id: 'kimi-code', display_name: 'Kimi Code', server_count: 2, config_path: '~/.kimi-code/mcp.json', format: 'json' },
+  { id: 'qwen', display_name: 'Qwen Code', server_count: 1, config_path: '~/.qwen/settings.json', format: 'json' },
   { id: 'zcode', display_name: 'ZCode', server_count: 1, config_path: '~/.zcode/cli/config.json', format: 'json' },
 ]
 
@@ -112,6 +119,12 @@ const ZCODE_PLUGINS = [
   { id: 'frontend-design@zcode-plugins-official', name: 'frontend-design', marketplace: 'zcode-plugins-official', version: '1.2.0', description: 'Frontend design skill for UI/UX implementation.', author: 'z.ai', installed: false, skill_count: 2, command_count: 0, hook_count: 0, install_path: '/Users/demo/.zcode/cli/plugins/cache/zcode-plugins-official/frontend-design/1.2.0' },
 ]
 
+// Qwen Code extensions serialize camelCase (see qwen_plugin.rs).
+const QWEN_PLUGINS = [
+  { id: 'qwen-web-search', name: 'qwen-web-search', version: '0.3.1', description: 'Web search tools for Qwen Code.', mcpServerCount: 1, skillCount: 0, commandCount: 2, agentCount: 0, installPath: '/Users/demo/.qwen/extensions/qwen-web-search' },
+  { id: 'code-helper', name: 'code-helper', version: '1.0.0', description: 'Extra skills, commands and agents for everyday coding.', mcpServerCount: 0, skillCount: 3, commandCount: 1, agentCount: 2, installPath: '/Users/demo/.qwen/extensions/code-helper' },
+]
+
 function makeMcpServers(platformId: string) {
   const servers = [
     { name: 'github', summary: 'GitHub API integration' },
@@ -129,6 +142,7 @@ const SESSION_PLATFORMS = [
   { id: 'antigravity', display_name: 'Antigravity', session_count: 6 },
   { id: 'grok', display_name: 'Grok Build', session_count: 2 },
   { id: 'kimi', display_name: 'Kimi Code', session_count: 4 },
+  { id: 'qwen', display_name: 'Qwen Code', session_count: 2 },
   { id: 'zcode', display_name: 'ZCode', session_count: 3 },
   { id: 'kiro', display_name: 'Kiro', session_count: 3 },
 ]
@@ -256,6 +270,12 @@ export async function setClaudePluginEnabled(pluginId: string, scope: string, en
 export async function getZCodePlugins() {
   await delay()
   return ZCODE_PLUGINS.map(plugin => ({ ...plugin }))
+}
+
+// Qwen Code extensions (read-only)
+export async function getQwenPlugins() {
+  await delay()
+  return QWEN_PLUGINS.map(plugin => ({ ...plugin }))
 }
 
 // Sessions
@@ -497,7 +517,12 @@ export async function getUsageProviderAvailability() {
   return { codex: true, grok_build: true, kimi_code: true, claude_code: true }
 }
 export async function resizeUsageTray() {}
-export async function setUsageTrayPinned() {}
+export async function closeUsageTray() {}
+export async function expandUsageTray() {}
+export async function collapseUsageTray() {}
+export async function resizeUsageTrayDock() {}
+export async function setUsageTrayHovered() {}
+export async function setUsageTrayOverlay() {}
 export async function openUsageTray() {}
 
 // Shared usage-monitor settings mock (backend in-memory in the real app).
@@ -589,12 +614,45 @@ export async function getKimiUsage(force = false) {
   return structuredClone(payload)
 }
 
+// DeepSeek: key is "stored" in memory for web-debug; balance payload mirrors
+// the official /user/balance shape.
+let mockDeepseekKey: string | null = null
+let mockDeepseekUsage: { at: number; data: any } | null = null
+function maskMockKey(key: string) {
+  return key.length > 10 ? `${key.slice(0, 6)}…${key.slice(-4)}` : '****'
+}
+export async function getDeepseekSettings() {
+  return { has_key: !!mockDeepseekKey, masked_key: mockDeepseekKey ? maskMockKey(mockDeepseekKey) : null }
+}
+export async function saveDeepseekApiKey(apiKey: string) {
+  mockDeepseekKey = apiKey.trim() || null
+  mockDeepseekUsage = null
+  return getDeepseekSettings()
+}
+export async function getDeepseekUsage(force = false) {
+  if (!mockDeepseekKey) throw new Error('未配置 DeepSeek API Key，请先在上方设置中保存 Key。')
+  if (!force && mockCacheFresh(mockDeepseekUsage)) {
+    return structuredClone(mockDeepseekUsage!.data)
+  }
+  await delay()
+  const payload = {
+    is_available: true,
+    balances: [
+      { currency: 'CNY', total_balance: '12.50', granted_balance: '2.50', topped_up_balance: '10.00' },
+    ],
+    fetched_at: Math.floor(Date.now() / 1000),
+  }
+  mockDeepseekUsage = { at: Date.now(), data: payload }
+  return structuredClone(payload)
+}
+
 // Session monitor
 let codexHookInstalled = false
 let claudeHookInstalled = false
 let cursorHookInstalled = false
 let grokHookInstalled = false
 let kimiHookInstalled = false
+let qwenHookInstalled = false
 let zcodeHookInstalled = false
 let antigravityHookInstalled = false
 
@@ -670,6 +728,19 @@ let kimiMonitorSessions = [
     userPrompt: '给设置页加上导出全部笔记的入口。',
     assistantReply: '已在设置页新增导出按钮，支持 Markdown 打包下载。',
     updatedAt: Date.now() - 900_000,
+  },
+]
+
+let qwenMonitorSessions = [
+  {
+    sessionId: 'qwen-3c9a',
+    turnId: 'turn-1',
+    source: 'terminal',
+    status: 'running',
+    cwd: '/Users/demo/projects/qwen-app',
+    userPrompt: '把侧边栏的平台顺序调整一下，并补上图标。',
+    assistantReply: null,
+    updatedAt: Date.now() - 40_000,
   },
 ]
 
@@ -757,9 +828,9 @@ export async function deleteCodexSessionMonitorSession(sessionId: string) {
   )
 }
 
-const CODEX_HOOK_COMMAND = "'/Applications/AGENT HUB.app/Contents/MacOS/agent-hub' --agent-hub-codex-hook"
-const CLAUDE_HOOK_COMMAND = "'/Applications/AGENT HUB.app/Contents/MacOS/agent-hub' --agent-hub-claude-hook"
-const CURSOR_HOOK_COMMAND = "'/Applications/AGENT HUB.app/Contents/MacOS/agent-hub' --agent-hub-cursor-hook"
+const CODEX_HOOK_COMMAND = "'/Applications/Agent Hub.app/Contents/MacOS/agent-hub' --agent-hub-codex-hook"
+const CLAUDE_HOOK_COMMAND = "'/Applications/Agent Hub.app/Contents/MacOS/agent-hub' --agent-hub-claude-hook"
+const CURSOR_HOOK_COMMAND = "'/Applications/Agent Hub.app/Contents/MacOS/agent-hub' --agent-hub-cursor-hook"
 
 export async function getCodexHookStatus() {
   await delay()
@@ -839,8 +910,8 @@ export async function applyCursorHookChange(action: 'install' | 'uninstall', _ex
   return getCursorHookStatus()
 }
 
-const GROK_HOOK_COMMAND = "'/Applications/AGENT HUB.app/Contents/MacOS/agent-hub' --agent-hub-grok-hook"
-const KIMI_HOOK_COMMAND = "'/Applications/AGENT HUB.app/Contents/MacOS/agent-hub' --agent-hub-kimi-hook"
+const GROK_HOOK_COMMAND = "'/Applications/Agent Hub.app/Contents/MacOS/agent-hub' --agent-hub-grok-hook"
+const KIMI_HOOK_COMMAND = "'/Applications/Agent Hub.app/Contents/MacOS/agent-hub' --agent-hub-kimi-hook"
 
 export async function getGrokSessionMonitorSnapshot() {
   await delay()
@@ -904,7 +975,40 @@ export async function applyKimiHookChange(action: 'install' | 'uninstall', _expe
   return getKimiHookStatus()
 }
 
-const ZCODE_HOOK_COMMAND = "'/Applications/AGENT HUB.app/Contents/MacOS/agent-hub' --agent-hub-zcode-hook"
+const QWEN_HOOK_COMMAND = "'/Applications/Agent Hub.app/Contents/MacOS/agent-hub' --agent-hub-qwen-hook"
+
+export async function getQwenSessionMonitorSnapshot() {
+  await delay()
+  return {
+    revision: 1,
+    sessions: qwenMonitorSessions,
+  }
+}
+
+export async function deleteQwenSessionMonitorSession(sessionId: string) {
+  await delay()
+  qwenMonitorSessions = qwenMonitorSessions.filter(
+    session => session.sessionId !== sessionId,
+  )
+}
+
+export async function getQwenHookStatus() {
+  await delay()
+  return makeHookStatus(qwenHookInstalled, '~/.qwen/settings.json', QWEN_HOOK_COMMAND)
+}
+
+export async function previewQwenHookChange(action: 'install' | 'uninstall') {
+  await delay()
+  return makeHookPreview(action, '~/.qwen/settings.json', QWEN_HOOK_COMMAND)
+}
+
+export async function applyQwenHookChange(action: 'install' | 'uninstall', _expectedBeforeHash: string) {
+  await delay(300)
+  qwenHookInstalled = action === 'install'
+  return getQwenHookStatus()
+}
+
+const ZCODE_HOOK_COMMAND = "'/Applications/Agent Hub.app/Contents/MacOS/agent-hub' --agent-hub-zcode-hook"
 
 export async function getZCodeSessionMonitorSnapshot() {
   await delay()
@@ -937,7 +1041,7 @@ export async function applyZCodeHookChange(action: 'install' | 'uninstall', _exp
   return getZCodeHookStatus()
 }
 
-const ANTIGRAVITY_HOOK_COMMAND = "'/Applications/AGENT HUB.app/Contents/MacOS/agent-hub' --agent-hub-antigravity-hook"
+const ANTIGRAVITY_HOOK_COMMAND = "'/Applications/Agent Hub.app/Contents/MacOS/agent-hub' --agent-hub-antigravity-hook"
 let antigravityMonitorSessions = [
   {
     sessionId: 'agy-mock-1',
@@ -986,7 +1090,7 @@ export async function applyAntigravityHookChange(action: 'install' | 'uninstall'
   return getAntigravityHookStatus()
 }
 
-const KIRO_HOOK_COMMAND = "'/Applications/AGENT HUB.app/Contents/MacOS/agent-hub' --agent-hub-kiro-hook"
+const KIRO_HOOK_COMMAND = "'/Applications/Agent Hub.app/Contents/MacOS/agent-hub' --agent-hub-kiro-hook"
 let kiroHookInstalled = false
 let kiroMonitorSessions = [
   {
@@ -1028,6 +1132,12 @@ export async function applyKiroHookChange(action: 'install' | 'uninstall', _expe
   await delay(300)
   kiroHookInstalled = action === 'install'
   return getKiroHookStatus()
+}
+
+// Browser preview shows every monitor agent (no real home directory to probe).
+export async function listAvailableMonitorAgents() {
+  await delay()
+  return ['codex', 'claude', 'cursor', 'antigravity', 'grok', 'kimi', 'qwen', 'zcode', 'kiro']
 }
 
 // App

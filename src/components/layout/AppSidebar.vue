@@ -6,7 +6,7 @@ import { useAppStore } from '@/stores/app'
 import { useSkillsStore } from '@/stores/skills'
 import { usePluginsStore } from '@/stores/plugins'
 import { useSessionsStore } from '@/stores/sessions'
-import { MONITOR_AGENTS, useSessionMonitorStore, type MonitorTab } from '@/stores/session-monitor'
+import { useSessionMonitorStore, type MonitorTab } from '@/stores/session-monitor'
 import { useSwitchStore } from '@/stores/switch'
 import { useToast } from '@/composables/useToast'
 import { openUsageTray, pickPluginDirectory } from '@/lib/api'
@@ -122,7 +122,7 @@ function getSidebarItems() {
   if (appStore.currentTab === 'sessions') return sessionsStore.platforms
   if (appStore.currentTab === 'monitor') return [
     { id: 'all', display_name: t('session_monitor.agent_all') },
-    ...MONITOR_AGENTS.map(agent => ({
+    ...sessionMonitorStore.visibleAgents.map(agent => ({
       id: agent,
       display_name: t(`session_monitor.agent_${agent}`),
     })),
@@ -132,6 +132,7 @@ function getSidebarItems() {
     { id: 'claude-code', display_name: 'Claude Code' },
     { id: 'grok-build', display_name: 'Grok Build' },
     { id: 'kimi-code', display_name: 'Kimi Code' },
+    { id: 'deepseek', display_name: 'DeepSeek' },
   ]
   return pluginsStore.platforms
 }

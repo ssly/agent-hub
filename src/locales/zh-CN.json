@@ -1,6 +1,6 @@
 {
   "ui": {
-    "title": "智能体中枢",
+    "title": "Agent Hub",
     "switch_language": "Switch to English",
     "toggle_theme": "切换明暗主题",
     "refresh": "刷新",
@@ -64,6 +64,16 @@
     "zcode_component_commands": "命令 {count}",
     "zcode_component_hooks": "钩子 {count}",
     "zcode_readonly_note": "「已安装」按插件数据目录推测；插件启停请在 ZCode 设置 → 插件中操作。",
+    "qwen_plugins": "Qwen Code 扩展",
+    "qwen_plugins_hint": "已安装 Qwen Code 扩展的只读列表",
+    "qwen_loading": "正在读取 Qwen Code 扩展…",
+    "qwen_empty": "未发现 Qwen Code 扩展。",
+    "qwen_load_failed": "扩展读取失败：{error}",
+    "qwen_component_mcp": "MCP 服务器 {count}",
+    "qwen_component_skills": "技能 {count}",
+    "qwen_component_commands": "命令 {count}",
+    "qwen_component_agents": "Agent {count}",
+    "qwen_readonly_note": "扩展在此只读；启停与管理请使用 `qwen extensions` CLI。",
     "skills_hint": "为 Agent 提供可复用的工作流与指令",
     "mcp_hint": "为 Agent 连接工具、服务与数据源",
     "skills_path": "技能路径",
@@ -78,6 +88,7 @@
       "antigravity": "agy 与 Antigravity 2.0 共享 ~/.gemini/config；插件目录 ~/.gemini/config/plugins（暂只读）。",
       "grok-build": "同时读取 Shared 与 .claude/.cursor skills；独立插件体系 ~/.grok/plugins（暂只读）。",
       "kimi-code": "同时读取 Shared（~/.agents/skills）；独立插件体系 ~/.kimi-code/plugins/managed（仅用户级，暂只读）。",
+      "qwen": "同时读取 Shared（~/.agents/skills）；MCP 配置位于 ~/.qwen/settings.json；扩展（~/.qwen/extensions）见下方只读列表，启停请使用 `qwen extensions` CLI。",
       "zcode": "同时读取 Shared（~/.agents/skills）；MCP 配置位于 ~/.zcode/cli/config.json；插件市场（~/.zcode/cli/plugins）见下方只读列表，启停请在 ZCode 设置中操作。"
     },
     "no_agents": "未发现可管理插件的 Agent。"
@@ -175,13 +186,13 @@
     "open_folder_failed": "打开文件夹失败"
   },
   "action": {
-    "sync": "同步",
+    "sync": "复制",
+    "save": "保存",
     "diff": "对比",
     "refresh": "刷新",
     "back": "返回",
     "cancel": "取消",
     "confirm": "确认",
-    "overwrite": "使用源覆盖目标",
     "keep_target": "保留目标不变",
     "close": "关闭",
     "copy": "复制",
@@ -189,16 +200,20 @@
     "lang": "中文"
   },
   "sync": {
-    "title": "同步技能",
+    "title": "复制技能",
     "source": "源",
     "target": "目标",
     "select_target": "选择目标平台",
     "conflict_warning": "目标平台已存在该技能！",
-    "confirm_new": "将 {skill} 同步到 {platform}？",
-    "done": "同步完成。",
-    "failed": "同步失败：{error}",
+    "confirm_new": "将 {skill} 复制到 {platform}？",
+    "done": "复制完成。",
+    "failed": "复制失败：{error}",
     "has_skill": "已有",
-    "new": "新建"
+    "new": "新建",
+    "conflict_title": "目标平台已存在同名 Skill",
+    "conflict_message": "目标平台已存在同名 Skill「{name}」。直接用当前 Skill 覆盖它，还是不处理？",
+    "conflict_overwrite": "直接覆盖",
+    "conflict_skip": "不处理"
   },
   "diff": {
     "title": "差异对比",
@@ -264,7 +279,11 @@
     "type_skill": "技能",
     "type_mcp": "MCP 服务器",
     "restored": "已恢复。",
-    "restore_failed": "恢复失败：{error}"
+    "restore_failed": "恢复失败：{error}",
+    "restore_conflict_title": "原位置已有同名 Skill",
+    "restore_conflict_message": "原位置已存在同名 Skill「{name}」。用回收站中的版本覆盖它，还是不处理？",
+    "restore_conflict_overwrite": "用回收站覆盖",
+    "restore_conflict_skip": "不处理"
   },
   "update": {
     "badge": "发现新版本",
@@ -386,6 +405,22 @@
     "claude_usage_oauth_hint": "用量来自官方登录（OAuth 订阅）账号，与下方的自定义 API 账号相互独立。",
     "claude_usage_login_required": "未检测到 Claude Code 登录凭证，未发起查询。在 Claude Code 中运行 /login 后，点击刷新即可。",
     "oauth_badge": "官方登录",
+    "deepseek_key_title": "DeepSeek API Key",
+    "deepseek_key_note": "API Key 仅保存在本地，余额查询不消耗 Token。",
+    "deepseek_key_placeholder": "sk-...",
+    "deepseek_key_current": "当前 Key：{key}",
+    "deepseek_key_clear": "清除",
+    "deepseek_key_get": "获取 API Key",
+    "deepseek_key_saved_toast": "DeepSeek API Key 已保存。",
+    "deepseek_key_cleared_toast": "DeepSeek API Key 已清除。",
+    "deepseek_balance_title": "DeepSeek 余额",
+    "deepseek_usage_loading": "正在查询 DeepSeek 余额…",
+    "deepseek_no_key_hint": "保存 API Key 后点击刷新即可查询余额。",
+    "deepseek_total": "总余额",
+    "deepseek_granted": "赠金",
+    "deepseek_topped_up": "充值",
+    "deepseek_available": "余额充足",
+    "deepseek_unavailable": "余额不足",
     "listening_enable": "启用监听",
     "listening_disable": "停用监听",
     "listening_on": "监听中",
@@ -393,8 +428,6 @@
     "listening_off_hint": "监听已停用，启用后才会自动查询并展示用量。"
   },
   "tray": {
-    "pin": "置顶",
-    "unpin": "取消置顶",
     "refresh": "刷新用量",
     "open_usage": "监控面板",
     "opacity": "不透明度",
@@ -479,6 +512,7 @@
     "agent_antigravity": "Antigravity",
     "agent_grok": "Grok Build",
     "agent_kimi": "Kimi Code",
+    "agent_qwen": "Qwen Code",
     "agent_zcode": "ZCode",
     "agent_kiro": "Kiro",
     "agent_all": "全部",

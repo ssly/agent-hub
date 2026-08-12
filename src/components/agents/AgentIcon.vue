@@ -13,7 +13,9 @@ import antigravityMask from '@/assets/agent-icons/antigravity.png'
 import claudeCodeMask from '@/assets/agent-icons/claude-code.png'
 import codexMask from '@/assets/agent-icons/codex.png'
 import cursorMask from '@/assets/agent-icons/cursor.png'
+import deepseekMask from '@/assets/agent-icons/deepseek.png'
 import grokBuildMask from '@/assets/agent-icons/grok-build.png'
+import qwenMask from '@/assets/agent-icons/qwen.png'
 import zcodeMask from '@/assets/agent-icons/zcode.png'
 
 const props = withDefaults(defineProps<{
@@ -41,7 +43,9 @@ const brandMasks: Record<string, string> = {
   claude: claudeCodeMask,
   codex: codexMask,
   cursor: cursorMask,
+  deepseek: deepseekMask,
   grok: grokBuildMask,
+  qwen: qwenMask,
   zcode: zcodeMask,
 }
 

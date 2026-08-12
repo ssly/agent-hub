@@ -91,6 +91,9 @@ export const setClaudePluginEnabled = (pluginId: string, scope: string, enabled:
 // ZCode marketplace plugins (read-only)
 export const getZCodePlugins = () => invoke<any[]>('get_zcode_plugins')
 
+// Qwen Code extensions (read-only)
+export const getQwenPlugins = () => invoke<any[]>('get_qwen_plugins')
+
 export async function pickPluginDirectory(): Promise<string | null> {
   if (!isTauri) return '/Users/demo/projects/agent-hub'
   const { open } = await import('@tauri-apps/plugin-dialog')
@@ -155,7 +158,8 @@ export const searchSessionMessages = (platformId: string, query: string) =>
 
 // Trash
 export const listTrash = () => invoke<any[]>('list_trash_cmd')
-export const restoreTrashItem = (id: string) => invoke<void>('restore_trash_item_cmd', { id })
+export const restoreTrashItem = (id: string, overwrite = false) =>
+  invoke<void>('restore_trash_item_cmd', { id, overwrite })
 export const permanentlyDeleteTrashItem = (id: string) => invoke<void>('permanently_delete_trash_item_cmd', { id })
 export const emptyTrash = () => invoke<void>('empty_trash_cmd')
 
@@ -221,6 +225,16 @@ export const previewKimiHookChange = (action: 'install' | 'uninstall') =>
 export const applyKimiHookChange = (action: 'install' | 'uninstall', expectedBeforeHash: string) =>
   invoke<any>('apply_kimi_hook_change', { action, expectedBeforeHash })
 
+export const getQwenSessionMonitorSnapshot = () =>
+  invoke<any>('get_qwen_session_monitor_snapshot')
+export const deleteQwenSessionMonitorSession = (sessionId: string) =>
+  invoke<void>('delete_qwen_session_monitor_session', { sessionId })
+export const getQwenHookStatus = () => invoke<any>('get_qwen_hook_status')
+export const previewQwenHookChange = (action: 'install' | 'uninstall') =>
+  invoke<any>('preview_qwen_hook_change', { action })
+export const applyQwenHookChange = (action: 'install' | 'uninstall', expectedBeforeHash: string) =>
+  invoke<any>('apply_qwen_hook_change', { action, expectedBeforeHash })
+
 export const getZCodeSessionMonitorSnapshot = () =>
   invoke<any>('get_zcode_session_monitor_snapshot')
 export const deleteZCodeSessionMonitorSession = (sessionId: string) =>
@@ -250,6 +264,8 @@ export const previewKiroHookChange = (action: 'install' | 'uninstall') =>
   invoke<any>('preview_kiro_hook_change', { action })
 export const applyKiroHookChange = (action: 'install' | 'uninstall', expectedBeforeHash: string) =>
   invoke<any>('apply_kiro_hook_change', { action, expectedBeforeHash })
+/** Monitor tab filter: ids of agents whose platform presence directory exists. */
+export const listAvailableMonitorAgents = () => invoke<string[]>('list_available_monitor_agents')
 
 // Switch
 export const listSwitchProfiles = (agentType: string) => invoke<any>('list_switch_profiles', { agentType })
@@ -330,8 +346,15 @@ export const getCodexTrayUsage = (force = false) =>
   invoke<CodexTraySnapshot>('get_codex_tray_usage', { force })
 export const resizeUsageTray = (height: number, width?: number) =>
   invoke<void>('resize_usage_tray', { height, width: width ?? null })
-export const setUsageTrayPinned = (pinned: boolean) =>
-  invoke<void>('set_usage_tray_pinned', { pinned })
+export const closeUsageTray = () => invoke<void>('close_usage_tray')
+export const expandUsageTray = () => invoke<void>('expand_usage_tray')
+export const collapseUsageTray = () => invoke<void>('collapse_usage_tray')
+export const resizeUsageTrayDock = (height: number) =>
+  invoke<void>('resize_usage_tray_dock', { height })
+export const setUsageTrayHovered = (hovered: boolean) =>
+  invoke<void>('set_usage_tray_hovered', { hovered })
+export const setUsageTrayOverlay = (open: boolean) =>
+  invoke<void>('set_usage_tray_overlay', { open })
 export const openUsageTray = () => invoke<void>('open_usage_tray')
 
 // Grok Build uses only the CLI's current/default account. Agent Hub does not
@@ -393,6 +416,34 @@ export interface ClaudeUsage {
 }
 export const getClaudeUsage = (force = false) =>
   invoke<ClaudeUsage>('get_claude_usage', { force })
+
+// DeepSeek has no local CLI credential: the user pastes a platform API key
+// (platform.deepseek.com → API keys), stored locally at
+// ~/.agent-hub/deepseek.json (0600) and only ever sent as the Bearer token of
+// the official balance endpoint. /user/balance is a control-plane API — it
+// consumes no tokens.
+export interface DeepSeekBalanceInfo {
+  currency: string
+  total_balance: string
+  granted_balance: string
+  topped_up_balance: string
+}
+export interface DeepSeekUsage {
+  is_available: boolean
+  balances: DeepSeekBalanceInfo[]
+  fetched_at: number
+}
+export interface DeepSeekSettings {
+  has_key: boolean
+  masked_key: string | null
+}
+export const getDeepseekSettings = () =>
+  invoke<DeepSeekSettings>('get_deepseek_settings')
+// Empty string clears the stored key. Saving drops the cached balance.
+export const saveDeepseekApiKey = (apiKey: string) =>
+  invoke<DeepSeekSettings>('save_deepseek_api_key', { apiKey })
+export const getDeepseekUsage = (force = false) =>
+  invoke<DeepSeekUsage>('get_deepseek_usage', { force })
 
 export interface UsageProviderAvailability {
   codex: boolean

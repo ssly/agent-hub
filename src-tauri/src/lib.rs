@@ -8,6 +8,7 @@ mod mcp;
 mod monitor;
 mod paths;
 mod platform;
+mod qwen_plugin;
 mod session;
 mod session_monitor;
 mod skill;
@@ -130,6 +131,11 @@ pub fn run() {
             commands::get_kimi_hook_status,
             commands::preview_kimi_hook_change,
             commands::apply_kimi_hook_change,
+            commands::get_qwen_session_monitor_snapshot,
+            commands::delete_qwen_session_monitor_session,
+            commands::get_qwen_hook_status,
+            commands::preview_qwen_hook_change,
+            commands::apply_qwen_hook_change,
             commands::get_zcode_session_monitor_snapshot,
             commands::delete_zcode_session_monitor_session,
             commands::get_zcode_hook_status,
@@ -145,9 +151,11 @@ pub fn run() {
             commands::get_kiro_hook_status,
             commands::preview_kiro_hook_change,
             commands::apply_kiro_hook_change,
+            commands::list_available_monitor_agents,
             claude_plugin::list_claude_plugins,
             claude_plugin::set_claude_plugin_enabled,
             commands::get_zcode_plugins,
+            commands::get_qwen_plugins,
             switch::commands::list_switch_profiles,
             switch::commands::save_current_auth_profile,
             switch::commands::add_auth_profile,
@@ -165,14 +173,36 @@ pub fn run() {
             switch::commands::get_kimi_usage,
             switch::commands::get_claude_usage,
             switch::commands::get_usage_provider_availability,
+            switch::deepseek::get_deepseek_settings,
+            switch::deepseek::save_deepseek_api_key,
+            switch::deepseek::get_deepseek_usage,
             switch::monitor_settings::get_usage_monitor_settings,
             switch::monitor_settings::set_usage_refresh_minutes,
             switch::monitor_settings::set_usage_selected_agent,
             switch::monitor_settings::set_usage_agent_listening,
             tray::resize_usage_tray,
-            tray::set_usage_tray_pinned,
+            tray::resize_usage_tray_dock,
+            tray::close_usage_tray,
+            tray::expand_usage_tray,
+            tray::collapse_usage_tray,
+            tray::set_usage_tray_hovered,
+            tray::set_usage_tray_overlay,
             tray::open_usage_tray,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running agent-hub");
+        .build(tauri::generate_context!())
+        .expect("error while building agent-hub")
+        .run(|handle, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = event {
+                // Dock-icon click fires Reopen. When only the always-on-top
+                // tray popup is visible, macOS still reports visible windows,
+                // so the default path would leave the main window hidden —
+                // always surface it.
+                if let Some(window) = handle.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                }
+            }
+        });
 }
