@@ -236,10 +236,10 @@ pub fn get_hook_status(agent: AgentKind) -> Result<HookStatus, String> {
     let root = parse_root(&content, &path)?;
     let managed_handler_count = managed_command_count(&root, arg);
     let events = managed_events(agent);
+    let expected_timeout = managed_handler_timeout(agent);
     let installed = managed_handler_count == events.len()
         && events.iter().all(|event| {
-            let commands = managed_commands_for(&root, event, arg);
-            commands.len() == 1 && commands[0] == command
+            managed_handler_matches(&root, event, arg, &command, expected_timeout)
         });
     let issue = if installed || managed_handler_count == 0 {
         // Claude Code lets users disable every hook with one switch; an
@@ -442,8 +442,9 @@ fn render_after(
     };
     remove_managed_handlers(agent, &mut root, arg)?;
     if action == HookAction::Install {
+        let timeout = managed_handler_timeout(agent);
         for event in managed_events(agent) {
-            append_managed_handler(&mut root, event, command)?;
+            append_managed_handler(&mut root, event, command, timeout)?;
         }
     }
     let mut rendered = serde_json::to_string_pretty(&root)
@@ -461,7 +462,30 @@ fn parse_root(content: &str, path: &Path) -> Result<Value, String> {
     Ok(root)
 }
 
-fn append_managed_handler(root: &mut Value, event_name: &str, command: &str) -> Result<(), String> {
+/// Timeout written into each managed command hook.
+///
+/// Units are product-specific and must not be mixed:
+/// - Claude Code / Codex: **seconds** (Claude docs; Codex field is `timeout_sec`)
+/// - Qwen Code: **milliseconds** (`hookRunner` default 60000; official docs say
+///   "Timeout in milliseconds"; examples use `10000` for 10s)
+///
+/// Target wall-clock budget is ~10s for every agent. Using Claude's unit (10)
+/// for Qwen used to kill the hook after 10ms — fast enough that macOS sometimes
+/// still wrote the inbox, but Windows (`.cmd` hop + GUI-subsystem PE) almost
+/// always timed out before capture completed.
+fn managed_handler_timeout(agent: AgentKind) -> u64 {
+    match agent {
+        AgentKind::Qwen => 10_000,
+        _ => 10,
+    }
+}
+
+fn append_managed_handler(
+    root: &mut Value,
+    event_name: &str,
+    command: &str,
+    timeout: u64,
+) -> Result<(), String> {
     let root_object = root
         .as_object_mut()
         .ok_or_else(|| "Hook config root is not an object".to_string())?;
@@ -479,7 +503,7 @@ fn append_managed_handler(root: &mut Value, event_name: &str, command: &str) -> 
         "hooks": [{
             "type": "command",
             "command": command,
-            "timeout": 10
+            "timeout": timeout
         }]
     }));
     Ok(())
@@ -539,6 +563,32 @@ fn managed_commands_for(root: &Value, event_name: &str, arg: &str) -> Vec<String
         .filter_map(|handler| handler.get("command").and_then(Value::as_str))
         .map(ToOwned::to_owned)
         .collect()
+}
+
+/// True when the event has exactly one managed handler whose command *and*
+/// timeout match what we would install now (used for "old version" detection).
+fn managed_handler_matches(
+    root: &Value,
+    event_name: &str,
+    arg: &str,
+    expected_command: &str,
+    expected_timeout: u64,
+) -> bool {
+    let commands = managed_commands_for(root, event_name, arg);
+    if commands.len() != 1 || commands[0] != expected_command {
+        return false;
+    }
+    root.get("hooks")
+        .and_then(Value::as_object)
+        .and_then(|hooks| hooks.get(event_name))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|group| group.get("hooks").and_then(Value::as_array))
+        .flatten()
+        .filter(|handler| is_managed_handler(handler, arg))
+        .filter_map(|handler| handler.get("timeout").and_then(Value::as_u64))
+        .any(|timeout| timeout == expected_timeout)
 }
 
 fn managed_command_count(root: &Value, arg: &str) -> usize {
@@ -2066,6 +2116,16 @@ mod tests {
         assert!(managed_commands_for(&root, USER_PROMPT_SUBMIT, QWEN_HOOK_ARG).len() == 1);
         assert!(managed_commands_for(&root, STOP, QWEN_HOOK_ARG).len() == 1);
         assert!(managed_commands_for(&root, STOP_FAILURE, QWEN_HOOK_ARG).len() == 1);
+        // Qwen measures timeout in milliseconds (not Claude's seconds).
+        assert_eq!(managed_handler_timeout(AgentKind::Qwen), 10_000);
+        assert!(managed_handler_matches(
+            &root,
+            USER_PROMPT_SUBMIT,
+            QWEN_HOOK_ARG,
+            command,
+            10_000
+        ));
+        assert!(after.contains("\"timeout\": 10000"));
         assert!(after.contains("existing-command"));
 
         let after_uninstall = render_after(
@@ -2656,5 +2716,51 @@ enabled = false
         for agent in AgentKind::ALL {
             let _ = agent_available(agent);
         }
+    }
+
+    #[test]
+    fn managed_handler_timeout_units_differ_for_qwen() {
+        // Qwen: milliseconds. Claude/Codex: seconds. Same ~10s budget.
+        assert_eq!(managed_handler_timeout(AgentKind::Qwen), 10_000);
+        assert_eq!(managed_handler_timeout(AgentKind::Claude), 10);
+        assert_eq!(managed_handler_timeout(AgentKind::Codex), 10);
+        // Old Qwen installs wrote timeout:10 (10ms) — status must treat them
+        // as stale so the UI prompts a reset.
+        let stale = json!({
+            "hooks": {
+                "UserPromptSubmit": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": "agent-hub --agent-hub-qwen-hook",
+                        "timeout": 10
+                    }]
+                }]
+            }
+        });
+        assert!(!managed_handler_matches(
+            &stale,
+            USER_PROMPT_SUBMIT,
+            QWEN_HOOK_ARG,
+            "agent-hub --agent-hub-qwen-hook",
+            10_000
+        ));
+        let current = json!({
+            "hooks": {
+                "UserPromptSubmit": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": "agent-hub --agent-hub-qwen-hook",
+                        "timeout": 10000
+                    }]
+                }]
+            }
+        });
+        assert!(managed_handler_matches(
+            &current,
+            USER_PROMPT_SUBMIT,
+            QWEN_HOOK_ARG,
+            "agent-hub --agent-hub-qwen-hook",
+            10_000
+        ));
     }
 }

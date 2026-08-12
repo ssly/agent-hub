@@ -1145,10 +1145,8 @@ fn setup_desktop(app: &mut App) -> tauri::Result<()> {
                     if let Some(usage) = app.get_webview_window("codex-usage") {
                         let _ = usage.hide();
                     }
+                    crate::show_main_window(app);
                     if let Some(main) = app.get_webview_window("main") {
-                        let _ = main.show();
-                        let _ = main.unminimize();
-                        let _ = main.set_focus();
                         let _ = main.emit(TRAY_CHECK_UPDATES_EVENT, ());
                     }
                 }

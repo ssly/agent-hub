@@ -48,6 +48,11 @@ jobs:
             echo "__EOF__"
           } >> "$GITHUB_ENV"
 
+      # releaseDraft: matrix jobs publish into a DRAFT release so
+      # releases/latest keeps serving the previous version until the publish
+      # job flips it — checking for updates mid-build can no longer hit a
+      # half-uploaded latest.json. releaseAssetNamePattern makes all files
+      # agent-hub_*; the updater manifest URLs follow automatically.
       - uses: tauri-apps/tauri-action@v0
         id: tauri
         env:
@@ -58,31 +63,9 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "Agent Hub ${{ github.ref_name }}"
           releaseBody: ${{ env.RELEASE_BODY }}
+          releaseDraft: true
+          releaseAssetNamePattern: "agent-hub_[version]_[arch][setup][ext]"
           args: ${{ matrix.args }}
-
-      # User-facing installers download as agent-hub_*; updater artifacts
-      # (.app.tar.gz / .nsis.zip / .sig / latest.json) keep their original
-      # names so the updater manifest stays valid (signatures cover content,
-      # not names — but we don't touch those files at all).
-      - name: Rename installer assets to agent-hub format
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="${{ github.ref_name }}"
-          for asset in $(gh release view "$TAG" --json assets --jq '.assets[].name'); do
-            case "$asset" in
-              "Agent Hub_"*.dmg | "Agent Hub_"*-setup.exe)
-                renamed="agent-hub_${asset#Agent Hub_}"
-                echo "Renaming: $asset → $renamed"
-                gh release download "$TAG" --pattern "$asset" --clobber
-                mv "$asset" "$renamed"
-                gh release upload "$TAG" "$renamed"
-                gh release delete-asset "$TAG" "$asset" --yes
-                rm -f "$renamed"
-                ;;
-            esac
-          done
 
       - name: Verify updater manifests
         shell: bash
@@ -99,3 +82,17 @@ jobs:
             echo "   If key has password, TAURI_SIGNING_PRIVATE_KEY_PASSWORD must also be set."
             echo "   Generate keys with: npx @tauri-apps/cli signer generate -w ~/.tauri/myapp.key"
           fi
+
+  # Flip the draft release public only after every matrix job has uploaded
+  # its assets and the merged updater manifest.
+  publish:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${{ github.ref_name }}" --draft=false

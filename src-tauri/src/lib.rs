@@ -21,7 +21,7 @@ mod win_console;
 mod zcode_plugin;
 
 use state::AppState;
-use tauri::Manager;
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 /// Atomic flag used to signal the resumable updater to abort the current
 /// download. Set by `cancel_update_download`, checked in the download loop.
@@ -29,6 +29,78 @@ pub type UpdateCancelFlag = std::sync::atomic::AtomicBool;
 
 pub fn try_handle_hook_event() -> bool {
     session_monitor::try_capture_hook_event()
+}
+
+/// Red traffic-light / window X must not destroy `main` while the tray keeps
+/// the process alive: Dock reopen and tray "Check for Updates" both look up
+/// the window by label. Hide instead so Mission Control / Dock can bring it
+/// back.
+fn attach_main_window_lifecycle(window: &WebviewWindow) {
+    let win = window.clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            let _ = win.hide();
+        }
+    });
+}
+
+/// Build a replacement `main` window matching `tauri.conf.json` when the
+/// previous one was destroyed (older builds, or any path that skipped hide).
+fn recreate_main_window(app: &AppHandle) -> Option<WebviewWindow> {
+    let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+        .title("Agent Hub")
+        .inner_size(1024.0, 768.0)
+        .min_inner_size(800.0, 600.0)
+        .resizable(true)
+        .fullscreen(false);
+
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .hidden_title(true)
+            .traffic_light_position(tauri::LogicalPosition::new(12.0, 23.0));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        builder = builder.decorations(false);
+    }
+
+    match builder.build() {
+        Ok(window) => {
+            attach_main_window_lifecycle(&window);
+            Some(window)
+        }
+        Err(error) => {
+            eprintln!("agent-hub: failed to recreate main window: {error}");
+            None
+        }
+    }
+}
+
+/// Surface the main UI: unhide the app (macOS Cmd+H), recreate main if it was
+/// destroyed, then show / unminimize / focus. Used by Dock reopen and tray
+/// menu actions that need the primary window.
+pub fn show_main_window(app: &AppHandle) {
+    // Cmd+H hides the *application*. Showing a window alone is not enough;
+    // NSApp must be unhidden first or Dock clicks appear to do nothing.
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.show();
+    }
+
+    let window = match app.get_webview_window("main") {
+        Some(window) => window,
+        None => match recreate_main_window(app) {
+            Some(window) => window,
+            None => return,
+        },
+    };
+    let _ = window.show();
+    let _ = window.unminimize();
+    let _ = window.set_focus();
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -58,9 +130,14 @@ pub fn run() {
             // macOS uses the overlay title bar (see tauri.conf.json), so the
             // traffic lights stay native. Windows has no equivalent, so drop
             // the native frame and let the toolbar render its own controls.
-            #[cfg(target_os = "windows")]
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window.set_decorations(false);
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = window.set_decorations(false);
+                }
+                // Tray keeps the process alive after the last UI close; hide
+                // main instead of destroying it so Dock / tray can reopen it.
+                attach_main_window_lifecycle(&window);
             }
 
             Ok(())
@@ -194,15 +271,12 @@ pub fn run() {
         .run(|handle, event| {
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { .. } = event {
-                // Dock-icon click fires Reopen. When only the always-on-top
-                // tray popup is visible, macOS still reports visible windows,
-                // so the default path would leave the main window hidden —
-                // always surface it.
-                if let Some(window) = handle.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.unminimize();
-                    let _ = window.set_focus();
-                }
+                // Dock-icon click. Tray popup / edge strip counts as a
+                // "visible window" for hasVisibleWindows, so macOS default
+                // reopen is a no-op — always surface main ourselves.
+                // Also covers: main was hide-on-close'd, Cmd+H, or destroyed
+                // on older builds (recreate path).
+                show_main_window(handle);
             }
         });
 }
