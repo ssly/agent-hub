@@ -12,9 +12,9 @@ use crate::paths::join_relative;
 /// Minimum interval between automatic usage network queries (Accounts + tray).
 const USAGE_CACHE_TTL_SECS: u64 = 600; // 10 minutes
 
-struct UsageCacheEntry<T> {
-    fetched_at: u64,
-    data: T,
+pub(crate) struct UsageCacheEntry<T> {
+    pub fetched_at: u64,
+    pub data: T,
 }
 
 static CODEX_USAGE_CACHE: Mutex<Option<UsageCacheEntry<CodexTraySnapshot>>> = Mutex::new(None);
@@ -22,14 +22,14 @@ static GROK_USAGE_CACHE: Mutex<Option<UsageCacheEntry<GrokUsageResponse>>> = Mut
 static KIMI_USAGE_CACHE: Mutex<Option<UsageCacheEntry<KimiUsageResponse>>> = Mutex::new(None);
 static CLAUDE_USAGE_CACHE: Mutex<Option<UsageCacheEntry<ClaudeUsageResponse>>> = Mutex::new(None);
 
-fn usage_unix_now() -> u64 {
+pub(crate) fn usage_unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
 }
 
-fn usage_cache_is_fresh(fetched_at: u64, now: u64) -> bool {
+pub(crate) fn usage_cache_is_fresh(fetched_at: u64, now: u64) -> bool {
     now.saturating_sub(fetched_at) < USAGE_CACHE_TTL_SECS
 }
 

@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import * as api from '@/lib/api'
-import type { ClaudeUsage, CodexUsage, CodexResetCredits, GrokUsage, KimiUsage, UsageMonitorSettings } from '@/lib/api'
+import type { ClaudeUsage, CodexUsage, CodexResetCredits, DeepSeekSettings, DeepSeekUsage, GrokUsage, KimiUsage, UsageMonitorSettings } from '@/lib/api'
 
 export const useSwitchStore = defineStore('switch', () => {
   const selectedAgent = ref<string | null>(localStorage.getItem('ah-switch-agent'))
@@ -47,6 +47,15 @@ export const useSwitchStore = defineStore('switch', () => {
   const claudeUsageLastQuery = ref<number>(0)
   /** Local OAuth credential presence; null until the first check runs. */
   const claudeUsageAvailable = ref<boolean | null>(null)
+
+  // DeepSeek: no CLI to read credentials from — the user pastes a platform
+  // API key (stored locally by the backend at ~/.agent-hub/deepseek.json)
+  // and we query the official /user/balance endpoint with it. Read-only.
+  const deepseekSettings = ref<DeepSeekSettings | null>(null)
+  const deepseekUsage = ref<DeepSeekUsage | null>(null)
+  const deepseekUsageLoading = ref(false)
+  const deepseekUsageError = ref<string | null>(null)
+  const deepseekUsageLastQuery = ref<number>(0)
 
   // Edit modal state
   const editModalOpen = ref(false)
@@ -180,6 +189,44 @@ export const useSwitchStore = defineStore('switch', () => {
     }
   }
 
+  async function loadDeepseekSettings() {
+    try {
+      deepseekSettings.value = await api.getDeepseekSettings()
+    } catch { /* keep previous */ }
+  }
+
+  /** Save (or clear, when empty) the key; returns an error string or null. */
+  async function saveDeepseekKey(apiKey: string): Promise<string | null> {
+    try {
+      deepseekSettings.value = await api.saveDeepseekApiKey(apiKey)
+      if (!deepseekSettings.value.has_key) {
+        deepseekUsage.value = null
+        deepseekUsageError.value = null
+        deepseekUsageLastQuery.value = 0
+      }
+      return null
+    } catch (reason: any) {
+      return String(reason?.message || reason)
+    }
+  }
+
+  async function refreshDeepseekUsage(force = false) {
+    if (selectedAgent.value !== 'deepseek' || deepseekUsageLoading.value) return
+    if (!deepseekSettings.value?.has_key) return
+    deepseekUsageLoading.value = true
+    deepseekUsageError.value = null
+    try {
+      deepseekUsage.value = await api.getDeepseekUsage(force)
+      deepseekUsageLastQuery.value = (deepseekUsage.value.fetched_at || Math.floor(Date.now() / 1000)) * 1000
+    } catch (reason: any) {
+      deepseekUsageError.value = String(reason?.message || reason)
+      deepseekUsage.value = null
+      deepseekUsageLastQuery.value = 0
+    } finally {
+      deepseekUsageLoading.value = false
+    }
+  }
+
   // The tray popup emits `usage-refreshed` after a successful query; re-pull
   // the shared backend cache (force=false, already fresh) so an open Accounts
   // view shows the same numbers. Refreshers no-op for non-selected agents.
@@ -209,12 +256,13 @@ export const useSwitchStore = defineStore('switch', () => {
 
   async function loadProfiles() {
     if (!selectedAgent.value) return
-    // Codex, Grok Build, and Kimi Code are read-only: one current CLI account,
-    // no Agent Hub profile pool.
+    // Codex, Grok Build, Kimi Code, and DeepSeek are read-only: one current
+    // CLI account (or a single locally-stored API key), no profile pool.
     if (
       selectedAgent.value === 'codex'
       || selectedAgent.value === 'grok-build'
       || selectedAgent.value === 'kimi-code'
+      || selectedAgent.value === 'deepseek'
     ) {
       profiles.value = []
       currentKey.value = null
@@ -244,6 +292,10 @@ export const useSwitchStore = defineStore('switch', () => {
     if (agent === 'grok-build') await refreshGrokUsage(false)
     if (agent === 'kimi-code') await refreshKimiUsage(false)
     if (agent === 'claude-code') await refreshClaudeUsage(false)
+    if (agent === 'deepseek') {
+      await loadDeepseekSettings()
+      await refreshDeepseekUsage(false)
+    }
   }
 
   async function openEditModal(profile: any) {
@@ -323,10 +375,12 @@ export const useSwitchStore = defineStore('switch', () => {
     grokUsage, grokUsageLoading, grokUsageError, grokUsageLastQuery,
     kimiUsage, kimiUsageLoading, kimiUsageError, kimiUsageLastQuery,
     claudeUsage, claudeUsageLoading, claudeUsageError, claudeUsageLastQuery, claudeUsageAvailable,
+    deepseekSettings, deepseekUsage, deepseekUsageLoading, deepseekUsageError, deepseekUsageLastQuery,
     monitorSettings, refreshMinutes, isAgentListened,
     loadMonitorSettings, updateRefreshMinutes, setAgentListening,
     selectAgent, loadProfiles, loadSelectedAgent, openEditModal, closeEditModal, resetState,
     refreshCodexUsage, refreshGrokUsage, refreshKimiUsage, refreshClaudeUsage,
+    loadDeepseekSettings, saveDeepseekKey, refreshDeepseekUsage,
     openClearActiveModal, closeClearActiveModal, deleteActiveAuth,
   }
 })

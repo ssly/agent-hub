@@ -7,7 +7,7 @@ import * as api from '@/lib/api'
 import AppModal from '@/components/ui/AppModal.vue'
 import AccountUsagePanel, { type UsageWindowRow } from '@/components/switch/AccountUsagePanel.vue'
 import ListeningToggle from '@/components/switch/ListeningToggle.vue'
-import { Trash2 } from 'lucide-vue-next'
+import { Trash2, Gauge, Info, RefreshCw } from 'lucide-vue-next'
 
 const { t, locale } = useI18n()
 const store = useSwitchStore()
@@ -18,6 +18,7 @@ const AGENT_DISPLAY_NAMES: Record<string, string> = {
   'claude-code': 'Claude Code',
   'grok-build': 'Grok Build',
   'kimi-code': 'Kimi Code',
+  deepseek: 'DeepSeek',
 }
 const agentName = computed(
   () => AGENT_DISPLAY_NAMES[store.selectedAgent ?? ''] ?? store.selectedAgent ?? '',
@@ -27,6 +28,7 @@ const isCodex = computed(() => store.selectedAgent === 'codex')
 const isGrokBuild = computed(() => store.selectedAgent === 'grok-build')
 const isKimiCode = computed(() => store.selectedAgent === 'kimi-code')
 const isClaudeCode = computed(() => store.selectedAgent === 'claude-code')
+const isDeepSeek = computed(() => store.selectedAgent === 'deepseek')
 
 // Absolute timestamp formatted as "YYYY-MM-DD HH:mm:ss" in the user's local
 // timezone. Uniform across locales so zh-CN/en-US render identically.
@@ -272,6 +274,45 @@ async function handleRefreshClaude() {
   else showToast(t('switch.usage_refresh_toast'), 'success')
 }
 
+// --- DeepSeek (API key configured locally, balance via official endpoint) ---
+const deepseekKeyInput = ref('')
+const deepseekKeySaving = ref(false)
+
+async function handleSaveDeepseekKey(clear = false) {
+  if (deepseekKeySaving.value) return
+  const key = clear ? '' : deepseekKeyInput.value.trim()
+  if (!clear && !key) return
+  deepseekKeySaving.value = true
+  const err = await store.saveDeepseekKey(key)
+  deepseekKeySaving.value = false
+  if (err) {
+    showToast(err, 'error')
+    return
+  }
+  deepseekKeyInput.value = ''
+  showToast(t(clear ? 'switch.deepseek_key_cleared_toast' : 'switch.deepseek_key_saved_toast'), 'success')
+  if (!clear) void store.refreshDeepseekUsage(true)
+}
+
+async function handleRefreshDeepSeek() {
+  if (store.deepseekUsageLoading) return
+  await store.refreshDeepseekUsage(true)
+  if (store.deepseekUsageError) showToast(t('switch.usage_failed'), 'error')
+  else showToast(t('switch.usage_refresh_toast'), 'success')
+}
+
+// Open the platform's API-keys page in the system browser (Tauri shell open,
+// with a window.open fallback for web-debug mode).
+async function openDeepseekKeysPage() {
+  const url = 'https://platform.deepseek.com/api_keys'
+  try {
+    const { open } = await import('@tauri-apps/plugin-shell')
+    await open(url)
+    return
+  } catch { /* web debug mode: fall through */ }
+  window.open(url, '_blank', 'noopener,noreferrer')
+}
+
 const addNote = ref('')
 const addContent = ref('')
 
@@ -334,6 +375,7 @@ function startAutoTimer() {
     else if (agent === 'grok-build') void store.refreshGrokUsage(true)
     else if (agent === 'kimi-code') void store.refreshKimiUsage(true)
     else if (agent === 'claude-code') void store.refreshClaudeUsage(true)
+    else if (agent === 'deepseek') void store.refreshDeepseekUsage(true)
   }, store.refreshMinutes * 60_000)
 }
 watch(() => store.refreshMinutes, startAutoTimer)
@@ -584,7 +626,140 @@ async function handleConfirmClear() {
             <template #headerActions><ListeningToggle /></template>
           </AccountUsagePanel>
 
-          <!-- Claude-only: switchable custom-token profile pool. -->
+          <!-- DeepSeek: locally configured API key + official balance endpoint.
+               Balances are amounts, not quota windows, so this uses a custom
+               card instead of AccountUsagePanel. -->
+          <template v-else-if="isDeepSeek">
+            <div class="ah-card space-y-3" style="background: var(--surface); border-color: var(--border)">
+              <div class="flex items-center justify-between gap-3">
+                <span class="text-base font-semibold" style="color: var(--ink)">{{ t('switch.deepseek_key_title') }}</span>
+                <span
+                  v-if="store.deepseekSettings?.masked_key"
+                  class="text-xs truncate"
+                  style="color: var(--ink-3); font-family: var(--font-mono)"
+                >
+                  {{ t('switch.deepseek_key_current', { key: store.deepseekSettings.masked_key }) }}
+                </span>
+              </div>
+              <p class="text-xs flex items-start gap-1.5" style="color: var(--ink-4)">
+                <Info :size="13" class="flex-shrink-0 mt-0.5" />
+                <span>{{ t('switch.deepseek_key_note') }}</span>
+              </p>
+              <div class="flex gap-2 deepseek-key-row">
+                <input
+                  v-model="deepseekKeyInput"
+                  type="password"
+                  class="ah-search-input flex-1"
+                  :placeholder="t('switch.deepseek_key_placeholder')"
+                  @keyup.enter="handleSaveDeepseekKey()"
+                />
+                <button
+                  class="btn btn-primary btn-sm flex-shrink-0"
+                  :disabled="deepseekKeySaving || !deepseekKeyInput.trim()"
+                  @click="handleSaveDeepseekKey()"
+                >
+                  {{ t('action.save') }}
+                </button>
+                <button
+                  v-if="store.deepseekSettings?.has_key"
+                  class="btn btn-secondary btn-sm flex-shrink-0"
+                  :disabled="deepseekKeySaving"
+                  @click="handleSaveDeepseekKey(true)"
+                >
+                  {{ t('switch.deepseek_key_clear') }}
+                </button>
+              </div>
+              <p class="text-xs" style="color: var(--ink-4)">
+                <a
+                  href="https://platform.deepseek.com/api_keys"
+                  class="deepseek-link"
+                  @click.prevent="openDeepseekKeysPage"
+                >{{ t('switch.deepseek_key_get') }}</a>
+              </p>
+            </div>
+
+            <div class="ah-card" style="background: var(--surface); border-color: var(--border)">
+              <div class="flex items-center justify-between mb-3 gap-3">
+                <span class="text-base font-semibold flex items-center gap-2 min-w-0" style="color: var(--ink)">
+                  <Gauge :size="18" class="flex-shrink-0" :style="{ color: 'var(--accent)' }" />
+                  <span class="truncate">{{ t('switch.deepseek_balance_title') }}</span>
+                </span>
+                <div class="flex items-center gap-2 flex-shrink-0">
+                  <ListeningToggle />
+                  <button
+                    class="btn btn-secondary btn-sm flex items-center gap-1 flex-shrink-0"
+                    :disabled="store.deepseekUsageLoading"
+                    @click="handleRefreshDeepSeek"
+                  >
+                    <RefreshCw :size="14" :class="{ 'animate-spin': store.deepseekUsageLoading }" />
+                    {{ t('switch.usage_refresh') }}
+                  </button>
+                </div>
+              </div>
+
+              <div v-if="!listened" class="text-sm py-2" style="color: var(--ink-4)">
+                {{ t('switch.listening_off_hint') }}
+              </div>
+              <template v-else>
+                <div v-if="!store.deepseekSettings?.has_key" class="ah-notice" style="margin: 0">
+                  {{ t('switch.deepseek_no_key_hint') }}
+                </div>
+                <div
+                  v-else-if="store.deepseekUsageLoading && !store.deepseekUsage"
+                  class="text-sm py-4"
+                  style="color: var(--ink-3)"
+                >
+                  {{ t('switch.deepseek_usage_loading') }}
+                </div>
+                <div v-else-if="store.deepseekUsageError" class="ah-notice ah-notice--warning" style="margin: 0">
+                  {{ t('switch.usage_failed') }}: {{ store.deepseekUsageError }}
+                </div>
+                <div v-else-if="store.deepseekUsage" class="space-y-3 text-sm">
+                  <div class="text-xs">
+                    <span
+                      class="inline-flex items-center px-2 py-0.5 rounded-full"
+                      :style="store.deepseekUsage.is_available
+                        ? { background: 'var(--accent-soft)', color: 'var(--accent)' }
+                        : { background: 'var(--danger-soft)', color: 'var(--danger)' }"
+                    >
+                      {{ store.deepseekUsage.is_available ? t('switch.deepseek_available') : t('switch.deepseek_unavailable') }}
+                    </span>
+                  </div>
+                  <div
+                    v-for="balance in store.deepseekUsage.balances"
+                    :key="balance.currency"
+                    class="p-3 rounded-lg"
+                    style="background: var(--sunken)"
+                  >
+                    <div class="flex justify-between items-center gap-2">
+                      <span class="font-medium" style="color: var(--ink)">
+                        {{ t('switch.deepseek_total') }} ({{ balance.currency }})
+                      </span>
+                      <span class="font-semibold flex-shrink-0" style="color: var(--accent)">
+                        {{ balance.total_balance }}
+                      </span>
+                    </div>
+                    <div class="text-xs mt-1" style="color: var(--ink-3)">
+                      {{ t('switch.deepseek_granted') }} {{ balance.granted_balance }}
+                      · {{ t('switch.deepseek_topped_up') }} {{ balance.topped_up_balance }}
+                    </div>
+                  </div>
+                  <div
+                    v-if="store.deepseekUsageLastQuery"
+                    class="text-xs pt-2 border-t"
+                    style="color: var(--ink-4); border-color: var(--hairline)"
+                  >
+                    {{ t('switch.usage_last_query', { time: fmtQueryTime(store.deepseekUsageLastQuery) }) }}
+                  </div>
+                </div>
+                <div v-else class="text-sm py-2" style="color: var(--ink-3)">
+                  {{ t('switch.usage_empty_hint') }}
+                </div>
+              </template>
+            </div>
+          </template>
+
+          <!-- Claude Code is the only profile-pool agent: switchable saved accounts. -->
           <template v-if="isClaudeCode">
             <div class="flex gap-2 flex-wrap items-center">
               <button class="btn btn-primary" @click="handleSaveCurrent">{{ t('switch.save_current') }}</button>
@@ -810,5 +985,21 @@ async function handleConfirmClear() {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+/* Inline external link inside muted hint text: same colour at rest, just an
+   underline; darken on hover to signal clickability without shouting. */
+.deepseek-link {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-soft);
+}
+.deepseek-link:hover { color: var(--ink); }
+/* Match the key input to btn-sm (26px) so input and buttons sit level. */
+.deepseek-key-row .ah-search-input {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
 }
 </style>
