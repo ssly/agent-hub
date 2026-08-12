@@ -31,6 +31,17 @@ static DOCK_EDGE: std::sync::Mutex<Option<&'static str>> = std::sync::Mutex::new
 /// must not retrigger snap detection.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 static TRAY_ANIMATING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Timestamp of the last programmatic geometry change (set_size / set_position
+/// from dock expand/collapse/snap/resize). Windows synthesizes Moved + a
+/// spurious Focused(false) for those; treating them as user drags expands the
+/// strip and can collapse again before outer_size catches up, poisoning
+/// DOCK_PANEL with strip dimensions so the next hover expands to a tiny panel.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+static LAST_OWNED_GEOMETRY: std::sync::Mutex<Option<std::time::Instant>> =
+    std::sync::Mutex::new(None);
+/// How long after our own set_size/set_position we ignore Moved / focus-collapse.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+const OWNED_GEOMETRY_GUARD_MS: u128 = 250;
 /// Floating rect (physical) before docking; its size is reused for hover-expand.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 static PRE_DOCK: std::sync::Mutex<Option<(i32, i32, u32, u32)>> = std::sync::Mutex::new(None);
@@ -221,7 +232,9 @@ fn clamp_tray_into_monitors(window: &tauri::WebviewWindow) {
     let clamped_x = pos.x.clamp(min_x, max_pos_x);
     let clamped_y = pos.y.clamp(min_y, max_pos_y);
     if clamped_x != pos.x || clamped_y != pos.y {
+        mark_owned_geometry();
         let _ = window.set_position(tauri::PhysicalPosition::new(clamped_x, clamped_y));
+        mark_owned_geometry();
     }
 }
 
@@ -243,11 +256,31 @@ pub fn set_usage_tray_overlay(open: bool) {
 pub fn resize_usage_tray_dock(app: AppHandle, height: f64) {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     if let Some(window) = app.get_webview_window("codex-usage") {
-        if tray_docked() && !tray_expanded() {
+        if tray_docked()
+            && !tray_expanded()
+            && !TRAY_ANIMATING.load(std::sync::atomic::Ordering::Relaxed)
+        {
             let scale = window.scale_factor().unwrap_or(1.0);
             let h = (height.clamp(24.0, 400.0) * scale).round().max(1.0) as u32;
             let w = (DOCK_STRIP_WIDTH * scale).round().max(1.0) as u32;
-            let _ = window.set_size(tauri::PhysicalSize::new(w, h));
+            // Keep X anchored to the dock edge while height changes.
+            if let Ok(pos) = window.outer_position() {
+                let x = match dock_edge() {
+                    Some("right") => {
+                        if let Some(ctx) = snap_context(&window) {
+                            ctx.fr - w as i32
+                        } else {
+                            pos.x
+                        }
+                    }
+                    _ => pos.x,
+                };
+                set_tray_physical_frame(&window, x, pos.y, w, h);
+            } else {
+                mark_owned_geometry();
+                let _ = window.set_size(tauri::PhysicalSize::new(w, h));
+                mark_owned_geometry();
+            }
         }
     }
 
@@ -302,6 +335,55 @@ fn tray_expanded() -> bool {
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn dock_edge() -> Option<&'static str> {
     DOCK_EDGE.lock().ok().and_then(|edge| *edge)
+}
+
+/// Mark that we just changed the tray frame ourselves so the resulting
+/// Moved / Focused(false) events are not treated as user interaction.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn mark_owned_geometry() {
+    if let Ok(mut last) = LAST_OWNED_GEOMETRY.lock() {
+        *last = Some(std::time::Instant::now());
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn geometry_recently_owned() -> bool {
+    LAST_OWNED_GEOMETRY
+        .lock()
+        .ok()
+        .and_then(|last| *last)
+        .is_some_and(|instant| instant.elapsed().as_millis() < OWNED_GEOMETRY_GUARD_MS)
+}
+
+/// Physical width of a real slid-out panel (never the dock strip).
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn is_panel_physical_width(width: u32, scale: f64) -> bool {
+    // Mini mode floor is TRAY_MINI_WIDTH; strip is ~20 logical px. Anything
+    // near strip width is a poisoned remember and must not be reused.
+    let min = (TRAY_MINI_WIDTH * scale * 0.85).round().max(1.0) as u32;
+    width >= min
+}
+
+/// Apply a physical frame and suppress the synthetic Moved/focus events it
+/// produces on Windows (and occasionally macOS).
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn set_tray_physical_frame(window: &tauri::WebviewWindow, x: i32, y: i32, w: u32, h: u32) {
+    mark_owned_geometry();
+    let _ = window.set_size(tauri::PhysicalSize::new(w.max(1), h.max(1)));
+    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+    mark_owned_geometry();
+}
+
+/// Remember the slid-out panel rect only when it is a plausible full panel
+/// (not the dock strip or a half-applied intermediate frame).
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn store_dock_panel_rect(scale: f64, rect: (i32, i32, u32, u32)) {
+    if !is_panel_physical_width(rect.2, scale) {
+        return;
+    }
+    if let Ok(mut stored) = DOCK_PANEL.lock() {
+        *stored = Some(rect);
+    }
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -427,13 +509,28 @@ fn panel_rect(ctx: &SnapCtx, strip_y: i32) -> (i32, i32, u32, u32) {
     // The last slid-out rect wins (collapse remembers it); before the first
     // collapse, the pre-dock floating rect is the best guess. Only as a last
     // resort fall back to a default size aligned with the strip.
+    // Reject strip-sized "memories" (Windows race can poison DOCK_PANEL).
+    let pick = |rect: (i32, i32, u32, u32)| -> Option<(u32, u32, i32)> {
+        if is_panel_physical_width(rect.2, ctx.scale) {
+            Some((rect.2, rect.3, rect.1))
+        } else {
+            None
+        }
+    };
     let remembered = DOCK_PANEL
         .lock()
         .ok()
         .and_then(|stored| *stored)
-        .or_else(|| PRE_DOCK.lock().ok().and_then(|stored| *stored));
+        .and_then(pick)
+        .or_else(|| {
+            PRE_DOCK
+                .lock()
+                .ok()
+                .and_then(|stored| *stored)
+                .and_then(pick)
+        });
     let (width, height, top) = match remembered {
-        Some(rect) => (rect.2, rect.3, rect.1),
+        Some(rect) => rect,
         None => (
             (TRAY_WINDOW_WIDTH * ctx.scale).round().max(1.0) as u32,
             (320.0 * ctx.scale).round().max(1.0) as u32,
@@ -527,8 +624,7 @@ fn exit_dock(window: &tauri::WebviewWindow) {
         if let Some(ctx) = snap_context(window) {
             if let Ok(pos) = window.outer_position() {
                 let target = panel_rect(&ctx, pos.y);
-                let _ = window.set_size(tauri::PhysicalSize::new(target.2, target.3));
-                let _ = window.set_position(tauri::PhysicalPosition::new(target.0, target.1));
+                set_tray_physical_frame(window, target.0, target.1, target.2, target.3);
             }
         }
     }
@@ -581,7 +677,11 @@ fn reopen_usage_tray(
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn handle_tray_moved(window: &tauri::WebviewWindow) {
     use std::sync::atomic::Ordering;
-    if TRAY_ANIMATING.load(Ordering::Relaxed) {
+    // Ignore moves produced by our own set_size/set_position (dock tween,
+    // strip height push, expand/collapse). On Windows those fire Moved and
+    // were previously treated as "user grabbed the strip" → expand → collapse
+    // with a strip-sized outer_size, poisoning the next hover expand.
+    if TRAY_ANIMATING.load(Ordering::Relaxed) || geometry_recently_owned() {
         return;
     }
     if let Ok(mut last) = LAST_MOVE.lock() {
@@ -642,8 +742,11 @@ fn try_snap_tray(window: &tauri::WebviewWindow) {
     let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) else {
         return;
     };
-    if let Ok(mut pre) = PRE_DOCK.lock() {
-        *pre = Some((pos.x, pos.y, size.width, size.height));
+    // Only remember a real floating-panel size for later hover-expand.
+    if is_panel_physical_width(size.width, ctx.scale) {
+        if let Ok(mut pre) = PRE_DOCK.lock() {
+            *pre = Some((pos.x, pos.y, size.width, size.height));
+        }
     }
     TRAY_DOCKED.store(true, Ordering::Relaxed);
     TRAY_EXPANDED.store(false, Ordering::Relaxed);
@@ -682,8 +785,7 @@ fn expand_dock(window: &tauri::WebviewWindow, animate: bool) {
             emit_dock_changed(win);
         });
     } else {
-        let _ = window.set_size(tauri::PhysicalSize::new(target.2, target.3));
-        let _ = window.set_position(tauri::PhysicalPosition::new(target.0, target.1));
+        set_tray_physical_frame(window, target.0, target.1, target.2, target.3);
         emit_dock_changed(window);
     }
 }
@@ -694,6 +796,11 @@ fn expand_dock(window: &tauri::WebviewWindow, animate: bool) {
 fn collapse_dock(window: &tauri::WebviewWindow, animate: bool) {
     use std::sync::atomic::Ordering;
     if !tray_docked() || !tray_expanded() {
+        return;
+    }
+    // Never collapse while a tween is still applying frames — the outer_size
+    // mid-tween is not a valid panel memory.
+    if TRAY_ANIMATING.load(Ordering::Relaxed) {
         return;
     }
     if let Some(ctx) = snap_context(window) {
@@ -708,9 +815,8 @@ fn collapse_dock(window: &tauri::WebviewWindow, animate: bool) {
         return;
     };
     // Remember where the panel was so the next hover-expand returns here.
-    if let Ok(mut stored) = DOCK_PANEL.lock() {
-        *stored = Some((pos.x, pos.y, size.width, size.height));
-    }
+    // Skip strip-sized / half-applied frames (Windows async set_size race).
+    store_dock_panel_rect(ctx.scale, (pos.x, pos.y, size.width, size.height));
     let center_y = pos.y + size.height as i32 / 2;
     let target = strip_rect(&ctx, center_y);
     if animate {
@@ -721,8 +827,7 @@ fn collapse_dock(window: &tauri::WebviewWindow, animate: bool) {
         });
     } else {
         TRAY_EXPANDED.store(false, Ordering::Relaxed);
-        let _ = window.set_size(tauri::PhysicalSize::new(target.2, target.3));
-        let _ = window.set_position(tauri::PhysicalPosition::new(target.0, target.1));
+        set_tray_physical_frame(window, target.0, target.1, target.2, target.3);
         emit_dock_changed(window);
     }
 }
@@ -736,6 +841,7 @@ fn animate_tray_window(
 ) {
     use std::sync::atomic::Ordering;
     TRAY_ANIMATING.store(true, Ordering::Relaxed);
+    mark_owned_geometry();
     // NOTE: NSWindow.setFrame:display:animate: was tried here and reverted —
     // on a transparent, shadowless borderless window the system frame
     // animation visibly flickers. The per-frame IPC tween stays.
@@ -746,6 +852,7 @@ fn animate_tray_window(
             let t = i as f64 / STEPS as f64;
             let k = 1.0 - (1.0 - t).powi(3); // easeOutCubic
             let lerp = |a: f64, b: f64| a + (b - a) * k;
+            mark_owned_geometry();
             let _ = window.set_size(tauri::PhysicalSize::new(
                 lerp(from.2 as f64, to.2 as f64).round().max(1.0) as u32,
                 lerp(from.3 as f64, to.3 as f64).round().max(1.0) as u32,
@@ -756,8 +863,12 @@ fn animate_tray_window(
             ));
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+        // Hold the owned-geometry guard past the last frame so residual
+        // Moved / Focused(false) from the final set_size are ignored.
+        mark_owned_geometry();
         TRAY_ANIMATING.store(false, Ordering::Relaxed);
         done(&window);
+        mark_owned_geometry();
     });
 }
 
@@ -810,7 +921,41 @@ pub fn resize_usage_tray(app: AppHandle, height: f64, width: Option<f64>) {
         .clamp(TRAY_MINI_WIDTH, TRAY_WINDOW_WIDTH);
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
-    resize_centered_on_current_monitor(&app, width, height);
+    {
+        // Collapsed strip owns its size exclusively. Fighting it with a full
+        // panel resize mid-dock was one path to a strip-sized DOCK_PANEL.
+        if tray_docked() && !tray_expanded() {
+            return;
+        }
+        if tray_docked()
+            && tray_expanded()
+            && !TRAY_ANIMATING.load(std::sync::atomic::Ordering::Relaxed)
+        {
+            // Content remeasure while slid out: keep the edge anchor and
+            // refresh the remembered panel size for the next expand cycle.
+            if let Some(window) = app.get_webview_window("codex-usage") {
+                if let Some(ctx) = snap_context(&window) {
+                    let scale = ctx.scale;
+                    let w = (width * scale).round().max(1.0) as u32;
+                    let h = (height * scale).round().max(1.0) as u32;
+                    let top = window
+                        .outer_position()
+                        .map(|p| p.y)
+                        .unwrap_or(ctx.wy);
+                    let x = if ctx.edge == "left" {
+                        ctx.fx
+                    } else {
+                        ctx.fr - w as i32
+                    };
+                    let y = top.clamp(ctx.wy, ctx.wy + ctx.wh - h as i32);
+                    set_tray_physical_frame(&window, x, y, w, h);
+                    store_dock_panel_rect(scale, (x, y, w, h));
+                    return;
+                }
+            }
+        }
+        resize_centered_on_current_monitor(&app, width, height);
+    }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let _ = (app, width);
@@ -942,9 +1087,13 @@ fn setup_desktop(app: &mut App) -> tauri::Result<()> {
                 // Docked mode never hides on blur; a real click-away instead
                 // slides the expanded panel back into the strip so it does
                 // not linger open while the user works elsewhere.
+                // Skip when the blur is the synthetic one Windows fires after
+                // our own set_size (expand/collapse/strip resize) — collapsing
+                // then can read a still-strip outer_size and poison DOCK_PANEL.
                 if tray_docked() {
                     if tray_expanded()
                         && !TRAY_ANIMATING.load(std::sync::atomic::Ordering::Relaxed)
+                        && !geometry_recently_owned()
                     {
                         collapse_dock(&window, true);
                     }
@@ -1053,10 +1202,13 @@ fn resize_centered_on_current_monitor(app: &AppHandle, width: f64, height: f64) 
     // is secondary and may legitimately be unavailable during a window resize.
     // A remembered position (dragged or previously centered) wins over
     // re-centering so resizing never yanks the popup back to screen center.
+    mark_owned_geometry();
     let _ = window.set_size(LogicalSize::new(width, height));
+    mark_owned_geometry();
     if remembered_position().is_none() {
         if let Ok(Some(monitor)) = window.current_monitor() {
             position_on_monitor(&window, &monitor, width, height);
+            mark_owned_geometry();
         }
     }
 }
