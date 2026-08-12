@@ -429,6 +429,11 @@ pub fn sync_skill_cmd(
             }
             Ok("ok".to_string())
         }
+        // A same-named skill at the target is not a hard failure: the
+        // frontend turns this marker into an overwrite/skip confirm dialog.
+        Err(crate::sync::SyncError::TargetExists(path)) => Err(CommandError::SyncError(
+            format!("target_exists:{path}"),
+        )),
         Err(e) => Err(CommandError::SyncError(e.to_string())),
     }
 }
@@ -512,6 +517,12 @@ pub fn set_locale(
     };
     // Keep the native tray right-click menu in sync with the UI language.
     crate::tray::apply_locale(&app, &tag);
+    // The tray popup is a separate webview with its own vue-i18n instance;
+    // broadcast so it re-renders in the new language immediately.
+    {
+        use tauri::Emitter;
+        let _ = app.emit("locale-changed", tag.clone());
+    }
     tag
 }
 
@@ -758,8 +769,10 @@ pub fn list_trash_cmd() -> Vec<TrashItemView> {
 pub fn restore_trash_item_cmd(
     state: tauri::State<'_, SafeState>,
     id: String,
+    overwrite: Option<bool>,
 ) -> Result<String, CommandError> {
-    crate::trash::restore_item(&id).map_err(|e| CommandError::SyncError(e))?;
+    crate::trash::restore_item(&id, overwrite.unwrap_or(false))
+        .map_err(CommandError::SyncError)?;
     let mut s = state.lock().unwrap();
     for p in s.platforms.iter_mut() {
         crate::platform::invalidate_platform_skills(p);
@@ -1802,6 +1815,49 @@ pub fn apply_kimi_hook_change(
 }
 
 #[tauri::command]
+pub fn get_qwen_session_monitor_snapshot(
+    monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
+) -> MonitorSnapshot {
+    monitor.snapshot(AgentKind::Qwen)
+}
+
+#[tauri::command]
+pub fn delete_qwen_session_monitor_session(
+    monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
+    session_id: String,
+) -> Result<(), CommandError> {
+    monitor
+        .remove_session(AgentKind::Qwen, &session_id)
+        .map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn get_qwen_hook_status() -> Result<crate::session_monitor::HookStatus, CommandError> {
+    crate::session_monitor::get_hook_status(AgentKind::Qwen).map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn preview_qwen_hook_change(
+    action: String,
+) -> Result<crate::session_monitor::HookChangePreview, CommandError> {
+    crate::session_monitor::preview_hook_change(AgentKind::Qwen, parse_hook_action(&action)?)
+        .map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn apply_qwen_hook_change(
+    action: String,
+    expected_before_hash: String,
+) -> Result<crate::session_monitor::HookStatus, CommandError> {
+    crate::session_monitor::apply_hook_change(
+        AgentKind::Qwen,
+        parse_hook_action(&action)?,
+        &expected_before_hash,
+    )
+    .map_err(CommandError::General)
+}
+
+#[tauri::command]
 pub fn get_zcode_session_monitor_snapshot(
     monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
 ) -> MonitorSnapshot {
@@ -1933,8 +1989,26 @@ pub fn apply_kiro_hook_change(
     .map_err(CommandError::General)
 }
 
+/// Monitor tab agent filter: ids of agents whose platform presence directory
+/// exists on this machine (same semantics as the Plugins tab sidebar filter;
+/// see `session_monitor::agent_available`).
+#[tauri::command]
+pub fn list_available_monitor_agents() -> Vec<String> {
+    AgentKind::ALL
+        .into_iter()
+        .filter(|agent| crate::session_monitor::agent_available(*agent))
+        .map(|agent| agent.as_str().to_string())
+        .collect()
+}
+
 /// ZCode 插件市场只读列表。目录不存在（未安装 ZCode）时返回空列表，不报错。
 #[tauri::command]
 pub fn get_zcode_plugins() -> Vec<crate::zcode_plugin::ZCodePluginView> {
     crate::zcode_plugin::list_zcode_plugins()
+}
+
+/// Qwen Code 扩展只读列表。目录不存在（未安装 Qwen Code）时返回空列表，不报错。
+#[tauri::command]
+pub fn get_qwen_plugins() -> Vec<crate::qwen_plugin::QwenPluginView> {
+    crate::qwen_plugin::list_qwen_plugins()
 }

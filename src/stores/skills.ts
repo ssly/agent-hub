@@ -22,7 +22,6 @@ export const useSkillsStore = defineStore('skills', () => {
   const diffCandidates = ref<any[]>([])
   const syncPlatformModalOpen = ref(false)
   const syncTargets = ref<any[]>([])
-  const syncOverwrite = ref(false)
   const syncTargetPlatformId = ref<string | null>(null)
 
   const selectedPlatform = computed(() =>
@@ -167,7 +166,7 @@ export const useSkillsStore = defineStore('skills', () => {
     skillSortBy, skillSortDir, collapsedFolders, diffResult,
     searchResults, searchLoading, searchQuery,
     diffPlatformModalOpen, diffCandidates,
-    syncPlatformModalOpen, syncTargets, syncOverwrite, syncTargetPlatformId,
+    syncPlatformModalOpen, syncTargets, syncTargetPlatformId,
     selectedPlatform,
     refreshPlatforms, reloadPlatforms, loadSkills, selectPlatform, clearPlatform, selectSkill,
     backToList, toggleFolder, toggleSort, doSearch,

@@ -191,7 +191,12 @@ pub fn move_mcp_to_trash(
 
 // --- Restore ---
 
-pub fn restore_item(id: &str) -> Result<TrashItem, String> {
+/// Restore a trash item to its original location. When the original path is
+/// occupied again (user re-created a same-named skill after deleting), the
+/// caller must choose: `overwrite = false` fails with the stable
+/// `restore_conflict` marker so the UI can ask; `true` removes whatever sits
+/// at the original path and puts the trashed version back.
+pub fn restore_item(id: &str, overwrite: bool) -> Result<TrashItem, String> {
     let item = remove_item(id)?;
 
     match item.item_type {
@@ -203,12 +208,18 @@ pub fn restore_item(id: &str) -> Result<TrashItem, String> {
                 .ok_or("Missing original_path for skill")?;
             let orig = PathBuf::from(original_path);
 
-            if orig.exists() {
-                // Put the item back in index before returning error
-                let mut items = read_index();
-                items.push(item.clone());
-                let _ = save_index(&items);
-                return Err(format!("Original path already exists: {}", original_path));
+            // symlink_metadata (not exists()) so a dangling symlink occupying
+            // the path still counts as a conflict.
+            if orig.symlink_metadata().is_ok() {
+                if !overwrite {
+                    // Put the item back in index before returning error
+                    let mut items = read_index();
+                    items.push(item.clone());
+                    let _ = save_index(&items);
+                    return Err("restore_conflict".to_string());
+                }
+                remove_path_any(&orig)
+                    .map_err(|e| format!("remove existing {}: {}", orig.display(), e))?;
             }
 
             if let Some(parent) = orig.parent() {
@@ -413,5 +424,38 @@ mod tests {
         permanently_delete_item("test-id-4").unwrap();
         assert_eq!(list_trash().len(), 0);
         assert!(!skill_path.exists());
+    }
+
+    #[test]
+    fn test_restore_conflict_then_overwrite() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        let dir = setup_test_trash();
+
+        // Delete a skill into the trash, then re-create a same-named one at
+        // the original location (the user rebuilt it after deleting).
+        let orig = dir.path().join("skills").join("myskill");
+        fs::create_dir_all(&orig).unwrap();
+        fs::write(orig.join("SKILL.md"), b"trash version").unwrap();
+        move_skill_to_trash("p", "myskill", "", &orig).unwrap();
+        assert!(!orig.exists());
+        fs::create_dir_all(&orig).unwrap();
+        fs::write(orig.join("SKILL.md"), b"new version").unwrap();
+
+        let id = list_trash()[0].id.clone();
+
+        // No overwrite: stable conflict marker, item stays in trash, the
+        // re-created skill is untouched.
+        let err = restore_item(&id, false).unwrap_err();
+        assert_eq!(err, "restore_conflict");
+        assert_eq!(list_trash().len(), 1);
+        assert_eq!(fs::read_to_string(orig.join("SKILL.md")).unwrap(), "new version");
+
+        // Overwrite: the trashed version replaces the re-created one.
+        restore_item(&id, true).unwrap();
+        assert_eq!(
+            fs::read_to_string(orig.join("SKILL.md")).unwrap(),
+            "trash version"
+        );
+        assert_eq!(list_trash().len(), 0);
     }
 }

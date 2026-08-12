@@ -55,9 +55,10 @@ const breadcrumb = computed(() => {
       'claude-code': 'Claude Code',
       'grok-build': 'Grok Build',
       'kimi-code': 'Kimi Code',
+      deepseek: 'DeepSeek',
     }
     if (!switchStore.selectedAgent) return t('switch.title')
-    const readOnly = ['codex', 'grok-build', 'kimi-code'].includes(switchStore.selectedAgent)
+    const readOnly = ['codex', 'grok-build', 'kimi-code', 'deepseek'].includes(switchStore.selectedAgent)
     const title = readOnly ? t('switch.current_account_title') : t('switch.title')
     return `${title} — ${names[switchStore.selectedAgent] || ''}`
   }
@@ -129,7 +130,6 @@ async function handleSyncClick() {
       showToast(t('sync.no_targets') || 'No sync targets found', 'warning')
     } else {
       skillsStore.syncTargetPlatformId = skillsStore.syncTargets[0].id
-      skillsStore.syncOverwrite = false
       skillsStore.syncPlatformModalOpen = true
     }
   } catch (e: any) {

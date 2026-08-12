@@ -103,8 +103,8 @@ export const useAppStore = defineStore('app', () => {
     }
   }
 
-  async function restoreTrash(id: string) {
-    await api.restoreTrashItem(id)
+  async function restoreTrash(id: string, overwrite = false) {
+    await api.restoreTrashItem(id, overwrite)
     await openTrash()
     const pluginsStore = usePluginsStore()
     await pluginsStore.refreshPlatforms()

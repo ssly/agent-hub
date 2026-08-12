@@ -44,10 +44,32 @@ watch(
 async function handleDoSync() {
   if (!skillsStore.syncTargetPlatformId) return
   try {
-    await skillsStore.startSync(skillsStore.syncTargetPlatformId, skillsStore.syncOverwrite)
+    await skillsStore.startSync(skillsStore.syncTargetPlatformId, false)
     showToast(t('sync.done'), 'success')
   } catch (e: any) {
-    showToast(t('sync.failed', { error: e?.message || e?.SyncError || String(e) }), 'error')
+    const msg = e?.SyncError || e?.message || String(e)
+    // Stable backend marker: a same-named skill occupies the target. Ask
+    // whether to overwrite it or leave everything untouched.
+    if (msg.startsWith('target_exists')) {
+      skillsStore.syncPlatformModalOpen = false
+      syncConflictOpen.value = true
+      return
+    }
+    showToast(t('sync.failed', { error: msg }), 'error')
+  }
+}
+
+// Copy-conflict confirm: target platform already has a same-named skill.
+const syncConflictOpen = ref(false)
+
+async function handleSyncConflictOverwrite() {
+  if (!skillsStore.syncTargetPlatformId) return
+  try {
+    await skillsStore.startSync(skillsStore.syncTargetPlatformId, true)
+    syncConflictOpen.value = false
+    showToast(t('sync.done'), 'success')
+  } catch (e: any) {
+    showToast(t('sync.failed', { error: e?.SyncError || e?.message || String(e) }), 'error')
   }
 }
 
@@ -71,7 +93,32 @@ async function handleRestoreTrash(id: string) {
     await appStore.restoreTrash(id)
     showToast(t('trash.restored'), 'success')
   } catch (e: any) {
-    showToast(t('trash.restore_failed', { error: e?.SyncError || e?.message || e }), 'error')
+    const msg = e?.SyncError || e?.message || String(e)
+    // Stable backend marker: the original location has a same-named skill
+    // again (re-created after the delete). Ask overwrite vs. leave as-is.
+    if (msg === 'restore_conflict') {
+      restoreConflictId.value = id
+      return
+    }
+    showToast(t('trash.restore_failed', { error: msg }), 'error')
+  }
+}
+
+// Restore-conflict confirm: original path re-occupied by a same-named skill.
+const restoreConflictId = ref<string | null>(null)
+const restoreConflictName = computed(
+  () => appStore.trashItems.find((item: any) => item.id === restoreConflictId.value)?.name ?? '',
+)
+
+async function handleRestoreConflictOverwrite() {
+  if (!restoreConflictId.value) return
+  const id = restoreConflictId.value
+  restoreConflictId.value = null
+  try {
+    await appStore.restoreTrash(id, true)
+    showToast(t('trash.restored'), 'success')
+  } catch (e: any) {
+    showToast(t('trash.restore_failed', { error: e?.SyncError || e?.message || String(e) }), 'error')
   }
 }
 
@@ -407,7 +454,7 @@ onBeforeUnmount(() => {
       </template>
     </AppModal>
 
-    <!-- Sync Platform Selection Modal -->
+    <!-- Copy Platform Selection Modal -->
     <AppModal
       :show="skillsStore.syncPlatformModalOpen"
       :title="t('sync.title')"
@@ -427,18 +474,6 @@ onBeforeUnmount(() => {
             </option>
           </select>
         </div>
-
-        <div class="flex items-center gap-2">
-          <input
-            id="sync-overwrite-checkbox"
-            type="checkbox"
-            v-model="skillsStore.syncOverwrite"
-            class="cursor-pointer"
-          />
-          <label for="sync-overwrite-checkbox" class="text-sm cursor-pointer select-none" style="color: var(--ink)">
-            {{ t('action.overwrite') }}
-          </label>
-        </div>
       </div>
       <template #footer>
         <button class="btn btn-secondary" @click="skillsStore.syncPlatformModalOpen = false">{{ t('action.cancel') }}</button>
@@ -449,6 +484,38 @@ onBeforeUnmount(() => {
         >
           {{ t('action.confirm') }}
         </button>
+      </template>
+    </AppModal>
+
+    <!-- Copy conflict: target platform already has a same-named skill. -->
+    <AppModal
+      :show="syncConflictOpen"
+      :title="t('sync.conflict_title')"
+      @close="syncConflictOpen = false"
+      width-class="w-[26rem]"
+    >
+      <p class="text-sm" style="color: var(--ink-2)">
+        {{ t('sync.conflict_message', { name: skillsStore.selectedSkillName }) }}
+      </p>
+      <template #footer>
+        <button class="btn btn-secondary" @click="syncConflictOpen = false">{{ t('sync.conflict_skip') }}</button>
+        <button class="btn btn-danger" @click="handleSyncConflictOverwrite">{{ t('sync.conflict_overwrite') }}</button>
+      </template>
+    </AppModal>
+
+    <!-- Restore conflict: original location re-occupied by a same-named skill. -->
+    <AppModal
+      :show="restoreConflictId !== null"
+      :title="t('trash.restore_conflict_title')"
+      @close="restoreConflictId = null"
+      width-class="w-[26rem]"
+    >
+      <p class="text-sm" style="color: var(--ink-2)">
+        {{ t('trash.restore_conflict_message', { name: restoreConflictName }) }}
+      </p>
+      <template #footer>
+        <button class="btn btn-secondary" @click="restoreConflictId = null">{{ t('trash.restore_conflict_skip') }}</button>
+        <button class="btn btn-danger" @click="handleRestoreConflictOverwrite">{{ t('trash.restore_conflict_overwrite') }}</button>
       </template>
     </AppModal>
 

@@ -90,7 +90,6 @@ async function handleKebabSync(skill: any) {
       return
     }
     store.syncTargetPlatformId = store.syncTargets[0].id
-    store.syncOverwrite = false
     store.syncPlatformModalOpen = true
   } catch (e: any) {
     showToast(String(e), 'error')
