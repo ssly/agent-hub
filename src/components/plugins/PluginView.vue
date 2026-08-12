@@ -6,10 +6,12 @@ import { useSkillsStore } from '@/stores/skills'
 import { useMcpStore } from '@/stores/mcp'
 import { useClaudePluginsStore } from '@/stores/claude-plugins'
 import { useZCodePluginsStore } from '@/stores/zcode-plugins'
+import { useQwenPluginsStore } from '@/stores/qwen-plugins'
 import SkillListView from '@/components/skills/SkillListView.vue'
 import McpListView from '@/components/mcp/McpListView.vue'
 import ClaudePluginList from '@/components/plugins/ClaudePluginList.vue'
 import ZCodePluginList from '@/components/plugins/ZCodePluginList.vue'
+import QwenPluginList from '@/components/plugins/QwenPluginList.vue'
 
 const { t, te } = useI18n()
 const pluginsStore = usePluginsStore()
@@ -17,18 +19,22 @@ const skillsStore = useSkillsStore()
 const mcpStore = useMcpStore()
 const claudePluginsStore = useClaudePluginsStore()
 const zcodePluginsStore = useZCodePluginsStore()
+const qwenPluginsStore = useQwenPluginsStore()
 
 const skillCount = computed(() => skillsStore.skills.length)
 const serverCount = computed(() => mcpStore.servers.length)
 const isClaudeCode = computed(() => pluginsStore.selectedPlatformId === 'claude-code')
 const isCodex = computed(() => pluginsStore.selectedPlatformId === 'codex')
 const isZCode = computed(() => pluginsStore.selectedPlatformId === 'zcode')
+const isQwen = computed(() => pluginsStore.selectedPlatformId === 'qwen')
 const showMcpSection = computed(() => Boolean(pluginsStore.selectedPlatform?.supports_mcp)
   && (pluginsStore.isGlobalScope || serverCount.value > 0))
 const showClaudeSection = computed(() => isClaudeCode.value
   && (pluginsStore.isGlobalScope || claudePluginsStore.plugins.length > 0))
 // ZCode 插件市场只有用户级数据，项目目录范围不展示该区块。
 const showZCodeSection = computed(() => isZCode.value && pluginsStore.isGlobalScope)
+// Qwen Code 扩展同理：只有用户级（~/.qwen/extensions）。
+const showQwenSection = computed(() => isQwen.value && pluginsStore.isGlobalScope)
 // Codex officially keeps user-level skills in Shared; show a jump
 // note instead of a duplicated skills section.
 const showSkillsSection = computed(() => !isCodex.value
@@ -126,6 +132,19 @@ function jumpToShared() {
           </div>
           <div class="ah-plugin-pane__body">
             <ZCodePluginList />
+          </div>
+        </section>
+
+        <section v-if="showQwenSection" class="ah-plugin-pane" aria-labelledby="plugin-qwen-heading">
+          <div class="ah-plugin-pane__header">
+            <div>
+              <h2 id="plugin-qwen-heading">{{ t('plugin.qwen_plugins') }}</h2>
+              <p>{{ t('plugin.qwen_plugins_hint') }}</p>
+            </div>
+            <span class="ah-plugin-count">{{ qwenPluginsStore.plugins.length }}</span>
+          </div>
+          <div class="ah-plugin-pane__body">
+            <QwenPluginList />
           </div>
         </section>
 

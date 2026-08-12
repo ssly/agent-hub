@@ -6,6 +6,7 @@ mod grok;
 mod kimi;
 mod kiro;
 mod models;
+mod qwen;
 mod zcode;
 
 #[cfg(target_os = "macos")]
@@ -73,6 +74,15 @@ pub fn list_session_platforms() -> Result<Vec<SessionPlatform>, String> {
         });
     }
 
+    let qwen_count = qwen::count_qwen_sessions()?;
+    if qwen_count > 0 {
+        platforms.push(SessionPlatform {
+            id: "qwen".to_string(),
+            display_name: "Qwen Code".to_string(),
+            session_count: qwen_count,
+        });
+    }
+
     let zcode_count = zcode::count_zcode_sessions()?;
     if zcode_count > 0 {
         platforms.push(SessionPlatform {
@@ -129,6 +139,7 @@ fn list_sessions_all(platform_id: &str) -> Result<Vec<models::SessionSummary>, S
         "kiro" => kiro::list_kiro_sessions_all(),
         "grok" => grok::list_grok_sessions_all(),
         "kimi" => kimi::list_kimi_sessions_all(),
+        "qwen" => qwen::list_qwen_sessions_all(),
         "zcode" => zcode::list_zcode_sessions_all(),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }?;
@@ -306,6 +317,7 @@ fn last_session_messages(
         "kiro" => kiro::last_kiro_messages(session_id),
         "grok" => grok::last_grok_messages(session_id),
         "kimi" => kimi::last_kimi_messages(session_id),
+        "qwen" => qwen::last_qwen_messages(session_id),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
 }
@@ -593,6 +605,7 @@ pub fn get_session_messages(
         "kiro" => kiro::get_kiro_messages(session_id, offset, limit),
         "grok" => grok::get_grok_messages(session_id, offset, limit),
         "kimi" => kimi::get_kimi_messages(session_id, offset, limit),
+        "qwen" => qwen::get_qwen_messages(session_id, offset, limit),
         "zcode" => zcode::get_zcode_messages(session_id, offset, limit),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
@@ -610,6 +623,7 @@ pub fn search_session_messages(
         "kiro" => kiro::search_kiro_messages(&query_lower),
         "grok" => grok::search_grok_messages(&query_lower),
         "kimi" => kimi::search_kimi_messages(&query_lower),
+        "qwen" => qwen::search_qwen_messages(&query_lower),
         "zcode" => zcode::search_zcode_messages(&query_lower),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
@@ -623,6 +637,7 @@ pub fn delete_session(platform_id: &str, session_id: &str) -> Result<(), String>
         "kiro" => kiro::delete_kiro_session(session_id),
         "grok" => grok::delete_grok_session(session_id),
         "kimi" => kimi::delete_kimi_session(session_id),
+        "qwen" => qwen::delete_qwen_session(session_id),
         "zcode" => zcode::delete_zcode_session(session_id),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
@@ -709,6 +724,12 @@ fn build_resume_command(platform_id: &str, session_id: &str) -> Result<String, S
                 return Err("Kimi Code CLI is not available on PATH.".to_string());
             }
             Ok(format!("kimi --session {}", shell_quote(session_id)))
+        }
+        "qwen" => {
+            if !command_exists("qwen") {
+                return Err("Qwen Code CLI is not available on PATH.".to_string());
+            }
+            Ok(format!("qwen --resume {}", shell_quote(session_id)))
         }
         "antigravity" => {
             if !command_exists("agy") {
@@ -855,6 +876,29 @@ mod tests {
         }
         let command = build_resume_command("kimi", "abc-123").expect("command should build");
         assert!(command.contains("kimi --session"));
+        assert!(command.contains("'abc-123'"));
+    }
+
+    #[test]
+    fn qwen_sessions_real_data_smoke_test() {
+        let sessions = qwen::list_qwen_sessions_all().expect("qwen scan should not fail");
+        if sessions.is_empty() {
+            return;
+        }
+        let first = &sessions[0];
+        let page = qwen::get_qwen_messages(&first.id, 0, 50);
+        if let Ok(messages) = page {
+            assert!(messages.len() <= 50);
+        }
+    }
+
+    #[test]
+    fn build_resume_command_for_qwen_contains_resume_flag() {
+        if !command_exists("qwen") {
+            return;
+        }
+        let command = build_resume_command("qwen", "abc-123").expect("command should build");
+        assert!(command.contains("qwen --resume"));
         assert!(command.contains("'abc-123'"));
     }
 

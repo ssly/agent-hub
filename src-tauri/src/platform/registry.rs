@@ -69,6 +69,13 @@ pub fn builtin_platforms() -> Vec<PlatformDef> {
             skill_dir: join_relative(home.clone(), ".kimi-code/skills"),
         },
         PlatformDef {
+            id: "qwen".into(),
+            display_name: "Qwen Code".into(),
+            description: "Alibaba Qwen Code agent skills".into(),
+            presence_path: home.join(".qwen"),
+            skill_dir: join_relative(home.clone(), ".qwen/skills"),
+        },
+        PlatformDef {
             id: "zcode".into(),
             display_name: "ZCode".into(),
             description: "Z.ai ZCode agent skills".into(),
@@ -132,6 +139,10 @@ mod tests {
             Some(root.join(".kimi-code").join("skills"))
         );
         assert_eq!(
+            workspace_skill_dir("qwen", &root),
+            Some(root.join(".qwen").join("skills"))
+        );
+        assert_eq!(
             workspace_skill_dir("zcode", &root),
             Some(root.join(".zcode").join("skills"))
         );
@@ -176,6 +187,7 @@ mod tests {
                 "antigravity",
                 "grok-build",
                 "kimi-code",
+                "qwen",
                 "zcode",
                 "kiro",
             ]

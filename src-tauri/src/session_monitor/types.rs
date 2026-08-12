@@ -9,6 +9,7 @@ pub enum AgentKind {
     Antigravity,
     Grok,
     Kimi,
+    Qwen,
     ZCode,
     Kiro,
 }
@@ -16,13 +17,14 @@ pub enum AgentKind {
 impl AgentKind {
     /// Same relative order as `platform/registry.rs` builtin platforms
     /// (monitor subset: no Shared).
-    pub const ALL: [AgentKind; 8] = [
+    pub const ALL: [AgentKind; 9] = [
         Self::Codex,
         Self::Claude,
         Self::Cursor,
         Self::Antigravity,
         Self::Grok,
         Self::Kimi,
+        Self::Qwen,
         Self::ZCode,
         Self::Kiro,
     ];
@@ -35,6 +37,7 @@ impl AgentKind {
             Self::Antigravity => "antigravity",
             Self::Grok => "grok",
             Self::Kimi => "kimi",
+            Self::Qwen => "qwen",
             Self::ZCode => "zcode",
             Self::Kiro => "kiro",
         }
@@ -48,6 +51,7 @@ impl AgentKind {
             Self::Antigravity => "antigravity-state.json",
             Self::Grok => "grok-state.json",
             Self::Kimi => "kimi-state.json",
+            Self::Qwen => "qwen-state.json",
             Self::ZCode => "zcode-state.json",
             Self::Kiro => "kiro-state.json",
         }
@@ -61,6 +65,7 @@ impl AgentKind {
             Self::Antigravity => "session-monitor:antigravity-changed",
             Self::Grok => "session-monitor:grok-changed",
             Self::Kimi => "session-monitor:kimi-changed",
+            Self::Qwen => "session-monitor:qwen-changed",
             Self::ZCode => "session-monitor:zcode-changed",
             Self::Kiro => "session-monitor:kiro-changed",
         }

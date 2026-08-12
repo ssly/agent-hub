@@ -15,7 +15,7 @@ export type SessionSource =
   /** Antigravity IDE surface. */
   | 'antigravity-ide'
 export type RuntimeStatus = 'running' | 'ended'
-export type MonitorAgent = 'codex' | 'claude' | 'cursor' | 'antigravity' | 'grok' | 'kimi' | 'zcode' | 'kiro'
+export type MonitorAgent = 'codex' | 'claude' | 'cursor' | 'antigravity' | 'grok' | 'kimi' | 'qwen' | 'zcode' | 'kiro'
 /** Same relative order as platform/registry.rs (skip Shared). */
 export const MONITOR_AGENTS: MonitorAgent[] = [
   'codex',
@@ -24,6 +24,7 @@ export const MONITOR_AGENTS: MonitorAgent[] = [
   'antigravity',
   'grok',
   'kimi',
+  'qwen',
   'zcode',
   'kiro',
 ]
@@ -41,6 +42,7 @@ export const MONITOR_AGENT_PLATFORM: Partial<Record<MonitorAgent, string>> = {
   antigravity: 'antigravity',
   grok: 'grok',
   kimi: 'kimi',
+  qwen: 'qwen',
   zcode: 'zcode',
   kiro: 'kiro',
 }
@@ -97,6 +99,7 @@ const CHANGED_EVENTS: Record<MonitorAgent, string> = {
   antigravity: 'session-monitor:antigravity-changed',
   grok: 'session-monitor:grok-changed',
   kimi: 'session-monitor:kimi-changed',
+  qwen: 'session-monitor:qwen-changed',
   zcode: 'session-monitor:zcode-changed',
   kiro: 'session-monitor:kiro-changed',
 }
@@ -108,6 +111,7 @@ const snapshotApi: Record<MonitorAgent, () => Promise<MonitorSnapshot>> = {
   antigravity: api.getAntigravitySessionMonitorSnapshot,
   grok: api.getGrokSessionMonitorSnapshot,
   kimi: api.getKimiSessionMonitorSnapshot,
+  qwen: api.getQwenSessionMonitorSnapshot,
   zcode: api.getZCodeSessionMonitorSnapshot,
   kiro: api.getKiroSessionMonitorSnapshot,
 }
@@ -119,6 +123,7 @@ const deleteSessionApi: Record<MonitorAgent, (sessionId: string) => Promise<void
   antigravity: api.deleteAntigravitySessionMonitorSession,
   grok: api.deleteGrokSessionMonitorSession,
   kimi: api.deleteKimiSessionMonitorSession,
+  qwen: api.deleteQwenSessionMonitorSession,
   zcode: api.deleteZCodeSessionMonitorSession,
   kiro: api.deleteKiroSessionMonitorSession,
 }
@@ -158,6 +163,11 @@ const hookApi: Record<HookAgent, {
     preview: api.previewKimiHookChange,
     apply: api.applyKimiHookChange,
   },
+  qwen: {
+    status: api.getQwenHookStatus,
+    preview: api.previewQwenHookChange,
+    apply: api.applyQwenHookChange,
+  },
   zcode: {
     status: api.getZCodeHookStatus,
     preview: api.previewZCodeHookChange,
@@ -187,6 +197,7 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     antigravity: emptySnapshot(),
     grok: emptySnapshot(),
     kimi: emptySnapshot(),
+    qwen: emptySnapshot(),
     zcode: emptySnapshot(),
     kiro: emptySnapshot(),
   })
@@ -197,6 +208,7 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     antigravity: null,
     grok: null,
     kimi: null,
+    qwen: null,
     zcode: null,
     kiro: null,
   })
@@ -211,6 +223,17 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
   /** True after the first successful hydrate — re-entering the tab can paint
    *  from cache immediately while a background refresh catches up. */
   const hydrated = ref(false)
+  /** Agents whose platform presence directory exists (backend probe).
+   *  null = not loaded yet → show every agent (no first-paint flicker or
+   *  empty sidebar); a failed probe stays null for the same reason. */
+  const availableAgents = ref<MonitorAgent[] | null>(null)
+  /** MONITOR_AGENTS filtered to installed platforms once availability lands. */
+  const visibleAgents = computed<MonitorAgent[]>(() =>
+    availableAgents.value === null
+      ? [...MONITOR_AGENTS]
+      : MONITOR_AGENTS.filter(agent => availableAgents.value!.includes(agent)),
+  )
+  let availabilityRequested = false
   let listenersReady = false
   let unlisten: (() => void)[] = []
   let refreshSeq = 0
@@ -228,7 +251,7 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
   const displaySessions = computed<AgentSessionState[]>(() => {
     const tab = activeAgent.value
     const sessions = tab === 'all'
-      ? MONITOR_AGENTS.flatMap(agent =>
+      ? visibleAgents.value.flatMap(agent =>
         snapshots.value[agent].sessions.map(session => ({ ...session, agent })),
       )
       : snapshots.value[tab].sessions.map(session => ({ ...session, agent: tab }))
@@ -342,11 +365,38 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
   }
 
   /**
+   * Probe which agents are installed (platform presence directories, backend
+   * side). Best-effort like ensureListeners: outside Tauri or on failure the
+   * list stays null and every agent keeps showing.
+   */
+  async function loadAvailability() {
+    if (availabilityRequested) return
+    availabilityRequested = true
+    const isTauri = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__
+    if (!isTauri) return
+    try {
+      const ids = await api.listAvailableMonitorAgents()
+      availableAgents.value = MONITOR_AGENTS.filter(agent => ids.includes(agent))
+      // Active tab got filtered out → fall back to the first visible agent.
+      if (
+        activeAgent.value !== 'all'
+        && !visibleAgents.value.includes(activeAgent.value)
+      ) {
+        activeAgent.value = visibleAgents.value[0] ?? 'all'
+      }
+    } catch {
+      // Stay null (full list) — availability must never hide agents on error.
+      availabilityRequested = false
+    }
+  }
+
+  /**
    * Start data loading. Must be scheduled *after* the loading UI paints
    * (see SessionMonitorView). Never blocks the caller — all IPC is fire-and-forget.
    */
   function initialize() {
     void ensureListeners()
+    void loadAvailability()
     if (hydrated.value) {
       void refresh({ background: true })
       return
@@ -459,6 +509,8 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     preview,
     previewError,
     hydrated,
+    availableAgents,
+    visibleAgents,
     beginEnter,
     initialize,
     refresh,

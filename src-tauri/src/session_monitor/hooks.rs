@@ -1,6 +1,6 @@
 use super::capture::{
     ANTIGRAVITY_HOOK_ARG, CLAUDE_HOOK_ARG, CODEX_HOOK_ARG, CURSOR_HOOK_ARG, GROK_HOOK_ARG,
-    KIMI_HOOK_ARG, KIRO_HOOK_ARG, ZCODE_HOOK_ARG,
+    KIMI_HOOK_ARG, KIRO_HOOK_ARG, QWEN_HOOK_ARG, ZCODE_HOOK_ARG,
 };
 use super::types::{AgentKind, HookChangePreview, HookDiffLine, HookStatus};
 use crate::win_console::suppress_console;
@@ -65,6 +65,12 @@ fn managed_events(agent: AgentKind) -> &'static [&'static str] {
             SUBAGENT_START,
             SUBAGENT_STOP,
         ],
+        // Qwen Code is structurally identical to Claude Code (snake_case
+        // payloads, matcher groups, no trust gate). Official semantics: Stop
+        // fires for the main turn only, sub-agents end via SubagentStop — no
+        // marker filtering needed, so SubagentStart/SubagentStop stay
+        // unregistered, exactly like Claude Code.
+        AgentKind::Qwen => &[USER_PROMPT_SUBMIT, STOP, STOP_FAILURE],
         // ZCode snapshots hook config at session start; its two managed
         // events take no matcher.
         AgentKind::ZCode => &[USER_PROMPT_SUBMIT, STOP],
@@ -109,6 +115,7 @@ fn hook_arg(agent: AgentKind) -> Result<&'static str, String> {
         AgentKind::Cursor => Ok(CURSOR_HOOK_ARG),
         AgentKind::Grok => Ok(GROK_HOOK_ARG),
         AgentKind::Kimi => Ok(KIMI_HOOK_ARG),
+        AgentKind::Qwen => Ok(QWEN_HOOK_ARG),
         AgentKind::ZCode => Ok(ZCODE_HOOK_ARG),
         AgentKind::Antigravity => Ok(ANTIGRAVITY_HOOK_ARG),
         AgentKind::Kiro => Ok(KIRO_HOOK_ARG),
@@ -126,6 +133,10 @@ fn config_path(agent: AgentKind) -> Result<PathBuf, String> {
         // shared one.
         AgentKind::Grok => Ok(home.join(".grok").join("hooks").join("agent-hub.json")),
         AgentKind::Kimi => Ok(home.join(".kimi-code").join("config.toml")),
+        // Qwen Code keeps hooks in its main settings.json (Claude Code
+        // shape), so the generic surgical JSON path preserves other user
+        // config untouched.
+        AgentKind::Qwen => Ok(home.join(".qwen").join("settings.json")),
         AgentKind::ZCode => Ok(home.join(".zcode").join("cli").join("config.json")),
         // Shared by agy CLI, Antigravity 2.0, and IDE (docs + community).
         AgentKind::Antigravity => Ok(home.join(".gemini").join("config").join("hooks.json")),
@@ -142,6 +153,7 @@ fn config_label(agent: AgentKind) -> &'static str {
         AgentKind::Cursor => "Cursor Hook 配置文件",
         AgentKind::Grok => "Grok Hook 文件",
         AgentKind::Kimi => "Kimi Code 配置文件",
+        AgentKind::Qwen => "Qwen Code 配置文件",
         AgentKind::ZCode => "ZCode 配置文件",
         AgentKind::Antigravity => "Antigravity Hook 配置文件",
         AgentKind::Kiro => "Kiro Hook 文件",
@@ -155,10 +167,39 @@ fn agent_label(agent: AgentKind) -> &'static str {
         AgentKind::Cursor => "Cursor",
         AgentKind::Grok => "Grok Build",
         AgentKind::Kimi => "Kimi Code",
+        AgentKind::Qwen => "Qwen Code",
         AgentKind::ZCode => "ZCode",
         AgentKind::Antigravity => "Antigravity",
         AgentKind::Kiro => "Kiro",
     }
+}
+
+/// Presence directory proving an agent is installed on this machine. Mirrors
+/// `platform/registry.rs` `presence_path` (which the Plugins tab uses to
+/// filter its sidebar) so the Monitor tab can hide uninstalled agents with
+/// the same semantics. None when the home directory is unavailable.
+pub fn agent_presence_path(agent: AgentKind) -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+    Some(match agent {
+        AgentKind::Codex => home.join(".codex"),
+        AgentKind::Claude => home.join(".claude"),
+        AgentKind::Cursor => home.join(".cursor"),
+        AgentKind::Antigravity => home.join(".gemini").join("config"),
+        AgentKind::Grok => home.join(".grok"),
+        AgentKind::Kimi => home.join(".kimi-code"),
+        AgentKind::Qwen => home.join(".qwen"),
+        AgentKind::ZCode => home.join(".zcode"),
+        AgentKind::Kiro => home.join(".kiro"),
+    })
+}
+
+/// Whether the agent looks installed (its presence directory exists). An
+/// unavailable home directory degrades to "available" so an environment
+/// failure never hides agents from the UI.
+pub fn agent_available(agent: AgentKind) -> bool {
+    agent_presence_path(agent)
+        .map(|path| path.exists())
+        .unwrap_or(true)
 }
 
 pub fn get_hook_status(agent: AgentKind) -> Result<HookStatus, String> {
@@ -1990,6 +2031,60 @@ mod tests {
     }
 
     #[test]
+    fn qwen_install_preserves_settings_and_uninstall_removes_only_managed() {
+        let before = r#"{
+  "model": "qwen3-coder-plus",
+  "mcpServers": {"docs": {"command": "docs-mcp"}},
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "all",
+        "hooks": [
+          {"type": "command", "command": "existing-command"}
+        ]
+      }
+    ]
+  }
+}
+"#;
+        let path = Path::new("/tmp/qwen-settings.json");
+        let command = "agent-hub --agent-hub-qwen-hook";
+        let after = render_after(
+            AgentKind::Qwen,
+            HookAction::Install,
+            path,
+            command,
+            QWEN_HOOK_ARG,
+            before,
+        )
+        .unwrap();
+        let root: Value = serde_json::from_str(&after).unwrap();
+        assert_eq!(root["model"], "qwen3-coder-plus");
+        assert!(root.get("mcpServers").is_some());
+        // Three managed events: UserPromptSubmit + Stop + StopFailure.
+        assert_eq!(managed_command_count(&root, QWEN_HOOK_ARG), 3);
+        assert!(managed_commands_for(&root, USER_PROMPT_SUBMIT, QWEN_HOOK_ARG).len() == 1);
+        assert!(managed_commands_for(&root, STOP, QWEN_HOOK_ARG).len() == 1);
+        assert!(managed_commands_for(&root, STOP_FAILURE, QWEN_HOOK_ARG).len() == 1);
+        assert!(after.contains("existing-command"));
+
+        let after_uninstall = render_after(
+            AgentKind::Qwen,
+            HookAction::Uninstall,
+            path,
+            command,
+            QWEN_HOOK_ARG,
+            &after,
+        )
+        .unwrap();
+        let root: Value = serde_json::from_str(&after_uninstall).unwrap();
+        assert_eq!(managed_command_count(&root, QWEN_HOOK_ARG), 0);
+        assert!(after_uninstall.contains("existing-command"));
+        assert_eq!(root["model"], "qwen3-coder-plus");
+        assert!(root.get("mcpServers").is_some());
+    }
+
+    #[test]
     fn cursor_install_uses_direct_lifecycle_handlers_and_preserves_existing_hooks() {
         let before = r#"{
   "version": 1,
@@ -2525,5 +2620,41 @@ enabled = false
             windows_hook_command(GROK_HOOK_ARG, runner),
             format!("\"{runner}\" {GROK_HOOK_ARG}")
         );
+    }
+
+    #[test]
+    fn agent_presence_path_covers_every_agent() {
+        // The mapping must stay exhaustive (compiler-enforced) and aligned
+        // with platform/registry.rs presence_path values.
+        let expected: [(AgentKind, &str); 9] = [
+            (AgentKind::Codex, ".codex"),
+            (AgentKind::Claude, ".claude"),
+            (AgentKind::Cursor, ".cursor"),
+            (AgentKind::Antigravity, ".gemini/config"),
+            (AgentKind::Grok, ".grok"),
+            (AgentKind::Kimi, ".kimi-code"),
+            (AgentKind::Qwen, ".qwen"),
+            (AgentKind::ZCode, ".zcode"),
+            (AgentKind::Kiro, ".kiro"),
+        ];
+        assert_eq!(AgentKind::ALL.len(), expected.len());
+        for (agent, suffix) in expected {
+            let path = agent_presence_path(agent).expect("home directory is available in tests");
+            assert!(
+                path.ends_with(suffix),
+                "presence path for {:?} should end with {suffix}, got {}",
+                agent,
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn agent_available_never_panics_for_any_agent() {
+        // Result depends on the real home directory; just exercise every
+        // variant (an unavailable home must degrade to `true`).
+        for agent in AgentKind::ALL {
+            let _ = agent_available(agent);
+        }
     }
 }

@@ -70,6 +70,14 @@ pub fn builtin_mcp_platforms() -> Vec<McpPlatformDef> {
             mcp_key: "mcpServers".into(),
         },
         McpPlatformDef {
+            id: "qwen".into(),
+            display_name: "Qwen Code".into(),
+            presence_path: home.join(".qwen"),
+            config_path: join_relative(home.clone(), ".qwen/settings.json"),
+            format: McpFormat::Json,
+            mcp_key: "mcpServers".into(),
+        },
+        McpPlatformDef {
             id: "zcode".into(),
             display_name: "ZCode".into(),
             presence_path: home.join(".zcode"),
@@ -107,6 +115,7 @@ pub fn find_workspace_mcp_platform(
         "antigravity" => workspace.join(".agents").join("mcp_config.json"),
         "grok-build" => workspace.join(".grok").join("config.toml"),
         "kimi-code" => workspace.join(".kimi-code").join("mcp.json"),
+        "qwen" => workspace.join(".qwen").join("settings.json"),
         "cursor" => workspace.join(".cursor").join("mcp.json"),
         "kiro" => workspace.join(".kiro").join("settings").join("mcp.json"),
         _ => return None,
@@ -150,6 +159,12 @@ mod tests {
                 .unwrap()
                 .config_path,
             root.join(".kimi-code").join("mcp.json")
+        );
+        assert_eq!(
+            find_workspace_mcp_platform("qwen", &root)
+                .unwrap()
+                .config_path,
+            root.join(".qwen").join("settings.json")
         );
     }
 

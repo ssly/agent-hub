@@ -4,12 +4,14 @@ import { useSkillsStore } from './skills'
 import { useMcpStore } from './mcp'
 import { useClaudePluginsStore } from './claude-plugins'
 import { useZCodePluginsStore } from './zcode-plugins'
+import { useQwenPluginsStore } from './qwen-plugins'
 
 export const usePluginsStore = defineStore('plugins', () => {
   const skillsStore = useSkillsStore()
   const mcpStore = useMcpStore()
   const claudePluginsStore = useClaudePluginsStore()
   const zcodePluginsStore = useZCodePluginsStore()
+  const qwenPluginsStore = useQwenPluginsStore()
   // Migrate pre-rename platform id so the last selection still opens.
   const storedPlatformId = localStorage.getItem('ah-plugin-platform')
   const initialPlatformId =
@@ -31,6 +33,7 @@ export const usePluginsStore = defineStore('plugins', () => {
       cursor: '.cursor/skills',
       'grok-build': '.grok/skills',
       'kimi-code': '.kimi-code/skills',
+      qwen: '.qwen/skills',
       zcode: '.zcode/skills',
       kiro: '.kiro/skills',
       shared: '.agents/skills',
@@ -99,6 +102,10 @@ export const usePluginsStore = defineStore('plugins', () => {
       id === 'zcode' && !workspaceDirectory.value
         ? zcodePluginsStore.loadPlugins()
         : Promise.resolve(zcodePluginsStore.clear()),
+      // Qwen Code 扩展同理：只有用户级（~/.qwen/extensions）。
+      id === 'qwen' && !workspaceDirectory.value
+        ? qwenPluginsStore.loadPlugins()
+        : Promise.resolve(qwenPluginsStore.clear()),
     ])
   }
 

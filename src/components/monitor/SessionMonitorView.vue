@@ -11,7 +11,6 @@ import { useToast } from '@/composables/useToast'
 import {
   useSessionMonitorStore,
   HOOK_AGENTS,
-  MONITOR_AGENTS,
   MONITOR_AGENT_PLATFORM,
   type MonitorAgent,
   type HookAgent,
@@ -43,6 +42,7 @@ const HOOK_CONFIG_PATHS: Record<string, string> = {
   antigravity: '~/.gemini/config/hooks.json',
   grok: '~/.grok/hooks/agent-hub.json',
   kimi: '~/.kimi-code/config.toml',
+  qwen: '~/.qwen/settings.json',
   zcode: '~/.zcode/cli/config.json',
   kiro: '~/.kiro/hooks/agent-hub.json',
 }
@@ -56,7 +56,7 @@ const runningCount = computed(
 // version). Only a reinstall brings them up to date, so one banner covers
 // every tab — including the merged "all" view, which has no hook card.
 const outdatedHookAgents = computed(() =>
-  HOOK_AGENTS.filter(agent => {
+  store.visibleAgents.filter(agent => {
     const status = store.hookStatuses[agent]
     return status ? !status.installed && status.managedHandlerCount > 0 : false
   }),
@@ -79,7 +79,7 @@ const primaryNotice = computed<{ kind: 'info' | 'warning' | 'error'; text: strin
   if (store.activeAgent === 'codex' && store.hookStatus?.installed) {
     return { kind: 'warning', text: t('session_monitor.trust_hint') }
   }
-  if ((['cursor', 'grok', 'kimi', 'zcode', 'antigravity'] as string[]).includes(store.activeAgent) && store.hookStatus?.installed) {
+  if ((['cursor', 'grok', 'kimi', 'qwen', 'zcode', 'antigravity'] as string[]).includes(store.activeAgent) && store.hookStatus?.installed) {
     return { kind: 'info', text: t('session_monitor.hook_reload_hint') }
   }
   return null
@@ -90,7 +90,7 @@ const primaryNotice = computed<{ kind: 'info' | 'warning' | 'error'; text: strin
 // after a proper install. Clicking a tag jumps to that agent's tab for
 // install/repair.
 const agentTags = computed(() =>
-  MONITOR_AGENTS.map(agent => ({
+  store.visibleAgents.map(agent => ({
     agent,
     enabled: !!store.hookStatuses[agent as HookAgent]?.installed,
   })),

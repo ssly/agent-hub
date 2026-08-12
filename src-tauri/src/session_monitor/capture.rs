@@ -10,6 +10,7 @@ pub const CLAUDE_HOOK_ARG: &str = "--agent-hub-claude-hook";
 pub const CURSOR_HOOK_ARG: &str = "--agent-hub-cursor-hook";
 pub const GROK_HOOK_ARG: &str = "--agent-hub-grok-hook";
 pub const KIMI_HOOK_ARG: &str = "--agent-hub-kimi-hook";
+pub const QWEN_HOOK_ARG: &str = "--agent-hub-qwen-hook";
 pub const ZCODE_HOOK_ARG: &str = "--agent-hub-zcode-hook";
 pub const ANTIGRAVITY_HOOK_ARG: &str = "--agent-hub-antigravity-hook";
 pub const KIRO_HOOK_ARG: &str = "--agent-hub-kiro-hook";
@@ -58,6 +59,8 @@ pub fn try_capture_hook_event() -> bool {
         AgentKind::Grok
     } else if std::env::args().any(|arg| arg == KIMI_HOOK_ARG) {
         AgentKind::Kimi
+    } else if std::env::args().any(|arg| arg == QWEN_HOOK_ARG) {
+        AgentKind::Qwen
     } else if std::env::args().any(|arg| arg == ZCODE_HOOK_ARG) {
         AgentKind::ZCode
     } else if std::env::args().any(|arg| arg == ANTIGRAVITY_HOOK_ARG) {
@@ -402,6 +405,13 @@ fn payload_matches_agent(agent: AgentKind, input: &serde_json::Value) -> bool {
         // Claude Code always wraps hook payloads in snake_case. A camelCase-
         // only hookEventName means another CLI invoked our handler.
         AgentKind::Claude => string_field(input, "hook_event_name").is_some(),
+        // Qwen Code payloads are snake_case and always carry session_id —
+        // same shape as Claude Code. A camelCase payload (e.g. Grok executing
+        // our handler with its own shape) is rejected as foreign.
+        AgentKind::Qwen => {
+            string_field(input, "hook_event_name").is_some()
+                && string_field(input, "session_id").is_some()
+        }
         // Every genuine Cursor hook payload carries conversation_id.
         AgentKind::Cursor => string_field(input, "conversation_id").is_some(),
         _ => true,
@@ -1015,6 +1025,59 @@ mod tests {
             unwrap_grok_user_query("<user_query>\n</user_query>"),
             "<user_query>\n</user_query>"
         );
+    }
+
+    #[test]
+    fn qwen_payload_fields_are_extracted() {
+        // Qwen Code payloads are snake_case, same shape as Claude Code:
+        // session_id + hook_event_name + cwd; UserPromptSubmit carries a
+        // plain-string prompt, Stop carries last_assistant_message.
+        let prompt_input = serde_json::json!({
+            "session_id": "9f2c1a",
+            "hook_event_name": "UserPromptSubmit",
+            "cwd": "/Users/demo/projects/qwen-app",
+            "transcript_path": "/Users/demo/.qwen/projects/demo/9f2c1a.jsonl",
+            "timestamp": "2026-08-11T12:00:00Z",
+            "prompt": "把设置页改成暗色主题"
+        });
+        assert_eq!(
+            string_field_any(&prompt_input, &["session_id", "sessionId", "conversation_id"])
+                .as_deref(),
+            Some("9f2c1a")
+        );
+        assert_eq!(prompt_field(&prompt_input).as_deref(), Some("把设置页改成暗色主题"));
+        assert_eq!(cwd_field(&prompt_input).as_deref(), Some("/Users/demo/projects/qwen-app"));
+        assert_eq!(resolve_turn_id(&prompt_input, "event-1"), "event-1");
+
+        let stop_input = serde_json::json!({
+            "session_id": "9f2c1a",
+            "hook_event_name": "Stop",
+            "last_assistant_message": "已切换为暗色主题。",
+            "stop_hook_active": false
+        });
+        assert_eq!(
+            assistant_reply_field(AgentKind::Qwen, &stop_input).as_deref(),
+            Some("已切换为暗色主题。")
+        );
+
+        // StopFailure normalizes to Stop so an API-error turn never stays
+        // "running" (same decision as Claude Code).
+        assert_eq!(canonical_event_name("StopFailure"), Some("Stop"));
+        // SubagentStart/SubagentStop are not registered and would be ignored.
+        assert_eq!(canonical_event_name("SubagentStart"), None);
+    }
+
+    #[test]
+    fn qwen_provenance_guard_rejects_camelcase_payloads() {
+        // Genuine Qwen Code payload: snake_case hook_event_name + session_id.
+        let qwen = serde_json::json!({"hook_event_name": "Stop", "session_id": "s1"});
+        assert!(payload_matches_agent(AgentKind::Qwen, &qwen));
+        // Grok executing our Qwen hook with its own camelCase payload.
+        let grok = serde_json::json!({"hookEventName": "stop", "sessionId": "s2"});
+        assert!(!payload_matches_agent(AgentKind::Qwen, &grok));
+        // Missing session_id alone is also foreign.
+        let no_session = serde_json::json!({"hook_event_name": "Stop"});
+        assert!(!payload_matches_agent(AgentKind::Qwen, &no_session));
     }
 
     #[test]
