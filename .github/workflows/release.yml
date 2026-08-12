@@ -60,6 +60,30 @@ jobs:
           releaseBody: ${{ env.RELEASE_BODY }}
           args: ${{ matrix.args }}
 
+      # User-facing installers download as agent-hub_*; updater artifacts
+      # (.app.tar.gz / .nsis.zip / .sig / latest.json) keep their original
+      # names so the updater manifest stays valid (signatures cover content,
+      # not names — but we don't touch those files at all).
+      - name: Rename installer assets to agent-hub format
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          for asset in $(gh release view "$TAG" --json assets --jq '.assets[].name'); do
+            case "$asset" in
+              "Agent Hub_"*.dmg | "Agent Hub_"*-setup.exe)
+                renamed="agent-hub_${asset#Agent Hub_}"
+                echo "Renaming: $asset → $renamed"
+                gh release download "$TAG" --pattern "$asset" --clobber
+                mv "$asset" "$renamed"
+                gh release upload "$TAG" "$renamed"
+                gh release delete-asset "$TAG" "$asset" --yes
+                rm -f "$renamed"
+                ;;
+            esac
+          done
+
       - name: Verify updater manifests
         shell: bash
         run: |

@@ -125,6 +125,7 @@ fn build_html(platform_id: &str, locale: &str, conversations: &[ExportConversati
         "kiro" => "Kiro",
         "grok" => "Grok Build",
         "kimi" => "Kimi Code",
+        "qwen" => "Qwen Code",
         "zcode" => "ZCode",
         _ => platform_id,
     };
@@ -196,7 +197,7 @@ fn build_html(platform_id: &str, locale: &str, conversations: &[ExportConversati
 <body>
 <div class="layout">
   <aside class="sidebar">
-    <p class="brand">AGENT HUB</p>
+    <p class="brand">Agent Hub</p>
     <h1>{title}</h1>
     <p class="summary">{platform} · {count} {exported_count} · {messages} {message_label}</p>
     <input id="search" class="search" type="search" placeholder="{search_placeholder}" autocomplete="off">
