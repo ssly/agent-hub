@@ -244,16 +244,16 @@ pub fn get_hook_status(agent: AgentKind) -> Result<HookStatus, String> {
     let issue = if installed || managed_handler_count == 0 {
         // Claude Code lets users disable every hook with one switch; an
         // installed-but-disabled hook looks broken, so surface it.
-        if agent == AgentKind::Claude
+        if matches!(agent, AgentKind::Claude | AgentKind::Qwen)
             && root
                 .get("disableAllHooks")
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
         {
-            Some(
-                "Claude Code 已设置 disableAllHooks，所有 Hook 都不会执行，请先关闭该选项。"
-                    .to_string(),
-            )
+            Some(format!(
+                "{} 已设置 disableAllHooks，所有 Hook 都不会执行，请先关闭该选项。",
+                agent_label(agent)
+            ))
         } else if agent == AgentKind::Codex && installed {
             // hooks.json written is not enough: Codex only runs handlers it
             // trusts. An installed-but-untrusted hook silently never fires.
@@ -443,8 +443,14 @@ fn render_after(
     remove_managed_handlers(agent, &mut root, arg)?;
     if action == HookAction::Install {
         let timeout = managed_handler_timeout(agent);
+        // shell: powershell is a Windows-only escape hatch for spaced paths.
+        // macOS / Linux keep the existing quoted-exe command with no shell field.
+        #[cfg(target_os = "windows")]
+        let shell = hook_shell_override(agent, command);
+        #[cfg(not(target_os = "windows"))]
+        let shell = None;
         for event in managed_events(agent) {
-            append_managed_handler(&mut root, event, command, timeout)?;
+            append_managed_handler(&mut root, event, command, timeout, shell)?;
         }
     }
     let mut rendered = serde_json::to_string_pretty(&root)
@@ -485,6 +491,7 @@ fn append_managed_handler(
     event_name: &str,
     command: &str,
     timeout: u64,
+    shell: Option<&str>,
 ) -> Result<(), String> {
     let root_object = root
         .as_object_mut()
@@ -499,12 +506,16 @@ fn append_managed_handler(
         .or_insert_with(|| Value::Array(Vec::new()))
         .as_array_mut()
         .ok_or_else(|| format!("hooks.{event_name} 必须是数组，已停止安装以保护原配置。"))?;
+    let mut handler = json!({
+        "type": "command",
+        "command": command,
+        "timeout": timeout
+    });
+    if let Some(shell) = shell {
+        handler["shell"] = json!(shell);
+    }
     groups.push(json!({
-        "hooks": [{
-            "type": "command",
-            "command": command,
-            "timeout": timeout
-        }]
+        "hooks": [handler]
     }));
     Ok(())
 }
@@ -654,26 +665,42 @@ fn ensure_windows_hook_runner() -> Result<PathBuf, String> {
 
 /// Windows hook command string.
 ///
-/// Codex executes hook commands through the *session shell* — codex-rs
-/// `core/src/session/mod.rs::build_hooks_for_config` derives the shell from
-/// the session environment (PowerShell by default on Windows) and runs
-/// `powershell.exe -NoProfile -Command "<command>"`. A bare quoted path like
-/// `"C:\…\agent-hub-hook.cmd" --agent-hub-codex-hook` is a PowerShell *parse
-/// error* ("Unexpected token '--agent-hub-codex-hook'") because invoking a
-/// quoted string needs the `&` call operator; the hook exits with code 1
-/// before our binary ever runs. Prefixing `cmd /c` turns the string into a
-/// native command invocation, which parses in PowerShell and still resolves
-/// under a cmd session shell (cmd's /c quote rules tolerate the nesting).
-/// The cmd hop is also what keeps piped stdin attached to our GUI-subsystem
-/// binary. Other agents spawn hook commands through cmd (or direct
-/// CreateProcess of the .cmd shim) and are verified with the bare quoted
-/// form, so only Codex gets the prefix.
+/// Codex executes hook commands through the *session shell* — PowerShell by
+/// default — as `powershell -NoProfile -Command "<command>"`. A bare quoted
+/// path is a parse error there, so Codex gets `cmd /c "shim" --arg`.
+///
+/// Qwen Code's hookRunner is different: `spawn(cmd.exe, ['/d','/s','/c',
+/// command], {shell:false})`. Node then QuoteCmdArg-wraps `command`, and
+/// cmd `/s` strips the outer quotes leaving `\"path\"`. Both
+/// `"path" --arg` and `cmd /c "path" --arg` become "not recognized as an
+/// internal or external command" (verified on a real Windows box). The
+/// string that survives is an *unquoted* path when it has no spaces:
+/// `C:\Users\you\.agent-hub\hook-runner\agent-hub-hook.cmd --arg`.
+/// Paths with spaces cannot be quoted under that wrap; those go through
+/// Qwen's `shell: "powershell"` override and `& 'path' --arg`.
 #[cfg(any(target_os = "windows", test))]
 fn windows_hook_command(arg: &str, runner_path: &str) -> String {
     if arg == CODEX_HOOK_ARG {
         format!("cmd /c \"{runner_path}\" {arg}")
+    } else if arg == QWEN_HOOK_ARG {
+        if runner_path.chars().any(char::is_whitespace) {
+            format!("& '{}' {arg}", runner_path.replace('\'', "''"))
+        } else {
+            format!("{runner_path} {arg}")
+        }
     } else {
         format!("\"{runner_path}\" {arg}")
+    }
+}
+
+/// Qwen on Windows: when the shim path has spaces the command is a
+/// PowerShell call operator, so the handler must set `shell: powershell`.
+#[cfg(target_os = "windows")]
+fn hook_shell_override(agent: AgentKind, command: &str) -> Option<&'static str> {
+    if agent == AgentKind::Qwen && command.starts_with("& '") {
+        Some("powershell")
+    } else {
+        None
     }
 }
 
@@ -2674,6 +2701,17 @@ enabled = false
         assert_eq!(
             windows_hook_command(CODEX_HOOK_ARG, runner),
             format!("cmd /c \"{runner}\" {CODEX_HOOK_ARG}")
+        );
+        // Qwen: unquoted path (cmd /d /s /c + Node quoting cannot keep
+        // inner quotes). Paths with spaces use a PowerShell call operator.
+        assert_eq!(
+            windows_hook_command(QWEN_HOOK_ARG, runner),
+            format!("{runner} {QWEN_HOOK_ARG}")
+        );
+        let spaced = r"C:\Users\John Doe\.agent-hub\hook-runner\agent-hub-hook.cmd";
+        assert_eq!(
+            windows_hook_command(QWEN_HOOK_ARG, spaced),
+            format!("& '{spaced}' {QWEN_HOOK_ARG}")
         );
         // Other agents are verified with the bare quoted shim form.
         assert_eq!(

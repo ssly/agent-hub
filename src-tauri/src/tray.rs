@@ -356,12 +356,37 @@ fn geometry_recently_owned() -> bool {
 }
 
 /// Physical width of a real slid-out panel (never the dock strip).
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn is_panel_physical_width(width: u32, scale: f64) -> bool {
     // Mini mode floor is TRAY_MINI_WIDTH; strip is ~20 logical px. Anything
     // near strip width is a poisoned remember and must not be reused.
     let min = (TRAY_MINI_WIDTH * scale * 0.85).round().max(1.0) as u32;
     width >= min
+}
+
+/// True when a remembered HWND is a real panel, not the strip and not a
+/// Windows Snap / WebView2-inflated monitor box. Width-only checks used to
+/// accept a half-screen snap (e.g. 960×1080) and the next hover-expand
+/// restored that huge transparent frame.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+fn is_plausible_panel_size(width: u32, height: u32, scale: f64) -> bool {
+    if !is_panel_physical_width(width, scale) {
+        return false;
+    }
+    let max_w = (TRAY_WINDOW_WIDTH * scale * 1.25).round().max(1.0) as u32;
+    let min_h = (TRAY_LOADING_HEIGHT * scale * 0.85).round().max(1.0) as u32;
+    let max_h = (TRAY_MAX_HEIGHT * scale * 1.25).round().max(1.0) as u32;
+    width <= max_w && height >= min_h && height <= max_h
+}
+
+/// Last-line clamp so an applied panel frame can never become a monitor tile.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+fn clamp_panel_physical(width: u32, height: u32, scale: f64) -> (u32, u32) {
+    let min_w = (TRAY_MINI_WIDTH * scale).round().max(1.0) as u32;
+    let max_w = (TRAY_WINDOW_WIDTH * scale).round().max(1.0) as u32;
+    let min_h = (TRAY_LOADING_HEIGHT * scale).round().max(1.0) as u32;
+    let max_h = (TRAY_MAX_HEIGHT * scale).round().max(1.0) as u32;
+    (width.clamp(min_w, max_w), height.clamp(min_h, max_h))
 }
 
 /// Apply a physical frame and suppress the synthetic Moved/focus events it
@@ -378,7 +403,7 @@ fn set_tray_physical_frame(window: &tauri::WebviewWindow, x: i32, y: i32, w: u32
 /// (not the dock strip or a half-applied intermediate frame).
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn store_dock_panel_rect(scale: f64, rect: (i32, i32, u32, u32)) {
-    if !is_panel_physical_width(rect.2, scale) {
+    if !is_plausible_panel_size(rect.2, rect.3, scale) {
         return;
     }
     if let Ok(mut stored) = DOCK_PANEL.lock() {
@@ -511,7 +536,7 @@ fn panel_rect(ctx: &SnapCtx, strip_y: i32) -> (i32, i32, u32, u32) {
     // resort fall back to a default size aligned with the strip.
     // Reject strip-sized "memories" (Windows race can poison DOCK_PANEL).
     let pick = |rect: (i32, i32, u32, u32)| -> Option<(u32, u32, i32)> {
-        if is_panel_physical_width(rect.2, ctx.scale) {
+        if is_plausible_panel_size(rect.2, rect.3, ctx.scale) {
             Some((rect.2, rect.3, rect.1))
         } else {
             None
@@ -537,6 +562,7 @@ fn panel_rect(ctx: &SnapCtx, strip_y: i32) -> (i32, i32, u32, u32) {
             strip_y,
         ),
     };
+    let (width, height) = clamp_panel_physical(width, height, ctx.scale);
     (
         if ctx.edge == "left" {
             ctx.fx
@@ -743,7 +769,7 @@ fn try_snap_tray(window: &tauri::WebviewWindow) {
         return;
     };
     // Only remember a real floating-panel size for later hover-expand.
-    if is_panel_physical_width(size.width, ctx.scale) {
+    if is_plausible_panel_size(size.width, size.height, ctx.scale) {
         if let Ok(mut pre) = PRE_DOCK.lock() {
             *pre = Some((pos.x, pos.y, size.width, size.height));
         }
@@ -842,34 +868,90 @@ fn animate_tray_window(
     use std::sync::atomic::Ordering;
     TRAY_ANIMATING.store(true, Ordering::Relaxed);
     mark_owned_geometry();
-    // NOTE: NSWindow.setFrame:display:animate: was tried here and reverted —
-    // on a transparent, shadowless borderless window the system frame
-    // animation visibly flickers. The per-frame IPC tween stays.
     let window = window.clone();
-    std::thread::spawn(move || {
-        const STEPS: u32 = 18;
-        for i in 1..=STEPS {
-            let t = i as f64 / STEPS as f64;
-            let k = 1.0 - (1.0 - t).powi(3); // easeOutCubic
-            let lerp = |a: f64, b: f64| a + (b - a) * k;
+
+    // Windows: a transparent WebView2 HWND sitting flush on the screen edge
+    // as a 20px strip will, after sitting idle, get inflated by Snap / the
+    // compositor if we tween it with ~18 rapid set_size calls. Jump once,
+    // wait a frame, then force the target again so a hijack cannot stick.
+    #[cfg(target_os = "windows")]
+    {
+        let _ = from;
+        std::thread::spawn(move || {
+            set_tray_physical_frame(&window, to.0, to.1, to.2, to.3);
+            std::thread::sleep(std::time::Duration::from_millis(32));
+            set_tray_physical_frame(&window, to.0, to.1, to.2, to.3);
+            TRAY_ANIMATING.store(false, Ordering::Relaxed);
+            done(&window);
             mark_owned_geometry();
-            let _ = window.set_size(tauri::PhysicalSize::new(
-                lerp(from.2 as f64, to.2 as f64).round().max(1.0) as u32,
-                lerp(from.3 as f64, to.3 as f64).round().max(1.0) as u32,
-            ));
-            let _ = window.set_position(tauri::PhysicalPosition::new(
-                lerp(from.0 as f64, to.0 as f64).round() as i32,
-                lerp(from.1 as f64, to.1 as f64).round() as i32,
-            ));
-            std::thread::sleep(std::time::Duration::from_millis(10));
+        });
+        return;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        // NOTE: NSWindow.setFrame:display:animate: was tried here and reverted —
+        // on a transparent, shadowless borderless window the system frame
+        // animation visibly flickers. The per-frame IPC tween stays.
+        std::thread::spawn(move || {
+            const STEPS: u32 = 18;
+            for i in 1..=STEPS {
+                let t = i as f64 / STEPS as f64;
+                let k = 1.0 - (1.0 - t).powi(3); // easeOutCubic
+                let lerp = |a: f64, b: f64| a + (b - a) * k;
+                mark_owned_geometry();
+                let _ = window.set_size(tauri::PhysicalSize::new(
+                    lerp(from.2 as f64, to.2 as f64).round().max(1.0) as u32,
+                    lerp(from.3 as f64, to.3 as f64).round().max(1.0) as u32,
+                ));
+                let _ = window.set_position(tauri::PhysicalPosition::new(
+                    lerp(from.0 as f64, to.0 as f64).round() as i32,
+                    lerp(from.1 as f64, to.1 as f64).round() as i32,
+                ));
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            // Hold the owned-geometry guard past the last frame so residual
+            // Moved / Focused(false) from the final set_size are ignored.
+            mark_owned_geometry();
+            TRAY_ANIMATING.store(false, Ordering::Relaxed);
+            done(&window);
+            mark_owned_geometry();
+        });
+    }
+}
+
+/// If Windows Snap / WebView2 changed our HWND after we finished a dock
+/// transition, snap it back. Ignored mid-tween and during our own set_size.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn reject_implausible_tray_frame(window: &tauri::WebviewWindow) {
+    use std::sync::atomic::Ordering;
+    if !tray_docked()
+        || TRAY_ANIMATING.load(Ordering::Relaxed)
+        || geometry_recently_owned()
+    {
+        return;
+    }
+    let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) else {
+        return;
+    };
+    let Some(ctx) = snap_context(window) else {
+        return;
+    };
+    if tray_expanded() {
+        if is_plausible_panel_size(size.width, size.height, ctx.scale) {
+            return;
         }
-        // Hold the owned-geometry guard past the last frame so residual
-        // Moved / Focused(false) from the final set_size are ignored.
-        mark_owned_geometry();
-        TRAY_ANIMATING.store(false, Ordering::Relaxed);
-        done(&window);
-        mark_owned_geometry();
-    });
+        let target = panel_rect(&ctx, pos.y);
+        set_tray_physical_frame(window, target.0, target.1, target.2, target.3);
+        return;
+    }
+    let strip_w = (DOCK_STRIP_WIDTH * ctx.scale).round().max(1.0) as u32;
+    let slack = (6.0 * ctx.scale).round() as u32;
+    if size.width <= strip_w.saturating_add(slack) {
+        return;
+    }
+    let target = strip_rect(&ctx, pos.y + size.height as i32 / 2);
+    set_tray_physical_frame(window, target.0, target.1, target.2, target.3);
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -1108,6 +1190,9 @@ fn setup_desktop(app: &mut App) -> tauri::Result<()> {
             }
             handle_tray_moved(&window_for_moves);
         }
+        WindowEvent::Resized(_) => {
+            reject_implausible_tray_frame(&window_for_moves);
+        }
         _ => {}
     });
 
@@ -1283,5 +1368,21 @@ mod tests {
         };
         let position = centered_window_position(800.0, 1_040.0, screen);
         assert_eq!(position, (3_584, -100));
+    }
+
+    #[test]
+    fn plausible_panel_size_rejects_strip_and_snapped_monitor_boxes() {
+        let scale = 1.0;
+        assert!(is_plausible_panel_size(400, 280, scale));
+        assert!(is_plausible_panel_size(160, 120, scale));
+        assert!(!is_plausible_panel_size(20, 72, scale));
+        assert!(!is_plausible_panel_size(400, 1_080, scale));
+        assert!(!is_plausible_panel_size(960, 1_080, scale));
+        let scale2 = 2.0;
+        assert!(is_plausible_panel_size(800, 560, scale2));
+        assert!(!is_plausible_panel_size(40, 144, scale2));
+        assert!(!is_plausible_panel_size(1_920, 2_160, scale2));
+        let (w, h) = clamp_panel_physical(960, 1_080, 1.0);
+        assert_eq!((w, h), (400, 620));
     }
 }

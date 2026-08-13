@@ -839,6 +839,18 @@ watch(
   { flush: 'post' },
 )
 
+// Hover-expand used to keep whatever HWND size the backend restored. On
+// Windows that can be a Snap/WebView2-inflated monitor box after the strip
+// has sat on the edge; remasuring here is the same recovery as hitting
+// refresh (which the user already observed fixes it).
+watch(
+  [docked, dockExpanded, dockAnimating],
+  () => {
+    if (dockAnimating.value || compactLoading.value) return
+    if (docked.value && dockExpanded.value) void applyContentHeight()
+  },
+)
+
 function formatDate(value: number | string, withSeconds = false) {
   const date = typeof value === 'number' ? new Date(value * 1000) : new Date(value)
   return new Intl.DateTimeFormat(locale.value, {
