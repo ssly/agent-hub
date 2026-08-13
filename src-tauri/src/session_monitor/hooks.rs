@@ -669,22 +669,24 @@ fn ensure_windows_hook_runner() -> Result<PathBuf, String> {
 /// default — as `powershell -NoProfile -Command "<command>"`. A bare quoted
 /// path is a parse error there, so Codex gets `cmd /c "shim" --arg`.
 ///
-/// Qwen Code's hookRunner is different: `spawn(cmd.exe, ['/d','/s','/c',
-/// command], {shell:false})`. Node then QuoteCmdArg-wraps `command`, and
-/// cmd `/s` strips the outer quotes leaving `\"path\"`. Both
-/// `"path" --arg` and `cmd /c "path" --arg` become "not recognized as an
-/// internal or external command" (verified on a real Windows box). The
-/// string that survives is an *unquoted* path when it has no spaces:
-/// `C:\Users\you\.agent-hub\hook-runner\agent-hub-hook.cmd --arg`.
-/// Paths with spaces cannot be quoted under that wrap; those go through
-/// Qwen's `shell: "powershell"` override and `& 'path' --arg`.
+/// Qwen Code's hookRunner is `spawn(cmd.exe, ['/d','/s','/c', command])`.
+/// Grok 1.0.x is `cmd /C "<command>"` on Windows (`sh -c` on macOS/Linux).
+/// Both extra-wrap the string; a quoted `"path" --arg` becomes `\"path\"`
+/// and cmd reports "not recognized as an internal or external command".
+/// The string that survives is an *unquoted* path when it has no spaces.
+/// Qwen paths with spaces go through `shell: "powershell"` + `& 'path'`.
+/// Grok has no `shell` field, so spaced Grok paths keep the quoted form.
 #[cfg(any(target_os = "windows", test))]
 fn windows_hook_command(arg: &str, runner_path: &str) -> String {
     if arg == CODEX_HOOK_ARG {
         format!("cmd /c \"{runner_path}\" {arg}")
-    } else if arg == QWEN_HOOK_ARG {
+    } else if arg == QWEN_HOOK_ARG || arg == GROK_HOOK_ARG {
         if runner_path.chars().any(char::is_whitespace) {
-            format!("& '{}' {arg}", runner_path.replace('\'', "''"))
+            if arg == QWEN_HOOK_ARG {
+                format!("& '{}' {arg}", runner_path.replace('\'', "''"))
+            } else {
+                format!("\"{runner_path}\" {arg}")
+            }
         } else {
             format!("{runner_path} {arg}")
         }
@@ -2713,10 +2715,15 @@ enabled = false
             windows_hook_command(QWEN_HOOK_ARG, spaced),
             format!("& '{spaced}' {QWEN_HOOK_ARG}")
         );
-        // Other agents are verified with the bare quoted shim form.
+        // Grok (cmd /C wrap) uses the same unquoted form as Qwen.
         assert_eq!(
             windows_hook_command(GROK_HOOK_ARG, runner),
-            format!("\"{runner}\" {GROK_HOOK_ARG}")
+            format!("{runner} {GROK_HOOK_ARG}")
+        );
+        // Other agents keep the quoted shim form.
+        assert_eq!(
+            windows_hook_command(CLAUDE_HOOK_ARG, runner),
+            format!("\"{runner}\" {CLAUDE_HOOK_ARG}")
         );
     }
 
