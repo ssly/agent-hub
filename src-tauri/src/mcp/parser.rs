@@ -32,8 +32,118 @@ fn read_mcp_servers_from_def(def: &McpPlatformDef) -> Result<Vec<McpServer>, Str
     let servers = match def.format {
         McpFormat::Json => parse_json_servers(&content, &def.mcp_key),
         McpFormat::Toml => parse_toml_servers(&content, &def.mcp_key),
+        McpFormat::DshCordisPatch => parse_dsh_cordis_patch(&def.config_path),
     }?;
     Ok(servers)
+}
+
+/// DeepSeek Harness: collect `@deepseek-ai/dsh-mcp-client` cordis plugin
+/// instances from every profile's `cordis.patch.yml` under
+/// `~/.dsh/profiles/`. Each instance is one MCP server (its `serverName`
+/// namespaces the tools); the entry's full config is exposed read-only.
+fn parse_dsh_cordis_patch(profiles_dir: &std::path::Path) -> Result<Vec<McpServer>, String> {
+    let mut servers = Vec::new();
+    let Ok(entries) = fs::read_dir(profiles_dir) else {
+        return Ok(Vec::new());
+    };
+    let mut profile_dirs = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect::<Vec<_>>();
+    profile_dirs.sort();
+    for profile_dir in profile_dirs {
+        let patch = profile_dir.join("cordis.patch.yml");
+        if !patch.exists() {
+            continue;
+        }
+        let text = match fs::read_to_string(&patch) {
+            Ok(text) => text,
+            Err(_) => continue,
+        };
+        let parsed: serde_yaml::Value =
+            serde_yaml::from_str(&text).map_err(|e| format!("{}: {}", patch.display(), e))?;
+        let Some(list) = parsed.as_sequence() else {
+            continue;
+        };
+        let profile_name = profile_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("?")
+            .to_string();
+        for entry in list {
+            let is_mcp_client = entry
+                .get("name")
+                .and_then(|v| v.as_str())
+                .is_some_and(|name| name == "@deepseek-ai/dsh-mcp-client");
+            if !is_mcp_client {
+                continue;
+            }
+            let Some(config) = entry.get("config").cloned() else {
+                continue;
+            };
+            let Some(name) = config
+                .get("serverName")
+                .and_then(|v| v.as_str())
+                .map(ToOwned::to_owned)
+            else {
+                continue;
+            };
+            let mut config_value = match config {
+                serde_yaml::Value::Mapping(map) => {
+                    let mut object = serde_json::Map::new();
+                    for (key, value) in map {
+                        let key = key.as_str().unwrap_or_default().to_string();
+                        object.insert(key, yaml_to_json(value));
+                    }
+                    Value::Object(object)
+                }
+                other => yaml_to_json(other),
+            };
+            if let Some(obj) = config_value.as_object_mut() {
+                obj.insert("profile".to_string(), Value::String(profile_name.clone()));
+            }
+            servers.push(McpServer {
+                name,
+                config: config_value,
+            });
+        }
+    }
+    servers.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(servers)
+}
+
+/// Convert serde_yaml values into serde_json values (YAML 1.1 vs JSON typing
+/// differences are irrelevant here — strings/numbers/maps/seqs all map
+/// directly; other scalars degrade to their string form).
+fn yaml_to_json(value: serde_yaml::Value) -> Value {
+    match value {
+        serde_yaml::Value::Null => Value::Null,
+        serde_yaml::Value::Bool(b) => Value::Bool(b),
+        serde_yaml::Value::Number(n) => n
+            .as_i64()
+            .map(|i| Value::Number(i.into()))
+            .or_else(|| n.as_f64().and_then(serde_json::Number::from_f64).map(Value::Number))
+            .unwrap_or(Value::String(n.to_string())),
+        serde_yaml::Value::String(s) => Value::String(s),
+        serde_yaml::Value::Sequence(seq) => {
+            Value::Array(seq.into_iter().map(yaml_to_json).collect())
+        }
+        serde_yaml::Value::Mapping(map) => {
+            let mut object = serde_json::Map::new();
+            for (key, value) in map {
+                let key = match key {
+                    serde_yaml::Value::String(s) => s,
+                    other => serde_yaml::to_string(&other)
+                        .map(|s| s.trim().to_string())
+                        .unwrap_or_else(|_| String::new()),
+                };
+                object.insert(key, yaml_to_json(value));
+            }
+            Value::Object(object)
+        }
+        serde_yaml::Value::Tagged(tagged) => yaml_to_json(tagged.value),
+    }
 }
 
 pub fn read_mcp_server(platform_id: &str, name: &str) -> Result<McpServer, String> {
@@ -211,12 +321,17 @@ pub fn parse_server_config_input_with_format(
             }
             parse_server_config_input(text, mcp_key, name)
         }
+        McpFormat::DshCordisPatch => Err(
+            "DeepSeek Harness 的 MCP 由 profile 的 cordis.patch.yml 管理（mcp-client 插件），暂不支持在此编辑。".into(),
+        ),
     }
 }
 
 pub fn config_to_display(config: &Value, format: McpFormat, mcp_key: &str, name: &str) -> String {
     match format {
-        McpFormat::Json => serde_json::to_string_pretty(config).unwrap_or_default(),
+        McpFormat::Json | McpFormat::DshCordisPatch => {
+            serde_json::to_string_pretty(config).unwrap_or_default()
+        }
         McpFormat::Toml => {
             // Wrap config as {mcp_key: {name: config}} so nested subtables
             // (e.g. `env`) serialize with the full dotted path
@@ -1724,7 +1839,7 @@ fn compute_text_diff(before: &str, after: &str) -> Vec<DiffLine> {
 /// Generate empty file content for a new platform config.
 fn default_new_file_content(format: McpFormat, mcp_key: &str) -> String {
     match format {
-        McpFormat::Json => "{}".to_string(),
+        McpFormat::Json | McpFormat::DshCordisPatch => "{}".to_string(),
         McpFormat::Toml => format!("[{}]\n", mcp_key),
     }
 }
@@ -1736,6 +1851,11 @@ pub fn preview_import_mcp_server(
     config: &Value,
 ) -> Result<McpSyncPreview, String> {
     let def = find_mcp_platform(platform_id).ok_or("Platform not found")?;
+    if def.format == McpFormat::DshCordisPatch {
+        return Err(
+            "DeepSeek Harness 的 MCP 由 profile 的 cordis.patch.yml 管理（mcp-client 插件），暂不支持在此编辑。".into(),
+        );
+    }
     let existing = read_mcp_server(platform_id, name).ok();
 
     let before_text = if def.config_path.exists() {
@@ -1747,6 +1867,11 @@ pub fn preview_import_mcp_server(
     let after_text = match def.format {
         McpFormat::Json => apply_json_server(&before_text, &def.mcp_key, name, config)?,
         McpFormat::Toml => apply_toml_server(&before_text, &def.mcp_key, name, config)?,
+        McpFormat::DshCordisPatch => {
+            return Err(
+                "DeepSeek Harness 的 MCP 由 profile 的 cordis.patch.yml 管理（mcp-client 插件），暂不支持在此编辑。".into(),
+            )
+        }
     };
 
     let diff_lines = compute_text_diff(&before_text, &after_text);
@@ -1758,6 +1883,7 @@ pub fn preview_import_mcp_server(
         target_format: match def.format {
             McpFormat::Json => "json",
             McpFormat::Toml => "toml",
+            McpFormat::DshCordisPatch => "cordis-patch",
         }
         .to_string(),
         target_config_path: def.config_path.display().to_string(),
@@ -1771,6 +1897,11 @@ pub fn preview_import_mcp_server(
 /// Preview the effect of deleting a server (before actually deleting).
 pub fn preview_delete_mcp_server(platform_id: &str, name: &str) -> Result<McpSyncPreview, String> {
     let def = find_mcp_platform(platform_id).ok_or("Platform not found")?;
+    if def.format == McpFormat::DshCordisPatch {
+        return Err(
+            "DeepSeek Harness 的 MCP 由 profile 的 cordis.patch.yml 管理（mcp-client 插件），暂不支持在此编辑。".into(),
+        );
+    }
     if !def.config_path.exists() {
         return Err("Config file not found".into());
     }
@@ -1822,6 +1953,11 @@ pub fn preview_delete_mcp_server(platform_id: &str, name: &str) -> Result<McpSyn
                 }
             }
         }
+        McpFormat::DshCordisPatch => {
+            return Err(
+                "DeepSeek Harness 的 MCP 由 profile 的 cordis.patch.yml 管理（mcp-client 插件），暂不支持在此编辑。".into(),
+            )
+        }
     };
 
     let diff_lines = compute_text_diff(&before_text, &after_text);
@@ -1833,6 +1969,7 @@ pub fn preview_delete_mcp_server(platform_id: &str, name: &str) -> Result<McpSyn
         target_format: match def.format {
             McpFormat::Json => "json",
             McpFormat::Toml => "toml",
+            McpFormat::DshCordisPatch => "cordis-patch",
         }
         .to_string(),
         target_config_path: def.config_path.display().to_string(),

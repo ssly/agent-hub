@@ -860,6 +860,7 @@ pub fn list_mcp_platforms(workspace_dir: Option<String>) -> Vec<McpPlatformView>
                 format: match def.format {
                     crate::mcp::McpFormat::Json => "json",
                     crate::mcp::McpFormat::Toml => "toml",
+                    crate::mcp::McpFormat::DshCordisPatch => "cordis-patch",
                 }
                 .to_string(),
                 server_count: servers.len(),
@@ -915,6 +916,7 @@ pub fn get_mcp_server(
         format: match def.format {
             crate::mcp::McpFormat::Json => "json",
             crate::mcp::McpFormat::Toml => "toml",
+            crate::mcp::McpFormat::DshCordisPatch => "cordis-patch",
         }
         .to_string(),
     })
@@ -1966,9 +1968,7 @@ pub fn delete_kiro_session_monitor_session(
 #[tauri::command]
 pub fn get_kiro_hook_status() -> Result<crate::session_monitor::HookStatus, CommandError> {
     crate::session_monitor::get_hook_status(AgentKind::Kiro).map_err(CommandError::General)
-}
-
-#[tauri::command]
+}#[tauri::command]
 pub fn preview_kiro_hook_change(
     action: String,
 ) -> Result<crate::session_monitor::HookChangePreview, CommandError> {

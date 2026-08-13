@@ -48,9 +48,9 @@ export const useSwitchStore = defineStore('switch', () => {
   /** Local OAuth credential presence; null until the first check runs. */
   const claudeUsageAvailable = ref<boolean | null>(null)
 
-  // DeepSeek: no CLI to read credentials from — the user pastes a platform
-  // API key (stored locally by the backend at ~/.agent-hub/deepseek.json)
-  // and we query the official /user/balance endpoint with it. Read-only.
+  // DeepSeek: the key is auto-read from DeepSeek Harness's own credential
+  // layering (env → ~/.dsh/.credentials.yaml → ~/.dsh/.env); we only query
+  // the official /user/balance endpoint with it. Read-only.
   const deepseekSettings = ref<DeepSeekSettings | null>(null)
   const deepseekUsage = ref<DeepSeekUsage | null>(null)
   const deepseekUsageLoading = ref(false)
@@ -193,21 +193,6 @@ export const useSwitchStore = defineStore('switch', () => {
     try {
       deepseekSettings.value = await api.getDeepseekSettings()
     } catch { /* keep previous */ }
-  }
-
-  /** Save (or clear, when empty) the key; returns an error string or null. */
-  async function saveDeepseekKey(apiKey: string): Promise<string | null> {
-    try {
-      deepseekSettings.value = await api.saveDeepseekApiKey(apiKey)
-      if (!deepseekSettings.value.has_key) {
-        deepseekUsage.value = null
-        deepseekUsageError.value = null
-        deepseekUsageLastQuery.value = 0
-      }
-      return null
-    } catch (reason: any) {
-      return String(reason?.message || reason)
-    }
   }
 
   async function refreshDeepseekUsage(force = false) {
@@ -380,7 +365,7 @@ export const useSwitchStore = defineStore('switch', () => {
     loadMonitorSettings, updateRefreshMinutes, setAgentListening,
     selectAgent, loadProfiles, loadSelectedAgent, openEditModal, closeEditModal, resetState,
     refreshCodexUsage, refreshGrokUsage, refreshKimiUsage, refreshClaudeUsage,
-    loadDeepseekSettings, saveDeepseekKey, refreshDeepseekUsage,
+    loadDeepseekSettings, refreshDeepseekUsage,
     openClearActiveModal, closeClearActiveModal, deleteActiveAuth,
   }
 })

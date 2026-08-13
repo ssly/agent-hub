@@ -69,6 +69,13 @@ const selectedFormat = computed(() => {
   return p?.format || 'json'
 })
 
+// DeepSeek Harness MCP servers are cordis plugin instances in the profile's
+// cordis.patch.yml — the list is read-only in Agent Hub (the backend rejects
+// writes with the same message).
+const isReadOnlyPlatform = computed(
+  () => props.readonly || selectedFormat.value === 'cordis-patch',
+)
+
 // Default config template based on platform format
 function defaultConfigTemplate(format: string): string {
   if (format === 'toml') return 'command = ""\nargs = []\n'
@@ -236,10 +243,17 @@ function stripTomlHeader(text: string, name: string): string {
       </div>
 
       <template v-else>
-        <!-- Add button -->
-        <div v-if="!props.embedded && !props.readonly" class="flex justify-end mb-4">
+        <!-- Add button (hidden for read-only platforms) -->
+        <div v-if="!props.embedded && !isReadOnlyPlatform" class="flex justify-end mb-4">
           <button class="btn btn-primary btn-sm" @click="store.addModalOpen = true">+ {{ t('mcp.add') }}</button>
         </div>
+        <p
+          v-if="!props.embedded && isReadOnlyPlatform"
+          class="text-xs mb-3"
+          style="color: var(--ink-4)"
+        >
+          {{ t('mcp.dsh_readonly_note') }}
+        </p>
 
         <div v-if="store.servers.length === 0" class="flex flex-col items-center justify-center py-12 text-center">
           <p style="color: var(--ink-3)">{{ t('mcp.no_servers') }}</p>
@@ -281,13 +295,13 @@ function stripTomlHeader(text: string, name: string): string {
           </div>
           <template #footer>
             <div class="flex items-center gap-2 w-full">
-              <template v-if="!props.readonly">
+              <template v-if="!isReadOnlyPlatform">
                 <button class="btn btn-danger" @click="handleDetailDelete">{{ t('mcp.delete') }}</button>
               </template>
               <div class="flex-1" />
               <button class="btn btn-secondary" @click="closeServerDetail">{{ t('action.close') }}</button>
               <button
-                v-if="!props.readonly && store.serverDetails[detailServerName]"
+                v-if="!isReadOnlyPlatform && store.serverDetails[detailServerName]"
                 class="btn btn-primary"
                 @click="handleDetailEdit"
               >

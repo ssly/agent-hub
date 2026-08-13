@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, useSlots } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Gauge, Info, RefreshCw } from 'lucide-vue-next'
 
@@ -57,14 +57,23 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+const slots = useSlots()
 
 const statusLabel = computed(
   () => props.accountStatusLabel || t('switch.codex_read_only'),
 )
 
 const showWindows = computed(() => props.windows.length > 0)
+/** A populated `extra` slot keeps the body alive even with no windows —
+ *  e.g. DeepSeek Harness renders currency balances instead of quota bars. */
+const hasExtra = computed(() => !!slots.extra)
 const showEmpty = computed(
-  () => !props.loading && !props.error && !props.softNotice && !showWindows.value,
+  () =>
+    !props.loading
+    && !props.error
+    && !props.softNotice
+    && !showWindows.value
+    && !hasExtra.value,
 )
 </script>
 

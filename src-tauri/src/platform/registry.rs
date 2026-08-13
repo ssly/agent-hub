@@ -89,6 +89,16 @@ pub fn builtin_platforms() -> Vec<PlatformDef> {
             presence_path: home.join(".kiro"),
             skill_dir: join_relative(home.clone(), ".kiro/skills"),
         },
+        PlatformDef {
+            id: "dsh".into(),
+            display_name: "DeepSeek Harness".into(),
+            description: "DeepSeek Harness (dsh CLI) agent skills".into(),
+            presence_path: home.join(".dsh"),
+            // DSH reads user-level skills from ~/.dsh/skills (and, via the
+            // Shared platform, ~/.agents/skills). Project level is
+            // <workspace>/.dsh/skills, which the default mirror already maps.
+            skill_dir: join_relative(home.clone(), ".dsh/skills"),
+        },
     ]
 }
 
@@ -190,6 +200,7 @@ mod tests {
                 "qwen",
                 "zcode",
                 "kiro",
+                "dsh",
             ]
         );
     }

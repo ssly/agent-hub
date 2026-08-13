@@ -31,6 +31,8 @@ const aliases: Record<string, string> = {
   'claude-code': 'claude',
   'grok-build': 'grok',
   'kimi-code': 'kimi',
+  // DeepSeek Harness reuses the DeepSeek brand mark.
+  dsh: 'deepseek',
 }
 
 // These masks are derived directly from the supplied brand artwork. The

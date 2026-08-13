@@ -89,7 +89,8 @@
       "grok-build": "同时读取 Shared 与 .claude/.cursor skills；独立插件体系 ~/.grok/plugins（暂只读）。",
       "kimi-code": "同时读取 Shared（~/.agents/skills）；独立插件体系 ~/.kimi-code/plugins/managed（仅用户级，暂只读）。",
       "qwen": "同时读取 Shared（~/.agents/skills）；MCP 配置位于 ~/.qwen/settings.json；扩展（~/.qwen/extensions）见下方只读列表，启停请使用 `qwen extensions` CLI。",
-      "zcode": "同时读取 Shared（~/.agents/skills）；MCP 配置位于 ~/.zcode/cli/config.json；插件市场（~/.zcode/cli/plugins）见下方只读列表，启停请在 ZCode 设置中操作。"
+      "zcode": "同时读取 Shared（~/.agents/skills）；MCP 配置位于 ~/.zcode/cli/config.json；插件市场（~/.zcode/cli/plugins）见下方只读列表，启停请在 ZCode 设置中操作。",
+      "dsh": "同时读取 Shared（~/.agents/skills）；Skills 在 ~/.dsh/skills（含单文件 Markdown Skill）；MCP 是 profile 的 cordis 插件实例（cordis.patch.yml），下方只读列表；插件体系即 profile 本身（dsh plugin add，本工具不管理）。"
     },
     "no_agents": "未发现可管理插件的 Agent。"
   },
@@ -115,6 +116,7 @@
     "no_messages": "该会话暂无消息。",
     "role_user": "用户",
     "role_assistant": "助手",
+    "thinking": "思维链",
     "loaded_summary": "已加载 {loaded} / 共 {total}",
     "path_filter_label": "路径筛选",
     "path_filter_all": "全部路径",
@@ -257,7 +259,8 @@
     "preview_conflict": "该服务器已存在，将被更新。",
     "preview_stats": "+{added} 行新增  -{removed} 行删除",
     "only_toml": "Codex 仅支持 TOML 格式，请粘贴 TOML 配置。",
-    "only_json": "该平台仅支持 JSON 格式。"
+    "only_json": "该平台仅支持 JSON 格式。",
+    "dsh_readonly_note": "DeepSeek Harness 的 MCP 服务器是 profile 的 cordis 插件实例（~/.dsh/profiles/*/cordis.patch.yml），此处只读。请用 `dsh plugin` 或直接编辑 cordis.patch.yml。"
   },
   "trash": {
     "title": "回收站",
@@ -405,17 +408,11 @@
     "claude_usage_oauth_hint": "用量来自官方登录（OAuth 订阅）账号，与下方的自定义 API 账号相互独立。",
     "claude_usage_login_required": "未检测到 Claude Code 登录凭证，未发起查询。在 Claude Code 中运行 /login 后，点击刷新即可。",
     "oauth_badge": "官方登录",
-    "deepseek_key_title": "DeepSeek API Key",
-    "deepseek_key_note": "API Key 仅保存在本地，余额查询不消耗 Token。",
-    "deepseek_key_placeholder": "sk-...",
-    "deepseek_key_current": "当前 Key：{key}",
-    "deepseek_key_clear": "清除",
-    "deepseek_key_get": "获取 API Key",
-    "deepseek_key_saved_toast": "DeepSeek API Key 已保存。",
-    "deepseek_key_cleared_toast": "DeepSeek API Key 已清除。",
-    "deepseek_balance_title": "DeepSeek 余额",
-    "deepseek_usage_loading": "正在查询 DeepSeek 余额…",
-    "deepseek_no_key_hint": "保存 API Key 后点击刷新即可查询余额。",
+    "deepseek_account_hint": "自动读取 DeepSeek Harness 凭证。",
+    "deepseek_read_only": "只读",
+    "deepseek_balance_title": "DeepSeek Harness 余额",
+    "deepseek_usage_loading": "正在查询 DeepSeek Harness 余额…",
+    "deepseek_no_key_hint": "未检测到 DeepSeek Harness 凭证。请先登录 DeepSeek Harness 或配置 ~/.dsh/.credentials.yaml，然后点击刷新。",
     "deepseek_total": "总余额",
     "deepseek_granted": "赠金",
     "deepseek_topped_up": "充值",

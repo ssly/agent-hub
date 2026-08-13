@@ -251,7 +251,6 @@ pub fn run() {
             switch::commands::get_claude_usage,
             switch::commands::get_usage_provider_availability,
             switch::deepseek::get_deepseek_settings,
-            switch::deepseek::save_deepseek_api_key,
             switch::deepseek::get_deepseek_usage,
             switch::monitor_settings::get_usage_monitor_settings,
             switch::monitor_settings::set_usage_refresh_minutes,

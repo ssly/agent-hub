@@ -132,7 +132,7 @@ function getSidebarItems() {
     { id: 'claude-code', display_name: 'Claude Code' },
     { id: 'grok-build', display_name: 'Grok Build' },
     { id: 'kimi-code', display_name: 'Kimi Code' },
-    { id: 'deepseek', display_name: 'DeepSeek' },
+    { id: 'deepseek', display_name: 'DeepSeek Harness' },
   ]
   return pluginsStore.platforms
 }

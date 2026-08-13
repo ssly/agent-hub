@@ -18,6 +18,7 @@ struct Labels {
     search_placeholder: &'static str,
     user: &'static str,
     assistant: &'static str,
+    thinking: &'static str,
     empty: &'static str,
     project: &'static str,
     model: &'static str,
@@ -127,6 +128,7 @@ fn build_html(platform_id: &str, locale: &str, conversations: &[ExportConversati
         "kimi" => "Kimi Code",
         "qwen" => "Qwen Code",
         "zcode" => "ZCode",
+        "dsh" => "DeepSeek Harness",
         _ => platform_id,
     };
     let locale_tag = if locale.to_ascii_lowercase().starts_with("zh") {
@@ -187,6 +189,9 @@ fn build_html(platform_id: &str, locale: &str, conversations: &[ExportConversati
     .user .bubble {{ background:var(--user); border-top-right-radius:5px; }}
     .assistant .bubble {{ border-top-left-radius:5px; }}
     .text {{ line-height:1.72; white-space:pre-wrap; }}
+    .thinking {{ margin:0 0 12px; padding:8px 10px; border-radius:10px; background:#eef2f2; color:var(--muted); }}
+    .thinking summary {{ cursor:pointer; font-size:12px; font-weight:700; user-select:none; }}
+    .thinking pre {{ margin:8px 0 0; padding:0; overflow:visible; border-radius:0; color:var(--muted); background:transparent; font:12.5px/1.65 inherit; white-space:pre-wrap; }}
     pre {{ margin:14px 0; padding:15px 16px; overflow:auto; border-radius:11px; color:#e8eef0; background:#172b33; font:12px/1.65 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; white-space:pre; }}
     .empty {{ padding:28px; border:1px dashed var(--line); border-radius:14px; color:var(--muted); text-align:center; }}
     [hidden] {{ display:none !important; }}
@@ -327,11 +332,24 @@ fn render_conversation(
         } else {
             labels.assistant
         };
+        let thinking_html = message
+            .thinking
+            .as_deref()
+            .filter(|text| !text.trim().is_empty())
+            .map(|text| {
+                format!(
+                    "<details class=\"thinking\"><summary>{}</summary><pre>{}</pre></details>",
+                    escape_html(labels.thinking),
+                    escape_html(text)
+                )
+            })
+            .unwrap_or_default();
         writeln!(
             html,
-            "        <article class=\"message {role_class}\"><div class=\"message-head\"><span class=\"role\">{role}</span><time data-ts=\"{timestamp}\"></time></div><div class=\"bubble\">{content}</div></article>",
+            "        <article class=\"message {role_class}\"><div class=\"message-head\"><span class=\"role\">{role}</span><time data-ts=\"{timestamp}\"></time></div><div class=\"bubble\">{thinking}{content}</div></article>",
             role = escape_html(role_label),
             timestamp = message.timestamp,
+            thinking = thinking_html,
             content = render_message_content(&message.content),
         )
         .expect("writing to String cannot fail");
@@ -425,6 +443,7 @@ fn labels(locale: &str) -> Labels {
             search_placeholder: "搜索会话和内容…",
             user: "用户",
             assistant: "Agent",
+            thinking: "思维链",
             empty: "这个会话没有可展示的文本消息。",
             project: "项目",
             model: "模型",
@@ -438,6 +457,7 @@ fn labels(locale: &str) -> Labels {
             search_placeholder: "Search sessions and messages…",
             user: "User",
             assistant: "Agent",
+            thinking: "Thinking",
             empty: "This session has no displayable text messages.",
             project: "Project",
             model: "Model",
@@ -465,11 +485,7 @@ mod tests {
                 platform_id: "codex".to_string(),
                 source: None,
             },
-            messages: vec![SessionMessage {
-                role: "assistant".to_string(),
-                content: content.to_string(),
-                timestamp: 3,
-            }],
+            messages: vec![SessionMessage::new("assistant", content, 3)],
         }
     }
 
@@ -491,6 +507,17 @@ mod tests {
         assert!(rendered.contains("HTML &lt;review&gt;"));
         assert!(rendered.contains("A clear answer"));
         assert!(rendered.contains("Content-Security-Policy"));
+    }
+
+    #[test]
+    fn export_html_renders_thinking_collapsed() {
+        let mut conversation = sample_conversation("可见回复");
+        conversation.messages[0].thinking = Some("先想清楚再回答".to_string());
+        let rendered = build_html("qwen", "zh-CN", &[conversation]);
+        assert!(rendered.contains("<details class=\"thinking\">"));
+        assert!(rendered.contains("<summary>思维链</summary>"));
+        assert!(rendered.contains("先想清楚再回答"));
+        assert!(rendered.contains("可见回复"));
     }
 
     #[test]

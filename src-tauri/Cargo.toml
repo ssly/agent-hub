@@ -13,6 +13,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml = "0.9"
 similar = "2"
+# Pure-Rust zstd decoder for DeepSeek Harness session logs
+# (~/.dsh/sessions/**/session.jsonl.zstd, multi-frame concatenated container).
+ruzstd = "0.8"
 dirs = "6"
 toml = "0.8"
 walkdir = "2"

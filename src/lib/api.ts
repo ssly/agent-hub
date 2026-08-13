@@ -417,11 +417,11 @@ export interface ClaudeUsage {
 export const getClaudeUsage = (force = false) =>
   invoke<ClaudeUsage>('get_claude_usage', { force })
 
-// DeepSeek has no local CLI credential: the user pastes a platform API key
-// (platform.deepseek.com → API keys), stored locally at
-// ~/.agent-hub/deepseek.json (0600) and only ever sent as the Bearer token of
-// the official balance endpoint. /user/balance is a control-plane API — it
-// consumes no tokens.
+// DeepSeek key resolution mirrors DeepSeek Harness's own layering:
+// env DEEPSEEK_API_KEY → ~/.dsh/.credentials.yaml → ~/.dsh/.env. There is no
+// manual entry in Agent Hub. The active key is only ever sent as the Bearer
+// token of the official balance endpoint. /user/balance is a control-plane
+// API — it consumes no tokens.
 export interface DeepSeekBalanceInfo {
   currency: string
   total_balance: string
@@ -435,13 +435,9 @@ export interface DeepSeekUsage {
 }
 export interface DeepSeekSettings {
   has_key: boolean
-  masked_key: string | null
 }
 export const getDeepseekSettings = () =>
   invoke<DeepSeekSettings>('get_deepseek_settings')
-// Empty string clears the stored key. Saving drops the cached balance.
-export const saveDeepseekApiKey = (apiKey: string) =>
-  invoke<DeepSeekSettings>('save_deepseek_api_key', { apiKey })
 export const getDeepseekUsage = (force = false) =>
   invoke<DeepSeekUsage>('get_deepseek_usage', { force })
 

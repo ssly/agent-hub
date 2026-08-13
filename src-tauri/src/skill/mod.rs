@@ -3,4 +3,4 @@ mod parser;
 mod scanner;
 
 pub use model::Skill;
-pub use scanner::scan_skills;
+pub use scanner::scan_skills_ext;

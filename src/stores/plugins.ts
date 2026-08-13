@@ -36,6 +36,7 @@ export const usePluginsStore = defineStore('plugins', () => {
       qwen: '.qwen/skills',
       zcode: '.zcode/skills',
       kiro: '.kiro/skills',
+      dsh: '.dsh/skills',
       shared: '.agents/skills',
     }
     const relative = relativeByPlatform[platformId]

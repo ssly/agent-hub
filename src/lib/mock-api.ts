@@ -61,6 +61,12 @@ const PLATFORMS = [
     skill_dir: '~/.zcode/skills',
     skill_count: 2,
   },
+  {
+    id: 'dsh',
+    display_name: 'DeepSeek Harness',
+    skill_dir: '~/.dsh/skills',
+    skill_count: 4,
+  },
 ]
 
 function makeSkills(platformId: string) {
@@ -100,6 +106,7 @@ const MCP_PLATFORMS = [
   { id: 'kimi-code', display_name: 'Kimi Code', server_count: 2, config_path: '~/.kimi-code/mcp.json', format: 'json' },
   { id: 'qwen', display_name: 'Qwen Code', server_count: 1, config_path: '~/.qwen/settings.json', format: 'json' },
   { id: 'zcode', display_name: 'ZCode', server_count: 1, config_path: '~/.zcode/cli/config.json', format: 'json' },
+  { id: 'dsh', display_name: 'DeepSeek Harness', server_count: 1, config_path: '~/.dsh/profiles/web/cordis.patch.yml', format: 'cordis-patch' },
 ]
 
 const CLAUDE_PLUGINS = [
@@ -145,6 +152,7 @@ const SESSION_PLATFORMS = [
   { id: 'qwen', display_name: 'Qwen Code', session_count: 2 },
   { id: 'zcode', display_name: 'ZCode', session_count: 3 },
   { id: 'kiro', display_name: 'Kiro', session_count: 3 },
+  { id: 'dsh', display_name: 'DeepSeek Harness', session_count: 2 },
 ]
 
 function makeSessions(offset: number, limit: number) {
@@ -305,7 +313,7 @@ export async function getSessionMessages() {
   const now = Date.now();
   return [
     { role: 'user', content: '帮我把这个 Vue 3 组件重构成组合式函数,逻辑复用性太差了。', timestamp: now - 3600 * 1000 },
-    { role: 'assistant', content: '好的,我先看一下现有组件的结构。\n\n建议拆成三个 composable:\n1. useFetchData — 负责数据加载与缓存\n2. usePagination — 分页状态\n3. useSelection — 多选逻辑\n\n这样每个函数职责单一,测试也方便。', timestamp: now - 3540 * 1000 },
+    { role: 'assistant', content: '好的,我先看一下现有组件的结构。\n\n建议拆成三个 composable:\n1. useFetchData — 负责数据加载与缓存\n2. usePagination — 分页状态\n3. useSelection — 多选逻辑\n\n这样每个函数职责单一,测试也方便。', thinking: '用户想把组件拆成组合式函数。先确认职责边界，再给一个可落地的拆分建议。', timestamp: now - 3540 * 1000 },
     { role: 'user', content: 'useFetchData 里要不要加 AbortController?页面切换时旧请求还在跑。', timestamp: now - 3400 * 1000 },
     { role: 'assistant', content: '要加。在 composable 内部维护一个 controller,onScopeDispose 时 abort,新请求进来前先取消上一个:\n\nlet ctrl: AbortController | null = null\nasync function load() {\n  ctrl?.abort()\n  ctrl = new AbortController()\n  const res = await fetch(url, { signal: ctrl.signal })\n}', timestamp: now - 3300 * 1000 },
   ]
@@ -614,23 +622,17 @@ export async function getKimiUsage(force = false) {
   return structuredClone(payload)
 }
 
-// DeepSeek: key is "stored" in memory for web-debug; balance payload mirrors
-// the official /user/balance shape.
-let mockDeepseekKey: string | null = null
+// DeepSeek: key comes from DeepSeek Harness's own credential layering
+// (env / ~/.dsh/.credentials.yaml / ~/.dsh/.env); web-debug pretends the
+// harness key exists. Balance payload mirrors the official /user/balance
+// shape.
 let mockDeepseekUsage: { at: number; data: any } | null = null
-function maskMockKey(key: string) {
-  return key.length > 10 ? `${key.slice(0, 6)}…${key.slice(-4)}` : '****'
-}
 export async function getDeepseekSettings() {
-  return { has_key: !!mockDeepseekKey, masked_key: mockDeepseekKey ? maskMockKey(mockDeepseekKey) : null }
-}
-export async function saveDeepseekApiKey(apiKey: string) {
-  mockDeepseekKey = apiKey.trim() || null
-  mockDeepseekUsage = null
-  return getDeepseekSettings()
+  return {
+    has_key: true,
+  }
 }
 export async function getDeepseekUsage(force = false) {
-  if (!mockDeepseekKey) throw new Error('未配置 DeepSeek API Key，请先在上方设置中保存 Key。')
   if (!force && mockCacheFresh(mockDeepseekUsage)) {
     return structuredClone(mockDeepseekUsage!.data)
   }

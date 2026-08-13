@@ -6,6 +6,10 @@ use crate::paths::join_relative;
 pub enum McpFormat {
     Json,
     Toml,
+    /// DeepSeek Harness: MCP servers are cordis plugin instances declared in
+    /// the profile's `cordis.patch.yml` (`@deepseek-ai/dsh-mcp-client`), not a
+    /// standalone servers map. Read-only listing.
+    DshCordisPatch,
 }
 
 #[derive(Debug, Clone)]
@@ -93,6 +97,17 @@ pub fn builtin_mcp_platforms() -> Vec<McpPlatformDef> {
             config_path: join_relative(home.clone(), ".kiro/settings/mcp.json"),
             format: McpFormat::Json,
             mcp_key: "mcpServers".into(),
+        },
+        McpPlatformDef {
+            id: "dsh".into(),
+            display_name: "DeepSeek Harness".into(),
+            presence_path: home.join(".dsh"),
+            // MCP servers live in each profile's cordis patch overlay; the
+            // path points at the profiles directory and the DshCordisPatch
+            // parser scans <profiles>/*/cordis.patch.yml.
+            config_path: join_relative(home.clone(), ".dsh/profiles"),
+            format: McpFormat::DshCordisPatch,
+            mcp_key: String::new(),
         },
     ]
 }

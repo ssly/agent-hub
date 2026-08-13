@@ -89,7 +89,8 @@
       "grok-build": "Also reads Shared plus .claude/.cursor skills; independent plugin system at ~/.grok/plugins (read-only for now).",
       "kimi-code": "Also reads Shared (~/.agents/skills); independent plugin system at ~/.kimi-code/plugins/managed (user-level only, read-only for now).",
       "qwen": "Also reads Shared (~/.agents/skills); MCP servers are configured in ~/.qwen/settings.json. Extensions (~/.qwen/extensions) are listed read-only below; manage them with the `qwen extensions` CLI.",
-      "zcode": "Also reads Shared (~/.agents/skills); MCP servers are configured in ~/.zcode/cli/config.json. Marketplace plugins (~/.zcode/cli/plugins) are listed read-only below; toggle them in ZCode settings."
+      "zcode": "Also reads Shared (~/.agents/skills); MCP servers are configured in ~/.zcode/cli/config.json. Marketplace plugins (~/.zcode/cli/plugins) are listed read-only below; toggle them in ZCode settings.",
+      "dsh": "Also reads Shared (~/.agents/skills). Skills live in ~/.dsh/skills (including single-file Markdown skills). MCP servers are cordis plugin instances of the profile (cordis.patch.yml, read-only below); the plugin system is the profile itself (dsh plugin add — not managed here)."
     },
     "no_agents": "No agents with manageable plugins were found."
   },
@@ -115,6 +116,7 @@
     "no_messages": "No messages in this session.",
     "role_user": "User",
     "role_assistant": "Assistant",
+    "thinking": "Thinking",
     "loaded_summary": "Loaded {loaded} / {total}",
     "path_filter_label": "Path Filter",
     "path_filter_all": "All Paths",
@@ -257,7 +259,8 @@
     "preview_conflict": "Server already exists and will be updated.",
     "preview_stats": "+{added} added  -{removed} removed",
     "only_toml": "Codex only supports TOML format. Please paste TOML config.",
-    "only_json": "This platform only supports JSON format."
+    "only_json": "This platform only supports JSON format.",
+    "dsh_readonly_note": "DeepSeek Harness MCP servers are cordis plugin instances of the profile (~/.dsh/profiles/*/cordis.patch.yml), so this list is read-only. Use `dsh plugin` or edit cordis.patch.yml directly."
   },
   "trash": {
     "title": "Recycle Bin",
@@ -405,17 +408,11 @@
     "claude_usage_oauth_hint": "Usage comes from the official sign-in (OAuth subscription), independent of the custom API accounts below.",
     "claude_usage_login_required": "No Claude Code credentials found, so no query was made. Run /login in Claude Code, then hit refresh.",
     "oauth_badge": "Official",
-    "deepseek_key_title": "DeepSeek API Key",
-    "deepseek_key_note": "Your API key is stored locally only, and balance queries do not consume tokens.",
-    "deepseek_key_placeholder": "sk-...",
-    "deepseek_key_current": "Current key: {key}",
-    "deepseek_key_clear": "Clear",
-    "deepseek_key_get": "Get an API Key",
-    "deepseek_key_saved_toast": "DeepSeek API key saved.",
-    "deepseek_key_cleared_toast": "DeepSeek API key cleared.",
-    "deepseek_balance_title": "DeepSeek Balance",
-    "deepseek_usage_loading": "Querying DeepSeek balance…",
-    "deepseek_no_key_hint": "Save an API key above, then hit refresh to query the balance.",
+    "deepseek_account_hint": "Credentials are auto-read from DeepSeek Harness.",
+    "deepseek_read_only": "Read-only",
+    "deepseek_balance_title": "DeepSeek Harness Balance",
+    "deepseek_usage_loading": "Querying DeepSeek Harness balance…",
+    "deepseek_no_key_hint": "No DeepSeek Harness credentials found. Sign in to DeepSeek Harness or configure ~/.dsh/.credentials.yaml, then hit refresh.",
     "deepseek_total": "Total balance",
     "deepseek_granted": "Granted",
     "deepseek_topped_up": "Topped up",

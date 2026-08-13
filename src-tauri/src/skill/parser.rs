@@ -66,6 +66,70 @@ pub fn parse_skill(skill_dir: &Path, platform_id: &str) -> Option<Skill> {
     })
 }
 
+/// Parse a "flat" skill: one Markdown file (e.g. `<name>.md`) directly inside
+/// the skills directory. DeepSeek Harness supports this layout beside
+/// directory-bundle skills (SKILL.md folders). The file's own stem is the
+/// fallback name when frontmatter carries no `name`.
+pub fn parse_flat_skill(md_file: &Path, platform_id: &str) -> Option<Skill> {
+    let content = fs::read_to_string(md_file).ok()?;
+    let (metadata, body) = parse_frontmatter(&content);
+
+    let file_stem = md_file
+        .file_stem()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown");
+    let name = metadata
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or(file_stem)
+        .to_string();
+
+    let version = metadata
+        .get("version")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let description = metadata
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .lines()
+        .next()
+        .unwrap_or("")
+        .to_string();
+
+    let is_symlink = md_file.is_symlink();
+    let symlink_target = if is_symlink {
+        fs::read_link(md_file).ok()
+    } else {
+        None
+    };
+    let files = md_file
+        .file_name()
+        .map(PathBuf::from)
+        .into_iter()
+        .collect::<Vec<_>>();
+    let modified_at = fs::metadata(md_file).ok().and_then(|m| m.modified().ok());
+    let total_size = fs::metadata(md_file).map(|m| m.len()).unwrap_or(0);
+
+    Some(Skill {
+        name,
+        folder: String::new(),
+        version,
+        description,
+        platform_id: platform_id.to_string(),
+        path: md_file.to_path_buf(),
+        skill_file: md_file.to_path_buf(),
+        content,
+        body,
+        metadata,
+        is_symlink,
+        symlink_target,
+        files,
+        modified_at,
+        total_size,
+    })
+}
+
 fn parse_frontmatter(content: &str) -> (HashMap<String, serde_yaml::Value>, String) {
     let trimmed = content.trim_start();
     if !trimmed.starts_with("---") {

@@ -13,6 +13,9 @@ pub fn save_mcp_server(platform_id: &str, name: &str, config: Value) -> Result<(
     match def.format {
         McpFormat::Json => save_json_server(&def, name, config),
         McpFormat::Toml => save_toml_server(&def, name, config),
+        McpFormat::DshCordisPatch => Err(
+            "DeepSeek Harness 的 MCP 由 profile 的 cordis.patch.yml 管理（mcp-client 插件），暂不支持在此编辑。".into(),
+        ),
     }
 }
 
@@ -21,6 +24,9 @@ pub fn delete_mcp_server(platform_id: &str, name: &str) -> Result<(), String> {
     match def.format {
         McpFormat::Json => delete_json_server(&def, name),
         McpFormat::Toml => delete_toml_server(&def, name),
+        McpFormat::DshCordisPatch => Err(
+            "DeepSeek Harness 的 MCP 由 profile 的 cordis.patch.yml 管理（mcp-client 插件），暂不支持在此编辑。".into(),
+        ),
     }
 }
 

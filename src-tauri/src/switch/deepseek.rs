@@ -1,10 +1,12 @@
 //! DeepSeek balance queries via the official platform API.
 //!
-//! Unlike the CLI-backed providers there is no local DeepSeek agent install to
-//! read credentials from: the user pastes a platform API key
-//! (platform.deepseek.com → API keys) and we store it locally at
-//! `~/.agent-hub/deepseek.json` (0600 on unix). The key never leaves the
-//! machine except as the Bearer token of the official balance endpoint.
+//! The key is read automatically from DeepSeek Harness's own credential
+//! layering — no manual entry in Agent Hub:
+//!   1. process env `DEEPSEEK_API_KEY`
+//!   2. `$DSH_HOME|~/.dsh/.credentials.yaml` (`DEEPSEEK_API_KEY` entry)
+//!   3. `$DSH_HOME|~/.dsh/.env` (dotenv line `DEEPSEEK_API_KEY=…`)
+//! The full key never leaves the machine except as the Bearer token of the
+//! official balance endpoint.
 //!
 //! `GET https://api.deepseek.com/user/balance` is a control-plane endpoint —
 //! it consumes no tokens (only chat/completion calls are billed), so polling
@@ -14,9 +16,9 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use super::commands::{usage_cache_is_fresh, usage_unix_now, UsageCacheEntry};
-use crate::paths::join_relative;
 
 const DEEPSEEK_BALANCE_URL: &str = "https://api.deepseek.com/user/balance";
+const DS_HOME_ENV: &str = "DSH_HOME";
 
 static DEEPSEEK_USAGE_CACHE: Mutex<Option<UsageCacheEntry<DeepSeekUsageResponse>>> =
     Mutex::new(None);
@@ -43,93 +45,91 @@ pub struct DeepSeekUsageResponse {
     pub fetched_at: u64,
 }
 
-/// Key presence plus a masked preview — the full key is never sent to the
-/// frontend after saving.
+/// Key presence only — the full key (and its store) never leaves the
+/// backend; the UI needs nothing but "is a credential available".
 #[derive(serde::Serialize, Debug, Clone)]
 pub struct DeepSeekSettings {
     pub has_key: bool,
-    pub masked_key: Option<String>,
 }
 
-fn deepseek_key_path() -> Result<PathBuf, String> {
-    let home = dirs::home_dir().ok_or_else(|| "无法确定用户主目录".to_string())?;
-    Ok(join_relative(home, ".agent-hub/deepseek.json"))
+/// Harness home: `$DSH_HOME` when set, else `~/.dsh` (same rule dsh itself
+/// uses).
+fn dsh_home() -> Option<PathBuf> {
+    if let Ok(home) = std::env::var(DS_HOME_ENV) {
+        if !home.trim().is_empty() {
+            return Some(PathBuf::from(home));
+        }
+    }
+    Some(crate::paths::home_dir().join(".dsh"))
 }
 
-fn read_api_key() -> Option<String> {
-    let path = deepseek_key_path().ok()?;
+/// `DEEPSEEK_API_KEY` from the harness credentials document
+/// (`$DSH_HOME/.credentials.yaml`, a strict flat string map).
+fn read_harness_credentials_key() -> Option<String> {
+    let path = dsh_home()?.join(".credentials.yaml");
     let content = std::fs::read_to_string(path).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&content).ok()?;
-    value
-        .get("api_key")
+    let doc: serde_yaml::Value = serde_yaml::from_str(&content).ok()?;
+    doc.get("DEEPSEEK_API_KEY")
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
 }
 
-/// `sk-abc…wxyz` — enough to recognise which key is configured, useless on
-/// its own. Keys are ASCII; slice via chars to stay panic-free regardless.
-fn mask_api_key(key: &str) -> String {
-    let chars: Vec<char> = key.chars().collect();
-    if chars.len() <= 10 {
-        return "****".to_string();
-    }
-    let head: String = chars.iter().take(6).collect();
-    let tail: String = chars.iter().skip(chars.len() - 4).collect();
-    format!("{head}…{tail}")
+/// `DEEPSEEK_API_KEY=` line from the harness env fallback (`$DSH_HOME/.env`).
+/// Simple dotenv scan — comments and `export` prefixes tolerated, quotes
+/// stripped.
+fn read_harness_dotenv_key() -> Option<String> {
+    let path = dsh_home()?.join(".env");
+    let content = std::fs::read_to_string(path).ok()?;
+    parse_dotenv_key(&content)
 }
 
-fn clear_usage_cache() {
-    if let Ok(mut guard) = DEEPSEEK_USAGE_CACHE.lock() {
-        *guard = None;
+fn parse_dotenv_key(content: &str) -> Option<String> {
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let trimmed = trimmed.strip_prefix("export ").unwrap_or(trimmed);
+        let Some((key, value)) = trimmed.split_once('=') else {
+            continue;
+        };
+        if key.trim() != "DEEPSEEK_API_KEY" {
+            continue;
+        }
+        let value = value.trim();
+        let value = value
+            .strip_prefix('"')
+            .and_then(|v| v.strip_suffix('"'))
+            .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+            .unwrap_or(value);
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
     }
+    None
+}
+
+fn read_env_api_key() -> Option<String> {
+    std::env::var("DEEPSEEK_API_KEY")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Layered resolution: env > harness credentials > harness .env.
+fn read_api_key() -> Option<String> {
+    read_env_api_key()
+        .or_else(read_harness_credentials_key)
+        .or_else(read_harness_dotenv_key)
 }
 
 #[tauri::command]
 pub fn get_deepseek_settings() -> DeepSeekSettings {
-    match read_api_key() {
-        Some(key) => DeepSeekSettings {
-            has_key: true,
-            masked_key: Some(mask_api_key(&key)),
-        },
-        None => DeepSeekSettings {
-            has_key: false,
-            masked_key: None,
-        },
+    DeepSeekSettings {
+        has_key: read_api_key().is_some(),
     }
-}
-
-/// Save (or, when empty, clear) the DeepSeek API key. Stored locally only,
-/// with owner-only permissions on unix. Saving a new key drops the cached
-/// balance so the next query hits the API with the new credential.
-#[tauri::command]
-pub fn save_deepseek_api_key(api_key: String) -> Result<DeepSeekSettings, String> {
-    let trimmed = api_key.trim();
-    let path = deepseek_key_path()?;
-    if trimmed.is_empty() {
-        if path.exists() {
-            std::fs::remove_file(&path)
-                .map_err(|e| format!("无法删除 DeepSeek API Key 文件: {e}"))?;
-        }
-        clear_usage_cache();
-        return Ok(DeepSeekSettings {
-            has_key: false,
-            masked_key: None,
-        });
-    }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("无法创建配置目录: {e}"))?;
-    }
-    let content = serde_json::json!({ "api_key": trimmed }).to_string();
-    std::fs::write(&path, content).map_err(|e| format!("无法保存 DeepSeek API Key: {e}"))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
-    }
-    clear_usage_cache();
-    Ok(get_deepseek_settings())
 }
 
 fn map_deepseek_usage(raw: &serde_json::Value, fetched_at: u64) -> DeepSeekUsageResponse {
@@ -175,8 +175,9 @@ fn map_deepseek_usage(raw: &serde_json::Value, fetched_at: u64) -> DeepSeekUsage
 }
 
 async fn fetch_deepseek_usage() -> Result<DeepSeekUsageResponse, String> {
-    let api_key = read_api_key()
-        .ok_or_else(|| "未配置 DeepSeek API Key，请先在上方设置中保存 Key。".to_string())?;
+    let api_key = read_api_key().ok_or_else(|| {
+        "未找到 DeepSeek API Key：未检测到 DeepSeek Harness 的凭证（~/.dsh/.credentials.yaml 或环境变量），也没有本地保存的 Key。请先在 dsh 中登录，或在上方手动保存 Key。".to_string()
+    })?;
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
@@ -279,9 +280,17 @@ mod tests {
     }
 
     #[test]
-    fn masks_key_with_head_and_tail() {
-        assert_eq!(mask_api_key("sk-abcdef1234567890"), "sk-abc…7890");
-        assert_eq!(mask_api_key("short"), "****");
-        assert_eq!(mask_api_key(""), "****");
+    fn parses_dotenv_key_variants() {
+        assert_eq!(parse_dotenv_key("DEEPSEEK_API_KEY=sk-a\n"), Some("sk-a".into()));
+        assert_eq!(
+            parse_dotenv_key("export DEEPSEEK_API_KEY=\"sk-b\"\n"),
+            Some("sk-b".into())
+        );
+        assert_eq!(
+            parse_dotenv_key("  DEEPSEEK_API_KEY = 'sk-c'  \n"),
+            Some("sk-c".into())
+        );
+        assert_eq!(parse_dotenv_key("# comment\nOTHER_KEY=x\n"), None);
+        assert_eq!(parse_dotenv_key("DEEPSEEK_API_KEY=\n"), None);
     }
 }

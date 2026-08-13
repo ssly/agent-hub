@@ -1,6 +1,7 @@
 pub(crate) mod antigravity;
 mod claude;
 mod codex;
+pub(crate) mod dsh;
 mod export;
 mod grok;
 mod kimi;
@@ -101,6 +102,15 @@ pub fn list_session_platforms() -> Result<Vec<SessionPlatform>, String> {
         });
     }
 
+    let dsh_count = dsh::count_dsh_sessions()?;
+    if dsh_count > 0 {
+        platforms.push(SessionPlatform {
+            id: "dsh".to_string(),
+            display_name: "DeepSeek Harness".to_string(),
+            session_count: dsh_count,
+        });
+    }
+
     Ok(platforms)
 }
 
@@ -141,6 +151,7 @@ fn list_sessions_all(platform_id: &str) -> Result<Vec<models::SessionSummary>, S
         "kimi" => kimi::list_kimi_sessions_all(),
         "qwen" => qwen::list_qwen_sessions_all(),
         "zcode" => zcode::list_zcode_sessions_all(),
+        "dsh" => dsh::list_dsh_sessions_all(),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }?;
     // Normalize once for path filters, cards, and resume `cd` so every agent
@@ -318,6 +329,7 @@ fn last_session_messages(
         "grok" => grok::last_grok_messages(session_id),
         "kimi" => kimi::last_kimi_messages(session_id),
         "qwen" => qwen::last_qwen_messages(session_id),
+        "dsh" => dsh::last_dsh_messages(session_id),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
 }
@@ -607,6 +619,7 @@ pub fn get_session_messages(
         "kimi" => kimi::get_kimi_messages(session_id, offset, limit),
         "qwen" => qwen::get_qwen_messages(session_id, offset, limit),
         "zcode" => zcode::get_zcode_messages(session_id, offset, limit),
+        "dsh" => dsh::get_dsh_messages(session_id, offset, limit),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
 }
@@ -625,6 +638,7 @@ pub fn search_session_messages(
         "kimi" => kimi::search_kimi_messages(&query_lower),
         "qwen" => qwen::search_qwen_messages(&query_lower),
         "zcode" => zcode::search_zcode_messages(&query_lower),
+        "dsh" => dsh::search_dsh_messages(&query_lower),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
 }
@@ -639,6 +653,7 @@ pub fn delete_session(platform_id: &str, session_id: &str) -> Result<(), String>
         "kimi" => kimi::delete_kimi_session(session_id),
         "qwen" => qwen::delete_qwen_session(session_id),
         "zcode" => zcode::delete_zcode_session(session_id),
+        "dsh" => dsh::delete_dsh_session(session_id),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
 }
@@ -744,6 +759,13 @@ fn build_resume_command(platform_id: &str, session_id: &str) -> Result<String, S
         // command. The resume modal surfaces this error instead of a command.
         "zcode" => Err(
             "ZCode is a desktop application and does not support terminal session resume."
+                .to_string(),
+        ),
+        // DeepSeek Harness sessions are resumed from the dsh GUI (or a
+        // headless profile), not through a stable CLI resume flag. Point the
+        // user at `dsh web` instead of fabricating a broken command.
+        "dsh" => Err(
+            "DeepSeek Harness 会话由 dsh 界面管理，没有终端恢复命令。运行 `dsh web` 后在会话列表里点击继续该会话。"
                 .to_string(),
         ),
         _ => Err(format!("Unsupported platform: {}", platform_id)),

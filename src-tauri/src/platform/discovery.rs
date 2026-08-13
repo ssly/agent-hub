@@ -1,7 +1,7 @@
 use super::{Platform, PlatformDef};
 use crate::config::Config;
 use crate::platform::registry::{builtin_platforms, join_relative};
-use crate::skill::scan_skills;
+use crate::skill::scan_skills_ext;
 
 pub fn discover_platforms(config: &Config) -> Vec<Platform> {
     let mut defs = builtin_platforms();
@@ -40,7 +40,10 @@ pub fn load_platform_skills(platform: &mut Platform) {
         return;
     }
     platform.skills = if platform.skill_dir.exists() {
-        scan_skills(&platform.skill_dir, &platform.id)
+        // DeepSeek Harness also loads flat Markdown skills directly under the
+        // skills root (besides SKILL.md directory bundles).
+        let allow_flat_md = platform.id == "dsh";
+        scan_skills_ext(&platform.skill_dir, &platform.id, allow_flat_md)
     } else {
         Vec::new()
     };

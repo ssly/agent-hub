@@ -55,7 +55,7 @@ const breadcrumb = computed(() => {
       'claude-code': 'Claude Code',
       'grok-build': 'Grok Build',
       'kimi-code': 'Kimi Code',
-      deepseek: 'DeepSeek',
+      deepseek: 'DeepSeek Harness',
     }
     if (!switchStore.selectedAgent) return t('switch.title')
     const readOnly = ['codex', 'grok-build', 'kimi-code', 'deepseek'].includes(switchStore.selectedAgent)
