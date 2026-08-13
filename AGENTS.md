@@ -4,7 +4,7 @@ Agent Hub 的项目上下文文档，供 AI Agent 和开发者快速了解项目
 
 ## 项目概述
 
-Agent Hub 是一个基于 Tauri 2.x 的桌面应用，用于统一管理本地多个 AI Agent 平台的插件（Skill、MCP Server、Claude Code 原生插件）、会话和账号。当前版本 **0.24.0**。
+Agent Hub 是一个基于 Tauri 2.x 的桌面应用，用于统一管理本地多个 AI Agent 平台的插件（Skill、MCP Server、Claude Code 原生插件）、会话和账号。当前版本 **0.24.3**。
 
 ## 架构
 
@@ -195,7 +195,7 @@ cd src-tauri && cargo test
 
 ## CI/CD
 
-`.github/workflows/release.yml` — 推送 `v*` tag 触发，构建 macOS（aarch64 + x86_64）和 Windows 产物，使用 minisign 签名，生成 updater manifest。**发布流程防竞态**：三个 matrix job 统一上传到 **draft** release（`releaseDraft: true`，资产用 `releaseAssetNamePattern: agent-hub_[version]_[arch][setup][ext]` 命名，updater 清单 URL 自动跟随），全部完成后 publish job 才 `gh release edit --draft=false` 公开——构建窗口期 `releases/latest` 一直指向上一个正式版，检查更新不会拿到残缺的 latest.json。
+`.github/workflows/release.yml` — 推送 `v*` tag 触发，构建 macOS（aarch64 + x86_64）和 Windows 产物，使用 minisign 签名，生成 updater manifest。**发布流程防竞态**：三个 matrix job 统一上传到 **draft** release（`releaseDraft: true`，资产用 `releaseAssetNamePattern: agent-hub_[version]_[arch][setup][ext]` 命名，updater 清单 URL 自动跟随），全部完成后 publish job 才 `gh release edit --draft=false` 公开（job 不 checkout，必须设 `GH_REPO`，否则 gh 找不到仓库，draft 永远不会公开）——构建窗口期 `releases/latest` 一直指向上一个正式版，检查更新不会拿到残缺的 latest.json。
 
 ## 应用名称统一约定
 

@@ -91,8 +91,12 @@ jobs:
     permissions:
       contents: write
     steps:
+      # This job does not check out the repo. gh would otherwise try to
+      # resolve the remote from .git and fail with "not a git repository"
+      # (that is what left v0.24.2 stuck as a draft).
       - name: Publish release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: gh release edit "${{ github.ref_name }}" --draft=false

@@ -213,8 +213,14 @@ function handleDelete() {
 .session-card__right {
   display: flex;
   align-items: center;
-  gap: 8px;
+  /* Gap only appears once actions expand on hover — keeps time flush-right. */
+  gap: 0;
   flex: none;
+}
+.session-card:hover .session-card__right:has(.session-card__actions),
+.session-card__right:has(.session-card__actions:focus-within),
+.session-card__right:has(.session-card__actions--armed) {
+  gap: 8px;
 }
 .session-card__delete-note {
   font-size: 11px;
@@ -229,21 +235,29 @@ function handleDelete() {
   font: 11px/1 var(--font-mono);
   white-space: nowrap;
 }
-/* Inline corner actions: hidden until the card is hovered (or focused
-   within, for keyboard users); the delete confirm chip keeps them visible.
-   They sit in flow, so the time slides left when they appear. */
+/* Inline corner actions: collapsed until hover / focus / delete-armed, so the
+   time stays flush-right when idle (no empty reserved slot). On reveal the
+   time slides left as the action cluster expands. */
 .session-card__actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 0;
+  max-width: 0;
   opacity: 0;
+  overflow: hidden;
   pointer-events: none;
-  transition: opacity var(--dur-fast) var(--ease-soft);
+  transition:
+    max-width var(--dur-fast) var(--ease-soft),
+    opacity var(--dur-fast) var(--ease-soft),
+    gap var(--dur-fast) var(--ease-soft);
 }
 .session-card:hover .session-card__actions,
 .session-card__actions:focus-within,
 .session-card__actions--armed {
+  max-width: 12rem;
+  gap: 4px;
   opacity: 1;
+  overflow: visible;
   pointer-events: auto;
 }
 .session-card__title {

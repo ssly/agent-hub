@@ -259,6 +259,17 @@ function monitorIsChatgpt(row: AgentSessionState) {
   return row.agent === 'codex' && row.source === 'chatgpt'
 }
 
+/** Compact clock for each monitor row (HH:mm:ss only). */
+function formatMonitorClock(timestamp: number): string {
+  if (!timestamp) return ''
+  const date = new Date(timestamp)
+  if (Number.isNaN(date.getTime())) return ''
+  const hh = String(date.getHours()).padStart(2, '0')
+  const mm = String(date.getMinutes()).padStart(2, '0')
+  const ss = String(date.getSeconds()).padStart(2, '0')
+  return `${hh}:${mm}:${ss}`
+}
+
 async function loadMonitorSnapshots() {
   const agents = visibleMonitorAgents.value
   const results = await Promise.allSettled(
@@ -1386,6 +1397,11 @@ onBeforeUnmount(() => {
                 {{ row.userPrompt || t('session_monitor.no_prompt') }}
               </span>
             </span>
+            <span
+              v-if="!miniMode && row.updatedAt"
+              class="monitor-time"
+              :title="formatMonitorClock(row.updatedAt)"
+            >{{ formatMonitorClock(row.updatedAt) }}</span>
           </div>
         </div>
       </template>
@@ -2032,6 +2048,14 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
   vertical-align: top;
+}
+.monitor-time {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--tray-ink-4);
+  font: 10px/1.5 var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* Dark tray palette: explicit night choice wins; with no explicit choice the
