@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::paths::join_relative;
-use crate::session::models::{SessionMessage, SessionSummary};
+use crate::session::models::{
+    push_pending_thinking, take_pending_thinking, SessionMessage, SessionSummary,
+};
 
 const PLATFORM_ID: &str = "grok";
 
@@ -50,6 +52,7 @@ pub fn last_grok_messages(
     let reader = BufReader::new(file);
     let mut last_user = None;
     let mut last_assistant = None;
+    let mut pending_thinking = String::new();
 
     for line in reader.lines() {
         let line = match line {
@@ -60,13 +63,19 @@ pub fn last_grok_messages(
             Ok(value) => value,
             Err(_) => continue,
         };
-        let Some(message) = parse_grok_message_line(&value, fallback_ts) else {
+        if let Some(thinking) = extract_grok_reasoning(&value) {
+            push_pending_thinking(&mut pending_thinking, &thinking);
+            continue;
+        }
+        let Some(mut message) = parse_grok_message_line(&value, fallback_ts) else {
             continue;
         };
-        if message.role == "user" {
-            last_user = Some(message);
-        } else {
+        if message.role == "assistant" {
+            message.thinking = take_pending_thinking(&mut pending_thinking);
             last_assistant = Some(message);
+        } else {
+            pending_thinking.clear();
+            last_user = Some(message);
         }
     }
 
@@ -87,7 +96,7 @@ pub fn search_grok_messages(
             read_grok_messages_from_jsonl(&dir.join("chat_history.jsonl"), session.started_at, 0, 999999)
         {
             for msg in messages {
-                if msg.content.to_lowercase().contains(query_lower) {
+                if msg.matches_query(query_lower) {
                     results.push(crate::session::SessionSearchResult {
                         session_id: session.id.clone(),
                         session_title: session.title.clone(),
@@ -324,6 +333,7 @@ fn read_grok_messages_from_jsonl(
     let mut messages = Vec::new();
     let mut matched = 0usize;
     let page_limit = limit.max(1);
+    let mut pending_thinking = String::new();
 
     for line in reader.lines() {
         let line = match line {
@@ -334,9 +344,18 @@ fn read_grok_messages_from_jsonl(
             Ok(value) => value,
             Err(_) => continue,
         };
-        let Some(message) = parse_grok_message_line(&value, fallback_ts) else {
+        if let Some(thinking) = extract_grok_reasoning(&value) {
+            push_pending_thinking(&mut pending_thinking, &thinking);
+            continue;
+        }
+        let Some(mut message) = parse_grok_message_line(&value, fallback_ts) else {
             continue;
         };
+        if message.role == "assistant" {
+            message.thinking = take_pending_thinking(&mut pending_thinking);
+        } else {
+            pending_thinking.clear();
+        }
 
         if matched >= offset {
             messages.push(message);
@@ -350,7 +369,8 @@ fn read_grok_messages_from_jsonl(
     Ok(messages)
 }
 
-/// chat_history.jsonl records: `system`/`reasoning` are skipped; synthetic
+/// chat_history.jsonl records: `system` is skipped; `reasoning` is buffered
+/// and attached to the next assistant message as `thinking`. Synthetic
 /// `user` records (system reminders, project instructions) carry
 /// `synthetic_reason` and are skipped too — real prompts carry `prompt_index`.
 /// Records have no per-message timestamp, so the session start time is used.
@@ -360,21 +380,42 @@ fn parse_grok_message_line(value: &Value, fallback_ts: i64) -> Option<SessionMes
         "user" => {
             value.get("prompt_index")?;
             let content = extract_grok_text_content(value.get("content")?)?;
-            Some(SessionMessage {
-                role: "user".to_string(),
-                content: strip_user_query_wrapper(&content),
-                timestamp: fallback_ts,
-            })
+            Some(SessionMessage::new(
+                "user",
+                strip_user_query_wrapper(&content),
+                fallback_ts,
+            ))
         }
         "assistant" => {
             let content = extract_grok_text_content(value.get("content")?)?;
-            Some(SessionMessage {
-                role: "assistant".to_string(),
-                content,
-                timestamp: fallback_ts,
-            })
+            Some(SessionMessage::new("assistant", content, fallback_ts))
         }
         _ => None,
+    }
+}
+
+fn extract_grok_reasoning(value: &Value) -> Option<String> {
+    if value.get("type").and_then(|v| v.as_str()) != Some("reasoning") {
+        return None;
+    }
+    let summary = value.get("summary")?;
+    let items = if let Some(text) = summary.as_str() {
+        serde_json::from_str::<Value>(text).ok()?
+    } else {
+        summary.clone()
+    };
+    let texts = items
+        .as_array()?
+        .iter()
+        .filter_map(|item| item.get("text").and_then(|v| v.as_str()))
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    if texts.is_empty() {
+        None
+    } else {
+        Some(texts.join("\n"))
     }
 }
 
@@ -545,6 +586,44 @@ mod tests {
         assert!(parse_grok_message_line(&synthetic, 0).is_none());
         assert!(parse_grok_message_line(&system, 0).is_none());
         assert!(parse_grok_message_line(&reasoning, 0).is_none());
+        assert!(extract_grok_reasoning(&reasoning).is_none());
+    }
+
+    #[test]
+    fn grok_reasoning_summary_attaches_to_next_assistant() {
+        let reasoning = json!({
+            "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": "The user asked about Ghostty."}]
+        });
+        assert_eq!(
+            extract_grok_reasoning(&reasoning).as_deref(),
+            Some("The user asked about Ghostty.")
+        );
+
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "agent-hub-grok-think-{}.jsonl",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        let mut file = fs::File::create(&path).expect("create");
+        use std::io::Write;
+        writeln!(
+            file,
+            "{}",
+            json!({"type":"user","prompt_index":0,"content":[{"type":"text","text":"hi"}]})
+        )
+        .unwrap();
+        writeln!(file, "{reasoning}").unwrap();
+        writeln!(file, "{}", json!({"type":"assistant","content":"hello"})).unwrap();
+        drop(file);
+        let page = read_grok_messages_from_jsonl(&path, 1, 0, 10).expect("read");
+        let _ = fs::remove_file(&path);
+        assert_eq!(page.len(), 2);
+        assert_eq!(page[1].content, "hello");
+        assert_eq!(page[1].thinking.as_deref(), Some("The user asked about Ghostty."));
     }
 
     #[test]

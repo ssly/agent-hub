@@ -79,7 +79,7 @@ pub fn search_qwen_messages(
         };
         if let Ok(messages) = read_qwen_messages_from_jsonl(&file, 0, 999999) {
             for msg in messages {
-                if msg.content.to_lowercase().contains(query_lower) {
+                if msg.matches_query(query_lower) {
                     results.push(crate::session::SessionSearchResult {
                         session_id: session.id.clone(),
                         session_title: session.title.clone(),
@@ -291,34 +291,70 @@ fn parse_qwen_chat_record(value: &Value) -> Option<SessionMessage> {
         "assistant" => "assistant",
         _ => return None,
     };
-    let content = extract_message_text(value.get("message")?)?;
-    Some(SessionMessage {
-        role: role.to_string(),
-        content,
-        timestamp: value
-            .get("timestamp")
-            .and_then(|v| v.as_str())
-            .and_then(parse_rfc3339_to_ms)
-            .unwrap_or(0),
-    })
+    let (content, thinking) = extract_message_parts(value.get("message")?)?;
+    if content.is_empty() && thinking.is_none() {
+        return None;
+    }
+    Some(
+        SessionMessage::new(
+            role,
+            content,
+            value
+                .get("timestamp")
+                .and_then(|v| v.as_str())
+                .and_then(parse_rfc3339_to_ms)
+                .unwrap_or(0),
+        )
+        .with_thinking(thinking),
+    )
 }
 
 fn extract_message_text(message: &Value) -> Option<String> {
+    extract_message_parts(message).and_then(|(content, thinking)| {
+        if !content.is_empty() {
+            Some(content)
+        } else {
+            thinking
+        }
+    })
+}
+
+/// Split Gemini-style `message.parts` into the visible reply and thought
+/// parts. A part is thinking when `thought` is true, `type` is thought /
+/// thinking, or the payload lives in a string `thought` field.
+fn extract_message_parts(message: &Value) -> Option<(String, Option<String>)> {
     let parts = message.get("parts")?.as_array()?;
     let mut texts = Vec::new();
+    let mut thoughts = Vec::new();
     for part in parts {
-        let Some(text) = part.get("text").and_then(|v| v.as_str()) else {
+        let kind = part.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        let is_thought = part.get("thought").and_then(|v| v.as_bool()) == Some(true)
+            || kind.eq_ignore_ascii_case("thought")
+            || kind.eq_ignore_ascii_case("thinking");
+        let text = part
+            .get("text")
+            .and_then(|v| v.as_str())
+            .or_else(|| part.get("thought").and_then(|v| v.as_str()))
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let Some(text) = text else {
             continue;
         };
-        let trimmed = text.trim();
-        if !trimmed.is_empty() {
-            texts.push(trimmed.to_string());
+        if is_thought {
+            thoughts.push(text.to_string());
+        } else {
+            texts.push(text.to_string());
         }
     }
-    if texts.is_empty() {
+    if texts.is_empty() && thoughts.is_empty() {
         None
     } else {
-        Some(texts.join("\n"))
+        let thinking = if thoughts.is_empty() {
+            None
+        } else {
+            Some(thoughts.join("\n"))
+        };
+        Some((texts.join("\n"), thinking))
     }
 }
 
@@ -489,6 +525,24 @@ mod tests {
                 .expect("assistant record should parse");
         assert_eq!(assistant.role, "assistant");
         assert_eq!(assistant.content, "你好！");
+    }
+
+    #[test]
+    fn parse_qwen_chat_record_splits_thought_parts() {
+        let record = json!({
+            "type": "assistant",
+            "timestamp": "2026-07-17T15:04:20.663Z",
+            "message": {
+                "role": "assistant",
+                "parts": [
+                    {"text": "The user said hello.", "thought": true},
+                    {"text": "你好！"}
+                ]
+            }
+        });
+        let message = parse_qwen_chat_record(&record).expect("assistant should parse");
+        assert_eq!(message.content, "你好！");
+        assert_eq!(message.thinking.as_deref(), Some("The user said hello."));
     }
 
     #[test]

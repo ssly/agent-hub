@@ -206,20 +206,16 @@ fn parse_claude_message_line(data: &Value) -> Option<SessionMessage> {
     if data.get("isMeta").and_then(|value| value.as_bool()) == Some(true) {
         return None;
     }
-    let content = data
+    let (content, thinking) = data
         .get("message")
         .and_then(|message| message.get("content"))
-        .and_then(extract_text_content)?;
+        .and_then(extract_text_and_thinking)?;
     let timestamp = data
         .get("timestamp")
         .and_then(|value| value.as_str())
         .and_then(parse_rfc3339_to_ms)
         .unwrap_or(0);
-    Some(SessionMessage {
-        role: record_type.to_string(),
-        content,
-        timestamp,
-    })
+    Some(SessionMessage::new(record_type, content, timestamp).with_thinking(thinking))
 }
 
 /// Streaming scan that keeps only the latest user/assistant message, for the
@@ -431,23 +427,47 @@ fn system_time_to_ms(value: std::time::SystemTime) -> Option<i64> {
 }
 
 fn extract_text_content(content: &Value) -> Option<String> {
+    extract_text_and_thinking(content).and_then(|(text, thinking)| {
+        if !text.is_empty() {
+            Some(text)
+        } else {
+            thinking
+        }
+    })
+}
+
+fn extract_text_and_thinking(content: &Value) -> Option<(String, Option<String>)> {
     match content {
         Value::String(value) => {
             let trimmed = value.trim();
             if trimmed.is_empty() {
                 None
             } else {
-                Some(trimmed.to_string())
+                Some((trimmed.to_string(), None))
             }
         }
         Value::Array(items) => {
             let mut parts = Vec::new();
+            let mut thoughts = Vec::new();
             for item in items {
-                // Only real text blocks. Claude Code transcripts reuse the
-                // "user" role for tool results and the "assistant" role for
-                // thinking/tool calls — those blocks carry type tool_result /
-                // thinking / tool_use and must not render as conversation.
-                if let Some(kind) = item.get("type").and_then(|value| value.as_str()) {
+                // Claude Code transcripts reuse the "user" role for tool
+                // results and the "assistant" role for thinking / tool calls.
+                // Visible reply is type=text; reasoning is type=thinking.
+                let kind = item.get("type").and_then(|value| value.as_str());
+                if kind == Some("thinking") {
+                    if let Some(text) = item
+                        .get("thinking")
+                        .or_else(|| item.get("text"))
+                        .and_then(|value| value.as_str())
+                    {
+                        let trimmed = text.trim();
+                        if !trimmed.is_empty() {
+                            thoughts.push(trimmed.to_string());
+                        }
+                    }
+                    continue;
+                }
+                if let Some(kind) = kind {
                     if kind != "text" {
                         continue;
                     }
@@ -459,10 +479,15 @@ fn extract_text_content(content: &Value) -> Option<String> {
                     }
                 }
             }
-            if parts.is_empty() {
+            if parts.is_empty() && thoughts.is_empty() {
                 None
             } else {
-                Some(parts.join("\n"))
+                let thinking = if thoughts.is_empty() {
+                    None
+                } else {
+                    Some(thoughts.join("\n"))
+                };
+                Some((parts.join("\n"), thinking))
             }
         }
         _ => None,
@@ -501,7 +526,7 @@ pub fn search_claude_messages(
 
         if let Ok(messages) = read_claude_messages_from_file(&candidate.path, 0, 999999) {
             for msg in messages {
-                if msg.content.to_lowercase().contains(query_lower) {
+                if msg.matches_query(query_lower) {
                     results.push(crate::session::SessionSearchResult {
                         session_id: session.id.clone(),
                         session_title: session.title.clone(),

@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::paths::join_relative;
-use crate::session::models::{SessionMessage, SessionSummary};
+use crate::session::models::{
+    push_pending_thinking, take_pending_thinking, SessionMessage, SessionSummary,
+};
 
 const PLATFORM_ID: &str = "kimi";
 
@@ -45,6 +47,7 @@ pub fn last_kimi_messages(
     let reader = BufReader::new(file);
     let mut last_user = None;
     let mut last_assistant = None;
+    let mut pending_thinking = String::new();
 
     for line in reader.lines() {
         let line = match line {
@@ -55,13 +58,19 @@ pub fn last_kimi_messages(
             Ok(value) => value,
             Err(_) => continue,
         };
-        let Some(message) = parse_kimi_wire_line(&value) else {
+        if let Some(thinking) = extract_kimi_think(&value) {
+            push_pending_thinking(&mut pending_thinking, &thinking);
+            continue;
+        }
+        let Some(mut message) = parse_kimi_wire_line(&value) else {
             continue;
         };
-        if message.role == "user" {
-            last_user = Some(message);
-        } else {
+        if message.role == "assistant" {
+            message.thinking = take_pending_thinking(&mut pending_thinking);
             last_assistant = Some(message);
+        } else {
+            pending_thinking.clear();
+            last_user = Some(message);
         }
     }
 
@@ -80,7 +89,7 @@ pub fn search_kimi_messages(
         };
         if let Ok(messages) = read_kimi_messages_from_jsonl(&wire_file_path(&dir), 0, 999999) {
             for msg in messages {
-                if msg.content.to_lowercase().contains(query_lower) {
+                if msg.matches_query(query_lower) {
                     results.push(crate::session::SessionSearchResult {
                         session_id: session.id.clone(),
                         session_title: session.title.clone(),
@@ -288,6 +297,7 @@ fn read_kimi_messages_from_jsonl(
     let mut messages = Vec::new();
     let mut matched = 0usize;
     let page_limit = limit.max(1);
+    let mut pending_thinking = String::new();
 
     for line in reader.lines() {
         let line = match line {
@@ -298,9 +308,18 @@ fn read_kimi_messages_from_jsonl(
             Ok(value) => value,
             Err(_) => continue,
         };
-        let Some(message) = parse_kimi_wire_line(&value) else {
+        if let Some(thinking) = extract_kimi_think(&value) {
+            push_pending_thinking(&mut pending_thinking, &thinking);
+            continue;
+        }
+        let Some(mut message) = parse_kimi_wire_line(&value) else {
             continue;
         };
+        if message.role == "assistant" {
+            message.thinking = take_pending_thinking(&mut pending_thinking);
+        } else {
+            pending_thinking.clear();
+        }
 
         if matched >= offset {
             messages.push(message);
@@ -320,7 +339,8 @@ fn read_kimi_messages_from_jsonl(
 ///   injections (system reminders etc.) only appear as `context.append_message`,
 ///   never as `turn.prompt`, so they are naturally excluded.
 /// - `context.append_loop_event` wrapping `content.part` with `part.type ==
-///   "text"` — an assistant reply chunk. `think` parts are reasoning and skipped.
+///   "text"` — an assistant reply chunk. `think` parts are buffered and
+///   attached to the next text chunk as `thinking`.
 /// Timestamps are the top-level `time` field (epoch millis).
 fn parse_kimi_wire_line(value: &Value) -> Option<SessionMessage> {
     let kind = value.get("type").and_then(|v| v.as_str())?;
@@ -336,11 +356,7 @@ fn parse_kimi_wire_line(value: &Value) -> Option<SessionMessage> {
                 return None;
             }
             let content = extract_text_parts(value.get("input")?)?;
-            Some(SessionMessage {
-                role: "user".to_string(),
-                content,
-                timestamp,
-            })
+            Some(SessionMessage::new("user", content, timestamp))
         }
         "context.append_loop_event" => {
             let event = value.get("event")?;
@@ -355,13 +371,29 @@ fn parse_kimi_wire_line(value: &Value) -> Option<SessionMessage> {
             if text.is_empty() {
                 return None;
             }
-            Some(SessionMessage {
-                role: "assistant".to_string(),
-                content: text.to_string(),
-                timestamp,
-            })
+            Some(SessionMessage::new("assistant", text, timestamp))
         }
         _ => None,
+    }
+}
+
+fn extract_kimi_think(value: &Value) -> Option<String> {
+    if value.get("type").and_then(|v| v.as_str()) != Some("context.append_loop_event") {
+        return None;
+    }
+    let part = value.get("event")?.get("part")?;
+    if part.get("type").and_then(|v| v.as_str()) != Some("think") {
+        return None;
+    }
+    let text = part
+        .get("think")
+        .or_else(|| part.get("text"))
+        .and_then(|v| v.as_str())?
+        .trim();
+    if text.is_empty() {
+        None
+    } else {
+        Some(text.to_string())
     }
 }
 
@@ -500,7 +532,59 @@ mod tests {
 
         assert!(parse_kimi_wire_line(&synthetic).is_none());
         assert!(parse_kimi_wire_line(&think).is_none());
+        assert_eq!(extract_kimi_think(&think).as_deref(), Some("..."));
         assert!(parse_kimi_wire_line(&tool_call).is_none());
+    }
+
+    #[test]
+    fn kimi_think_parts_attach_to_following_text() {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "agent-hub-kimi-think-{}.jsonl",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        let mut file = fs::File::create(&path).expect("create");
+        use std::io::Write;
+        writeln!(
+            file,
+            "{}",
+            json!({
+                "type": "turn.prompt",
+                "input": [{"type": "text", "text": "hi"}],
+                "origin": {"kind": "user"},
+                "time": 1
+            })
+        )
+        .unwrap();
+        writeln!(
+            file,
+            "{}",
+            json!({
+                "type": "context.append_loop_event",
+                "event": {"type": "content.part", "part": {"type": "think", "think": "need to greet"}},
+                "time": 2
+            })
+        )
+        .unwrap();
+        writeln!(
+            file,
+            "{}",
+            json!({
+                "type": "context.append_loop_event",
+                "event": {"type": "content.part", "part": {"type": "text", "text": "你好！"}},
+                "time": 3
+            })
+        )
+        .unwrap();
+        drop(file);
+        let page = read_kimi_messages_from_jsonl(&path, 0, 10).expect("read");
+        let _ = fs::remove_file(&path);
+        assert_eq!(page.len(), 2);
+        assert_eq!(page[1].content, "你好！");
+        assert_eq!(page[1].thinking.as_deref(), Some("need to greet"));
     }
 
     #[test]

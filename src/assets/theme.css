@@ -1261,6 +1261,38 @@ button:active:not(:disabled) {
   overflow-wrap: anywhere;
   word-break: break-word;
 }
+.ah-msg__thinking {
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--sunken, color-mix(in srgb, var(--ink) 5%, transparent));
+  color: var(--ink-3);
+}
+.ah-msg__thinking > summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-3);
+  user-select: none;
+}
+.ah-msg__thinking > summary::-webkit-details-marker { display: none; }
+.ah-msg__thinking > summary::before {
+  content: "▸ ";
+  display: inline-block;
+  width: 1em;
+}
+.ah-msg__thinking[open] > summary::before { content: "▾ "; }
+.ah-msg__thinking-body {
+  margin: 8px 0 0;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--ink-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 
 
 /* ============================================================

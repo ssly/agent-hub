@@ -533,7 +533,7 @@ export async function setUsageTrayHovered() {}
 export async function setUsageTrayOverlay() {}
 export async function openUsageTray() {}
 
-// Shared usage-monitor settings mock (backend in-memory in the real app).
+// Shared usage-monitor settings mock (backend file in the real app).
 const mockUsageMonitorSettings = {
   refreshMinutes: 5,
   selectedAgent: null as string | null,

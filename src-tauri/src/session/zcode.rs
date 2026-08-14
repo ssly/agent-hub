@@ -186,11 +186,7 @@ fn read_zcode_messages_from_db(
         }
 
         if matched >= offset {
-            messages.push(SessionMessage {
-                role: role.to_string(),
-                content,
-                timestamp: time_created,
-            });
+            messages.push(SessionMessage::new(role, content, time_created));
             if messages.len() >= page_limit {
                 break;
             }

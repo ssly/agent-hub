@@ -194,15 +194,15 @@ fn parse_codex_rollout_message(value: &Value) -> Option<SessionMessage> {
         if content.is_empty() {
             return None;
         }
-        return Some(SessionMessage {
-            role: "user".to_string(),
-            content: content.to_string(),
-            timestamp: value
+        return Some(SessionMessage::new(
+            "user",
+            content,
+            value
                 .get("timestamp")
                 .and_then(|v| v.as_str())
                 .and_then(parse_rfc3339_to_ms)
                 .unwrap_or(0),
-        });
+        ));
     }
 
     if line_type == "response_item" {
@@ -219,15 +219,15 @@ fn parse_codex_rollout_message(value: &Value) -> Option<SessionMessage> {
         if content.trim().is_empty() {
             return None;
         }
-        return Some(SessionMessage {
-            role: "assistant".to_string(),
+        return Some(SessionMessage::new(
+            "assistant",
             content,
-            timestamp: value
+            value
                 .get("timestamp")
                 .and_then(|v| v.as_str())
                 .and_then(parse_rfc3339_to_ms)
                 .unwrap_or(0),
-        });
+        ));
     }
 
     None

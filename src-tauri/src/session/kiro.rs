@@ -368,11 +368,7 @@ fn parse_kiro_message_line(value: &Value) -> Option<SessionMessage> {
         .unwrap_or(0);
     let timestamp = normalize_epoch_millis(raw_ts);
 
-    Some(SessionMessage {
-        role: role.to_string(),
-        content,
-        timestamp,
-    })
+    Some(SessionMessage::new(role, content, timestamp))
 }
 
 fn extract_kiro_text_content(content: &Value) -> Option<String> {

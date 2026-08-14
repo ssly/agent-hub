@@ -328,11 +328,7 @@ fn parse_transcript_line(value: &Value) -> Option<SessionMessage> {
         .and_then(Value::as_str)
         .and_then(parse_iso8601_millis)
         .unwrap_or(0);
-    Some(SessionMessage {
-        role: role.to_string(),
-        content,
-        timestamp,
-    })
+    Some(SessionMessage::new(role, content, timestamp))
 }
 
 /// Strip `<USER_REQUEST>…</USER_REQUEST>` and drop metadata blocks Antigravity

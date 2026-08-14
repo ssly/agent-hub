@@ -102,7 +102,11 @@ watch(() => props.show, open => {
                   {{ msg.timestamp ? formatSessionTime(msg.timestamp, locale) : '' }}
                 </span>
               </div>
-              <pre class="ah-msg__content select-text">{{ msg.content || '' }}</pre>
+              <details v-if="msg.thinking" class="ah-msg__thinking">
+                <summary>{{ t('session.thinking') }}</summary>
+                <pre class="ah-msg__thinking-body select-text">{{ msg.thinking }}</pre>
+              </details>
+              <pre v-if="msg.content" class="ah-msg__content select-text">{{ msg.content }}</pre>
             </div>
           </div>
         </template>
