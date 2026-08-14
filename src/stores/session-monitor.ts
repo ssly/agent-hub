@@ -15,7 +15,17 @@ export type SessionSource =
   /** Antigravity IDE surface. */
   | 'antigravity-ide'
 export type RuntimeStatus = 'running' | 'ended'
-export type MonitorAgent = 'codex' | 'claude' | 'cursor' | 'antigravity' | 'grok' | 'kimi' | 'qwen' | 'zcode' | 'kiro'
+export type MonitorAgent =
+  | 'codex'
+  | 'claude'
+  | 'cursor'
+  | 'antigravity'
+  | 'grok'
+  | 'kimi'
+  | 'qwen'
+  | 'zcode'
+  | 'workbuddy'
+  | 'kiro'
 /** Same relative order as platform/registry.rs (skip Shared). */
 export const MONITOR_AGENTS: MonitorAgent[] = [
   'codex',
@@ -26,6 +36,7 @@ export const MONITOR_AGENTS: MonitorAgent[] = [
   'kimi',
   'qwen',
   'zcode',
+  'workbuddy',
   'kiro',
 ]
 /** Sidebar tab: one of the agents, or the merged "all" view. */
@@ -44,6 +55,7 @@ export const MONITOR_AGENT_PLATFORM: Partial<Record<MonitorAgent, string>> = {
   kimi: 'kimi',
   qwen: 'qwen',
   zcode: 'zcode',
+  workbuddy: 'workbuddy',
   kiro: 'kiro',
 }
 
@@ -101,6 +113,7 @@ const CHANGED_EVENTS: Record<MonitorAgent, string> = {
   kimi: 'session-monitor:kimi-changed',
   qwen: 'session-monitor:qwen-changed',
   zcode: 'session-monitor:zcode-changed',
+  workbuddy: 'session-monitor:workbuddy-changed',
   kiro: 'session-monitor:kiro-changed',
 }
 
@@ -113,6 +126,7 @@ const snapshotApi: Record<MonitorAgent, () => Promise<MonitorSnapshot>> = {
   kimi: api.getKimiSessionMonitorSnapshot,
   qwen: api.getQwenSessionMonitorSnapshot,
   zcode: api.getZCodeSessionMonitorSnapshot,
+  workbuddy: api.getWorkbuddySessionMonitorSnapshot,
   kiro: api.getKiroSessionMonitorSnapshot,
 }
 
@@ -125,6 +139,7 @@ const deleteSessionApi: Record<MonitorAgent, (sessionId: string) => Promise<void
   kimi: api.deleteKimiSessionMonitorSession,
   qwen: api.deleteQwenSessionMonitorSession,
   zcode: api.deleteZCodeSessionMonitorSession,
+  workbuddy: api.deleteWorkbuddySessionMonitorSession,
   kiro: api.deleteKiroSessionMonitorSession,
 }
 
@@ -173,6 +188,11 @@ const hookApi: Record<HookAgent, {
     preview: api.previewZCodeHookChange,
     apply: api.applyZCodeHookChange,
   },
+  workbuddy: {
+    status: api.getWorkbuddyHookStatus,
+    preview: api.previewWorkbuddyHookChange,
+    apply: api.applyWorkbuddyHookChange,
+  },
   kiro: {
     status: api.getKiroHookStatus,
     preview: api.previewKiroHookChange,
@@ -199,6 +219,7 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     kimi: emptySnapshot(),
     qwen: emptySnapshot(),
     zcode: emptySnapshot(),
+    workbuddy: emptySnapshot(),
     kiro: emptySnapshot(),
   })
   const hookStatuses = ref<Record<HookAgent, HookStatus | null>>({
@@ -210,6 +231,7 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     kimi: null,
     qwen: null,
     zcode: null,
+    workbuddy: null,
     kiro: null,
   })
   const loading = ref(false)

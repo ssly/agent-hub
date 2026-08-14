@@ -11,13 +11,14 @@ pub enum AgentKind {
     Kimi,
     Qwen,
     ZCode,
+    Workbuddy,
     Kiro,
 }
 
 impl AgentKind {
     /// Same relative order as `platform/registry.rs` builtin platforms
     /// (monitor subset: no Shared).
-    pub const ALL: [AgentKind; 9] = [
+    pub const ALL: [AgentKind; 10] = [
         Self::Codex,
         Self::Claude,
         Self::Cursor,
@@ -26,6 +27,7 @@ impl AgentKind {
         Self::Kimi,
         Self::Qwen,
         Self::ZCode,
+        Self::Workbuddy,
         Self::Kiro,
     ];
 
@@ -39,6 +41,7 @@ impl AgentKind {
             Self::Kimi => "kimi",
             Self::Qwen => "qwen",
             Self::ZCode => "zcode",
+            Self::Workbuddy => "workbuddy",
             Self::Kiro => "kiro",
         }
     }
@@ -53,6 +56,7 @@ impl AgentKind {
             Self::Kimi => "kimi-state.json",
             Self::Qwen => "qwen-state.json",
             Self::ZCode => "zcode-state.json",
+            Self::Workbuddy => "workbuddy-state.json",
             Self::Kiro => "kiro-state.json",
         }
     }
@@ -67,6 +71,7 @@ impl AgentKind {
             Self::Kimi => "session-monitor:kimi-changed",
             Self::Qwen => "session-monitor:qwen-changed",
             Self::ZCode => "session-monitor:zcode-changed",
+            Self::Workbuddy => "session-monitor:workbuddy-changed",
             Self::Kiro => "session-monitor:kiro-changed",
         }
     }

@@ -18,6 +18,7 @@ import {
   getKimiUsage,
   getKiroSessionMonitorSnapshot,
   getQwenSessionMonitorSnapshot,
+  getWorkbuddySessionMonitorSnapshot,
   getUsageProviderAvailability,
   getUsageMonitorSettings,
   getZCodeSessionMonitorSnapshot,
@@ -105,7 +106,7 @@ let resizeSequence = 0
 // Same data the Monitor tab shows (backend snapshots + change events), but
 // reduced to one line per session: status dot + agent + user question.
 // Same order as MONITOR_AGENTS / platform registry (monitor subset).
-const MONITOR_AGENTS_LIST: MonitorAgent[] = ['codex', 'claude', 'cursor', 'antigravity', 'grok', 'kimi', 'qwen', 'zcode', 'kiro']
+const MONITOR_AGENTS_LIST: MonitorAgent[] = ['codex', 'claude', 'cursor', 'antigravity', 'grok', 'kimi', 'qwen', 'zcode', 'workbuddy', 'kiro']
 const MONITOR_CHANGED_EVENTS: Record<MonitorAgent, string> = {
   codex: 'session-monitor:codex-changed',
   claude: 'session-monitor:claude-changed',
@@ -115,6 +116,7 @@ const MONITOR_CHANGED_EVENTS: Record<MonitorAgent, string> = {
   kimi: 'session-monitor:kimi-changed',
   qwen: 'session-monitor:qwen-changed',
   zcode: 'session-monitor:zcode-changed',
+  workbuddy: 'session-monitor:workbuddy-changed',
   kiro: 'session-monitor:kiro-changed',
 }
 const MONITOR_SNAPSHOT_API: Record<MonitorAgent, () => Promise<MonitorSnapshot>> = {
@@ -126,6 +128,7 @@ const MONITOR_SNAPSHOT_API: Record<MonitorAgent, () => Promise<MonitorSnapshot>>
   kimi: getKimiSessionMonitorSnapshot,
   qwen: getQwenSessionMonitorSnapshot,
   zcode: getZCodeSessionMonitorSnapshot,
+  workbuddy: getWorkbuddySessionMonitorSnapshot,
   kiro: getKiroSessionMonitorSnapshot,
 }
 const monitorSnapshots = ref<Record<MonitorAgent, MonitorSnapshot>>({
@@ -137,6 +140,7 @@ const monitorSnapshots = ref<Record<MonitorAgent, MonitorSnapshot>>({
   kimi: { revision: 0, sessions: [] },
   qwen: { revision: 0, sessions: [] },
   zcode: { revision: 0, sessions: [] },
+  workbuddy: { revision: 0, sessions: [] },
   kiro: { revision: 0, sessions: [] },
 })
 

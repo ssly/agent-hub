@@ -62,6 +62,12 @@ const PLATFORMS = [
     skill_count: 2,
   },
   {
+    id: 'workbuddy',
+    display_name: 'WorkBuddy',
+    skill_dir: '~/.workbuddy/skills',
+    skill_count: 3,
+  },
+  {
     id: 'dsh',
     display_name: 'DeepSeek Harness',
     skill_dir: '~/.dsh/skills',
@@ -106,6 +112,7 @@ const MCP_PLATFORMS = [
   { id: 'kimi-code', display_name: 'Kimi Code', server_count: 2, config_path: '~/.kimi-code/mcp.json', format: 'json' },
   { id: 'qwen', display_name: 'Qwen Code', server_count: 1, config_path: '~/.qwen/settings.json', format: 'json' },
   { id: 'zcode', display_name: 'ZCode', server_count: 1, config_path: '~/.zcode/cli/config.json', format: 'json' },
+  { id: 'workbuddy', display_name: 'WorkBuddy', server_count: 2, config_path: '~/.workbuddy/mcp.json', format: 'json' },
   { id: 'dsh', display_name: 'DeepSeek Harness', server_count: 1, config_path: '~/.dsh/profiles/web/cordis.patch.yml', format: 'cordis-patch' },
 ]
 
@@ -151,6 +158,7 @@ const SESSION_PLATFORMS = [
   { id: 'kimi', display_name: 'Kimi Code', session_count: 4 },
   { id: 'qwen', display_name: 'Qwen Code', session_count: 2 },
   { id: 'zcode', display_name: 'ZCode', session_count: 3 },
+  { id: 'workbuddy', display_name: 'WorkBuddy', session_count: 2 },
   { id: 'kiro', display_name: 'Kiro', session_count: 3 },
   { id: 'dsh', display_name: 'DeepSeek Harness', session_count: 2 },
 ]
@@ -161,6 +169,7 @@ function makeSessions(offset: number, limit: number) {
   for (let i = offset; i < Math.min(offset + limit, total); i++) {
     sessions.push({
       id: `session-${i}`,
+      platform_id: 'claude-code',
       title: i === 0 ? 'Vue 3 frontend refactor' : i === 1 ? 'Fix auth token refresh' : `Session #${i + 1}`,
       project_path: i % 3 === 0 ? '/Users/demo/projects/agent-hub' : i % 3 === 1 ? '/Users/demo/projects/api-server' : '',
       model: i % 2 === 0 ? 'claude-sonnet-4' : 'claude-opus-4',
@@ -312,10 +321,14 @@ export async function getSessionMessages() {
   await delay();
   const now = Date.now();
   return [
-    { role: 'user', content: '帮我把这个 Vue 3 组件重构成组合式函数,逻辑复用性太差了。', timestamp: now - 3600 * 1000 },
-    { role: 'assistant', content: '好的,我先看一下现有组件的结构。\n\n建议拆成三个 composable:\n1. useFetchData — 负责数据加载与缓存\n2. usePagination — 分页状态\n3. useSelection — 多选逻辑\n\n这样每个函数职责单一,测试也方便。', thinking: '用户想把组件拆成组合式函数。先确认职责边界，再给一个可落地的拆分建议。', timestamp: now - 3540 * 1000 },
-    { role: 'user', content: 'useFetchData 里要不要加 AbortController?页面切换时旧请求还在跑。', timestamp: now - 3400 * 1000 },
-    { role: 'assistant', content: '要加。在 composable 内部维护一个 controller,onScopeDispose 时 abort,新请求进来前先取消上一个:\n\nlet ctrl: AbortController | null = null\nasync function load() {\n  ctrl?.abort()\n  ctrl = new AbortController()\n  const res = await fetch(url, { signal: ctrl.signal })\n}', timestamp: now - 3300 * 1000 },
+    { role: 'user', content: '<system-reminder data-role="user-context">\n<user_info>\nOS Version: darwin\nWorkspace Folder: /Users/demo/projects/agent-hub\n</user_info>\n</system-reminder>\n<user_query>关于页面，月亮和太阳，请在亮色下展示太阳，暗色下展示月亮。\n电玩城投篮，不需要保留着篮筐不动的关卡了，直接删除这关吧。还有整体的界面，能不能再优化</user_query>', timestamp: now - 3600 * 1000 },
+    { role: 'assistant', content: '- **倒计时紧急态**：剩余 ≤10 秒时数字变红\n- **瞄准角度**：场景右上角实时显示当前角度（如 `90°`）\n- **筐速难度**：关卡卡片右上角用 5 档圆点显示篮筐移动速度\n- **反馈动画**：`READY` / `SHOT` / `+3` / `CLEAR` 等场景反馈文字新增弹出动画（连续相同文案也会重新触发，`globals.css` 新增 `feedback-pop`）\n- **细节**：过关浮层提示「即将进入 L{n}」，按钮文案统一为中文（重新开局 / 重试本关）\n\n另外更新了项目记忆——里面还是旧的 Nuxt 3 技术栈记录，已更正为 Next.js 15。\n\n可以 `npm run dev` 后到 `/game/basketball` 看效果。如果想让第 1 关难度更低一点（比如筐速更慢、振幅更小），告诉我再调。', thinking: '用户要改关于页的日月图标，还要删掉投篮的静止关卡。先定位文件。', timestamp: now - 3540 * 1000 },
+    { role: 'assistant', content: '月亮/太阳就是 header 的主题切换按钮。接下来看篮球游戏的关卡和界面代码。', thinking: '关于页的图标已经对上了，接着处理篮球关卡。', timestamp: now - 3480 * 1000 },
+    { role: 'assistant', content: '现在看 tailwind 配置了解可用的主题色，然后规划改动。', thinking: '关卡删除点已经找到，再看一下整体配色。', timestamp: now - 3420 * 1000 },
+    { role: 'user', content: '首先，当页面滚动条开始滑动后，顶部的导航栏不要这么高了，极致的缩小一点，成小图标，至少高度得减少一半，还有这个 Prompt 的工具，我希望他最好能在一屏上展示完成，不要这么多复杂的东西，这是一个非常实用快速的工具，还有上面这些提示，请你都把它放到边边角角好吗，设置 API Key就不要单独给了，直接在右下角展示配置按钮不就好了', timestamp: now - 3360 * 1000 },
+    { role: 'user', content: '先改主题按钮吧。', timestamp: now - 3300 * 1000 },
+    { role: 'user', content: '篮筐那关也一起删了。', timestamp: now - 3240 * 1000 },
+    { role: 'assistant', content: '主题按钮和静止关卡都改好了。', timestamp: now - 3180 * 1000 },
   ]
 }
 export async function deleteSession() { await delay(200) }
@@ -1136,10 +1149,54 @@ export async function applyKiroHookChange(action: 'install' | 'uninstall', _expe
   return getKiroHookStatus()
 }
 
+const WORKBUDDY_HOOK_COMMAND = "'/Applications/Agent Hub.app/Contents/MacOS/agent-hub' --agent-hub-workbuddy-hook"
+let workbuddyHookInstalled = false
+let workbuddyMonitorSessions = [
+  {
+    sessionId: 'workbuddy-mock-1',
+    turnId: 'turn-1',
+    source: 'terminal',
+    status: 'running',
+    cwd: '/Users/demo/projects/agent-hub',
+    userPrompt: '为 WorkBuddy 编写自动化脚本。',
+    assistantReply: null,
+    updatedAt: Date.now() - 12_000,
+  },
+]
+
+export async function getWorkbuddySessionMonitorSnapshot() {
+  await delay()
+  return {
+    revision: 1,
+    sessions: workbuddyMonitorSessions,
+  }
+}
+
+export async function deleteWorkbuddySessionMonitorSession(sessionId: string) {
+  await delay()
+  workbuddyMonitorSessions = workbuddyMonitorSessions.filter(session => session.sessionId !== sessionId)
+}
+
+export async function getWorkbuddyHookStatus() {
+  await delay()
+  return makeHookStatus(workbuddyHookInstalled, '~/.workbuddy/settings.json', WORKBUDDY_HOOK_COMMAND)
+}
+
+export async function previewWorkbuddyHookChange(action: 'install' | 'uninstall') {
+  await delay()
+  return makeHookPreview(action, '~/.workbuddy/settings.json', WORKBUDDY_HOOK_COMMAND)
+}
+
+export async function applyWorkbuddyHookChange(action: 'install' | 'uninstall', _expectedBeforeHash: string) {
+  await delay(300)
+  workbuddyHookInstalled = action === 'install'
+  return getWorkbuddyHookStatus()
+}
+
 // Browser preview shows every monitor agent (no real home directory to probe).
 export async function listAvailableMonitorAgents() {
   await delay()
-  return ['codex', 'claude', 'cursor', 'antigravity', 'grok', 'kimi', 'qwen', 'zcode', 'kiro']
+  return ['codex', 'claude', 'cursor', 'antigravity', 'grok', 'kimi', 'qwen', 'zcode', 'workbuddy', 'kiro']
 }
 
 // App

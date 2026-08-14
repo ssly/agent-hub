@@ -16,6 +16,7 @@ import cursorMask from '@/assets/agent-icons/cursor.png'
 import deepseekMask from '@/assets/agent-icons/deepseek.png'
 import grokBuildMask from '@/assets/agent-icons/grok-build.png'
 import qwenMask from '@/assets/agent-icons/qwen.png'
+import workbuddyMask from '@/assets/agent-icons/workbuddy.png'
 import zcodeMask from '@/assets/agent-icons/zcode.png'
 
 const props = withDefaults(defineProps<{
@@ -33,6 +34,7 @@ const aliases: Record<string, string> = {
   'kimi-code': 'kimi',
   // DeepSeek Harness reuses the DeepSeek brand mark.
   dsh: 'deepseek',
+  codebuddy: 'workbuddy',
 }
 
 // These masks are derived directly from the supplied brand artwork. The
@@ -48,6 +50,7 @@ const brandMasks: Record<string, string> = {
   deepseek: deepseekMask,
   grok: grokBuildMask,
   qwen: qwenMask,
+  workbuddy: workbuddyMask,
   zcode: zcodeMask,
 }
 

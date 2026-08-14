@@ -8,6 +8,7 @@ mod kimi;
 mod kiro;
 mod models;
 mod qwen;
+mod workbuddy;
 mod zcode;
 
 #[cfg(target_os = "macos")]
@@ -93,6 +94,15 @@ pub fn list_session_platforms() -> Result<Vec<SessionPlatform>, String> {
         });
     }
 
+    let workbuddy_count = workbuddy::count_workbuddy_sessions()?;
+    if workbuddy_count > 0 {
+        platforms.push(SessionPlatform {
+            id: "workbuddy".to_string(),
+            display_name: "WorkBuddy".to_string(),
+            session_count: workbuddy_count,
+        });
+    }
+
     let kiro_count = kiro::count_kiro_sessions()?;
     if kiro_count > 0 {
         platforms.push(SessionPlatform {
@@ -151,6 +161,7 @@ fn list_sessions_all(platform_id: &str) -> Result<Vec<models::SessionSummary>, S
         "kimi" => kimi::list_kimi_sessions_all(),
         "qwen" => qwen::list_qwen_sessions_all(),
         "zcode" => zcode::list_zcode_sessions_all(),
+        "workbuddy" => workbuddy::list_workbuddy_sessions_all(),
         "dsh" => dsh::list_dsh_sessions_all(),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }?;
@@ -329,6 +340,7 @@ fn last_session_messages(
         "grok" => grok::last_grok_messages(session_id),
         "kimi" => kimi::last_kimi_messages(session_id),
         "qwen" => qwen::last_qwen_messages(session_id),
+        "workbuddy" => workbuddy::last_workbuddy_messages(session_id),
         "dsh" => dsh::last_dsh_messages(session_id),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
@@ -619,6 +631,7 @@ pub fn get_session_messages(
         "kimi" => kimi::get_kimi_messages(session_id, offset, limit),
         "qwen" => qwen::get_qwen_messages(session_id, offset, limit),
         "zcode" => zcode::get_zcode_messages(session_id, offset, limit),
+        "workbuddy" => workbuddy::get_workbuddy_messages(session_id, offset, limit),
         "dsh" => dsh::get_dsh_messages(session_id, offset, limit),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
@@ -638,6 +651,7 @@ pub fn search_session_messages(
         "kimi" => kimi::search_kimi_messages(&query_lower),
         "qwen" => qwen::search_qwen_messages(&query_lower),
         "zcode" => zcode::search_zcode_messages(&query_lower),
+        "workbuddy" => workbuddy::search_workbuddy_messages(&query_lower),
         "dsh" => dsh::search_dsh_messages(&query_lower),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
@@ -653,6 +667,7 @@ pub fn delete_session(platform_id: &str, session_id: &str) -> Result<(), String>
         "kimi" => kimi::delete_kimi_session(session_id),
         "qwen" => qwen::delete_qwen_session(session_id),
         "zcode" => zcode::delete_zcode_session(session_id),
+        "workbuddy" => workbuddy::delete_workbuddy_session(session_id),
         "dsh" => dsh::delete_dsh_session(session_id),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
@@ -745,6 +760,16 @@ fn build_resume_command(platform_id: &str, session_id: &str) -> Result<String, S
                 return Err("Qwen Code CLI is not available on PATH.".to_string());
             }
             Ok(format!("qwen --resume {}", shell_quote(session_id)))
+        }
+        "workbuddy" => {
+            let bin = if command_exists("codebuddy") {
+                "codebuddy"
+            } else if command_exists("workbuddy") {
+                "workbuddy"
+            } else {
+                return Err("WorkBuddy / CodeBuddy CLI is not available on PATH.".to_string());
+            };
+            Ok(format!("{} -r {}", bin, shell_quote(session_id)))
         }
         "antigravity" => {
             if !command_exists("agy") {

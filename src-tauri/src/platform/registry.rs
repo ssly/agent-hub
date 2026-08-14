@@ -83,6 +83,13 @@ pub fn builtin_platforms() -> Vec<PlatformDef> {
             skill_dir: join_relative(home.clone(), ".zcode/skills"),
         },
         PlatformDef {
+            id: "workbuddy".into(),
+            display_name: "WorkBuddy".into(),
+            description: "Tencent WorkBuddy agent skills".into(),
+            presence_path: home.join(".workbuddy"),
+            skill_dir: join_relative(home.clone(), ".workbuddy/skills"),
+        },
+        PlatformDef {
             id: "kiro".into(),
             display_name: "Kiro".into(),
             description: "Amazon Kiro IDE agent skills".into(),
@@ -156,6 +163,10 @@ mod tests {
             workspace_skill_dir("zcode", &root),
             Some(root.join(".zcode").join("skills"))
         );
+        assert_eq!(
+            workspace_skill_dir("workbuddy", &root),
+            Some(root.join(".workbuddy").join("skills"))
+        );
     }
 
     #[test]
@@ -199,6 +210,7 @@ mod tests {
                 "kimi-code",
                 "qwen",
                 "zcode",
+                "workbuddy",
                 "kiro",
                 "dsh",
             ]

@@ -35,6 +35,7 @@ export const usePluginsStore = defineStore('plugins', () => {
       'kimi-code': '.kimi-code/skills',
       qwen: '.qwen/skills',
       zcode: '.zcode/skills',
+      workbuddy: '.workbuddy/skills',
       kiro: '.kiro/skills',
       dsh: '.dsh/skills',
       shared: '.agents/skills',

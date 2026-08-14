@@ -1,10 +1,83 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { ChevronRight } from 'lucide-vue-next'
 import AppModal from '@/components/ui/AppModal.vue'
 import AppLoading from '@/components/ui/AppLoading.vue'
 import { formatInt, formatSessionTime } from '@/lib/utils'
 import * as api from '@/lib/api'
+
+type SessionMsg = {
+  role: string
+  content: string
+  timestamp?: number | string | null
+  thinking?: string | null
+  system?: string | null
+}
+
+type DisplayMsg = {
+  role: string
+  startedAt?: number | string | null
+  timestamp?: number | string | null
+  thinking: string
+  system: string
+  content: string
+}
+
+const SYSTEM_REMINDER_RE = /<system-reminder\b[^>]*>[\s\S]*?<\/system-reminder>/gi
+const USER_QUERY_RE = /<user_query\b[^>]*>([\s\S]*?)<\/user_query>/i
+
+function splitInjectedContext(text: string): { body: string; system: string } {
+  const blocks = text.match(SYSTEM_REMINDER_RE) ?? []
+  const rest = text.replace(SYSTEM_REMINDER_RE, '')
+  const query = rest.match(USER_QUERY_RE)
+  return {
+    body: (query ? query[1] : rest).trim(),
+    system: blocks.map(block => block.trim()).filter(Boolean).join('\n\n'),
+  }
+}
+
+function normalizeSessionMsg(msg: SessionMsg): SessionMsg {
+  const split = splitInjectedContext(msg.content || '')
+  return {
+    ...msg,
+    content: split.body,
+    system: [msg.system, split.system].filter(text => text && text.trim()).join('\n\n') || msg.system,
+  }
+}
+
+function joinParts(left: string, right: string | null | undefined): string {
+  const next = right?.trim() ? right : ''
+  if (!next) return left
+  return left ? `${left}\n\n${next}` : next
+}
+
+// Consecutive assistant replies belong to one turn (tools in between). Fold
+// them into a single bubble, separated by a blank line. Consecutive user
+// messages stay split — a new prompt after an interrupt is a new bubble.
+function groupSessionMessages(list: SessionMsg[]): DisplayMsg[] {
+  const groups: DisplayMsg[] = []
+  for (const raw of list) {
+    const msg = normalizeSessionMsg(raw)
+    const last = groups[groups.length - 1]
+    if (msg.role === 'assistant' && last?.role === 'assistant') {
+      last.timestamp = msg.timestamp
+      last.thinking = joinParts(last.thinking, msg.thinking)
+      last.system = joinParts(last.system, msg.system)
+      last.content = joinParts(last.content, msg.content)
+      continue
+    }
+    groups.push({
+      role: msg.role,
+      startedAt: msg.timestamp,
+      timestamp: msg.timestamp,
+      thinking: msg.thinking?.trim() ? msg.thinking : '',
+      system: msg.system?.trim() ? msg.system : '',
+      content: msg.content || '',
+    })
+  }
+  return groups
+}
 
 // Self-fetching messages modal shared by the Sessions browser and the Monitor.
 // Parents only hand over the platform/session identity; paging loads through
@@ -25,7 +98,20 @@ const emit = defineEmits<{ close: [] }>()
 const { t, locale } = useI18n()
 
 const PAGE_SIZE = 50
-const messages = ref<any[]>([])
+const messages = ref<SessionMsg[]>([])
+const displayMessages = computed(() =>
+  groupSessionMessages(messages.value).map(msg => ({
+    ...msg,
+    hint: messageHint(msg, locale.value),
+  })),
+)
+
+function messageHint(msg: DisplayMsg, loc: string): string {
+  const end = msg.timestamp ? formatSessionTime(msg.timestamp, loc) : ''
+  const start = msg.startedAt ? formatSessionTime(msg.startedAt, loc) : ''
+  if (start && end && start !== end) return `${start} – ${end}`
+  return end || start
+}
 const loading = ref(false)
 const loadingMore = ref(false)
 const hasMore = ref(false)
@@ -50,14 +136,17 @@ async function loadMessages(append: boolean) {
   }
 }
 
-watch(() => props.show, open => {
-  if (!open) return
-  messages.value = []
-  offset = 0
-  hasMore.value = false
-  loadError.value = ''
-  loadMessages(false)
-})
+watch(
+  () => [props.show, props.platformId, props.sessionId] as const,
+  ([open, platformId, sessionId]) => {
+    if (!open || !platformId || !sessionId) return
+    messages.value = []
+    offset = 0
+    hasMore.value = false
+    loadError.value = ''
+    loadMessages(false)
+  },
+)
 </script>
 
 <template>
@@ -88,25 +177,30 @@ watch(() => props.show, open => {
         </div>
         <template v-else>
           <div
-            v-for="(msg, idx) in messages"
+            v-for="(msg, idx) in displayMessages"
             :key="idx"
             class="ah-msg"
             :class="msg.role === 'user' ? 'ah-msg--user' : 'ah-msg--assistant'"
           >
-            <div class="ah-msg__bubble">
-              <div class="ah-msg__meta">
-                <span class="ah-msg__role">
-                  {{ msg.role === 'user' ? t('session.role_user') : t('session.role_assistant') }}
-                </span>
-                <span class="ah-msg__time">
-                  {{ msg.timestamp ? formatSessionTime(msg.timestamp, locale) : '' }}
-                </span>
+            <div class="ah-msg__stack">
+              <div class="ah-msg__bubble">
+                <details v-if="msg.system" class="ah-msg__thinking">
+                  <summary>
+                    <ChevronRight :size="18" stroke-width="2.25" class="ah-msg__thinking-icon" />
+                    <span>{{ t('session.system_reminder') }}</span>
+                  </summary>
+                  <pre class="ah-msg__thinking-body select-text">{{ msg.system }}</pre>
+                </details>
+                <details v-if="msg.thinking" class="ah-msg__thinking">
+                  <summary>
+                    <ChevronRight :size="18" stroke-width="2.25" class="ah-msg__thinking-icon" />
+                    <span>{{ t('session.thinking') }}</span>
+                  </summary>
+                  <pre class="ah-msg__thinking-body select-text">{{ msg.thinking }}</pre>
+                </details>
+                <pre v-if="msg.content" class="ah-msg__content select-text">{{ msg.content }}</pre>
               </div>
-              <details v-if="msg.thinking" class="ah-msg__thinking">
-                <summary>{{ t('session.thinking') }}</summary>
-                <pre class="ah-msg__thinking-body select-text">{{ msg.thinking }}</pre>
-              </details>
-              <pre v-if="msg.content" class="ah-msg__content select-text">{{ msg.content }}</pre>
+              <div v-if="msg.hint" class="ah-msg__hint">{{ msg.hint }}</div>
             </div>
           </div>
         </template>

@@ -19,6 +19,7 @@ struct Labels {
     user: &'static str,
     assistant: &'static str,
     thinking: &'static str,
+    system: &'static str,
     empty: &'static str,
     project: &'static str,
     model: &'static str,
@@ -344,11 +345,24 @@ fn render_conversation(
                 )
             })
             .unwrap_or_default();
+        let system_html = message
+            .system
+            .as_deref()
+            .filter(|text| !text.trim().is_empty())
+            .map(|text| {
+                format!(
+                    "<details class=\"thinking\"><summary>{}</summary><pre>{}</pre></details>",
+                    escape_html(labels.system),
+                    escape_html(text)
+                )
+            })
+            .unwrap_or_default();
         writeln!(
             html,
-            "        <article class=\"message {role_class}\"><div class=\"message-head\"><span class=\"role\">{role}</span><time data-ts=\"{timestamp}\"></time></div><div class=\"bubble\">{thinking}{content}</div></article>",
+            "        <article class=\"message {role_class}\"><div class=\"message-head\"><span class=\"role\">{role}</span><time data-ts=\"{timestamp}\"></time></div><div class=\"bubble\">{system}{thinking}{content}</div></article>",
             role = escape_html(role_label),
             timestamp = message.timestamp,
+            system = system_html,
             thinking = thinking_html,
             content = render_message_content(&message.content),
         )
@@ -444,6 +458,7 @@ fn labels(locale: &str) -> Labels {
             user: "用户",
             assistant: "Agent",
             thinking: "思维链",
+            system: "系统提示",
             empty: "这个会话没有可展示的文本消息。",
             project: "项目",
             model: "模型",
@@ -458,6 +473,7 @@ fn labels(locale: &str) -> Labels {
             user: "User",
             assistant: "Agent",
             thinking: "Thinking",
+            system: "System",
             empty: "This session has no displayable text messages.",
             project: "Project",
             model: "Model",

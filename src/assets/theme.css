@@ -1204,11 +1204,11 @@ button:active:not(:disabled) {
   background: var(--sunken);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: 16px;
+  padding: 14px 18px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
 }
 .ah-msg {
   display: flex;
@@ -1216,41 +1216,35 @@ button:active:not(:disabled) {
 }
 .ah-msg--user { justify-content: flex-end; }
 .ah-msg--assistant { justify-content: flex-start; }
-.ah-msg__bubble {
-  max-width: 82%;
-  padding: 10px 14px;
+.ah-msg__stack {
+  /* Wide enough to use the modal, but leave a gutter so left/right
+     stay obvious and a line-length cap so long replies stay readable. */
+  max-width: min(48rem, 72%);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  min-width: 0;
+}
+.ah-msg__bubble {
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
   border: 1px solid var(--hairline);
   background: var(--surface);
-  border-radius: 14px 14px 14px 4px;
-  box-shadow: var(--shadow-soft, 0 1px 2px rgba(0,0,0,0.04));
+  border-radius: 4px;
 }
 .ah-msg--user .ah-msg__bubble {
   background: var(--accent-soft);
   border-color: var(--accent-mid);
-  border-radius: 14px 14px 4px 14px;
 }
-.ah-msg__meta {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 16px;
-}
-.ah-msg__role {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+.ah-msg__hint {
+  margin-top: 4px;
+  padding: 0 2px;
+  font-size: 11px;
+  line-height: 1.4;
   color: var(--ink-3);
 }
-.ah-msg--user .ah-msg__role { color: var(--accent); }
-.ah-msg__time {
-  font-size: 10px;
-  color: var(--ink-4);
-  white-space: nowrap;
-}
+.ah-msg--user .ah-msg__hint { text-align: right; }
+.ah-msg--assistant .ah-msg__hint { text-align: left; }
 .ah-msg__content {
   margin: 0;
   font-family: var(--font-sans);
@@ -1262,33 +1256,47 @@ button:active:not(:disabled) {
   word-break: break-word;
 }
 .ah-msg__thinking {
-  margin: 0;
-  padding: 6px 8px;
-  border-radius: 8px;
-  background: var(--sunken, color-mix(in srgb, var(--ink) 5%, transparent));
+  margin: 0 0 8px;
+  padding: 0;
   color: var(--ink-3);
 }
 .ah-msg__thinking > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 2px 8px 2px 4px;
+  margin-left: -4px;
+  border-radius: 4px;
   cursor: pointer;
   list-style: none;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
-  color: var(--ink-3);
+  color: var(--accent);
   user-select: none;
 }
-.ah-msg__thinking > summary::-webkit-details-marker { display: none; }
-.ah-msg__thinking > summary::before {
-  content: "▸ ";
-  display: inline-block;
-  width: 1em;
+.ah-msg__thinking > summary::-webkit-details-marker,
+.ah-msg__thinking > summary::marker { display: none; content: none; }
+.ah-msg__thinking > summary:hover {
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
-.ah-msg__thinking[open] > summary::before { content: "▾ "; }
+.ah-msg__thinking-icon {
+  flex-shrink: 0;
+  color: inherit;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.ah-msg__thinking[open] .ah-msg__thinking-icon {
+  transform: rotate(90deg);
+}
 .ah-msg__thinking-body {
-  margin: 8px 0 0;
+  margin: 6px 0 0;
   font-family: var(--font-sans);
   font-size: 12.5px;
   line-height: 1.65;
-  color: var(--ink-2);
+  color: var(--ink-3);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;

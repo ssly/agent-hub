@@ -90,6 +90,7 @@
       "kimi-code": "Also reads Shared (~/.agents/skills); independent plugin system at ~/.kimi-code/plugins/managed (user-level only, read-only for now).",
       "qwen": "Also reads Shared (~/.agents/skills); MCP servers are configured in ~/.qwen/settings.json. Extensions (~/.qwen/extensions) are listed read-only below; manage them with the `qwen extensions` CLI.",
       "zcode": "Also reads Shared (~/.agents/skills); MCP servers are configured in ~/.zcode/cli/config.json. Marketplace plugins (~/.zcode/cli/plugins) are listed read-only below; toggle them in ZCode settings.",
+      "workbuddy": "Skills live in ~/.workbuddy/skills; MCP configured in ~/.workbuddy/mcp.json; manage native skills in WorkBuddy UI.",
       "dsh": "Also reads Shared (~/.agents/skills). Skills live in ~/.dsh/skills (including single-file Markdown skills). MCP servers are cordis plugin instances of the profile (cordis.patch.yml, read-only below); the plugin system is the profile itself (dsh plugin add — not managed here)."
     },
     "no_agents": "No agents with manageable plugins were found."
@@ -101,6 +102,7 @@
     "no_sessions": "No sessions found for this platform.",
     "untitled": "(Untitled Session)",
     "source_kiro_cli": "Kiro CLI",
+    "source_workbuddy_cli": "WorkBuddy CLI",
     "source_antigravity_cli": "Antigravity CLI",
     "source_antigravity_app": "Antigravity Client",
     "source_antigravity_ide": "Antigravity IDE",
@@ -117,6 +119,7 @@
     "role_user": "User",
     "role_assistant": "Assistant",
     "thinking": "Thinking",
+    "system_reminder": "System",
     "loaded_summary": "Loaded {loaded} / {total}",
     "path_filter_label": "Path Filter",
     "path_filter_all": "All Paths",
@@ -511,6 +514,7 @@
     "agent_kimi": "Kimi Code",
     "agent_qwen": "Qwen Code",
     "agent_zcode": "ZCode",
+    "agent_workbuddy": "WorkBuddy",
     "agent_kiro": "Kiro",
     "agent_all": "All",
     "empty_all_hint": "New sessions from any agent appear here in real time, with running ones on top.",

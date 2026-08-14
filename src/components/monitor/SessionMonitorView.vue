@@ -44,6 +44,7 @@ const HOOK_CONFIG_PATHS: Record<string, string> = {
   kimi: '~/.kimi-code/config.toml',
   qwen: '~/.qwen/settings.json',
   zcode: '~/.zcode/cli/config.json',
+  workbuddy: '~/.workbuddy/settings.json',
   kiro: '~/.kiro/hooks/agent-hub.json',
 }
 const defaultConfigPath = computed(() => HOOK_CONFIG_PATHS[store.activeAgent] ?? '')
@@ -79,7 +80,7 @@ const primaryNotice = computed<{ kind: 'info' | 'warning' | 'error'; text: strin
   if (store.activeAgent === 'codex' && store.hookStatus?.installed) {
     return { kind: 'warning', text: t('session_monitor.trust_hint') }
   }
-  if ((['cursor', 'grok', 'kimi', 'qwen', 'zcode', 'antigravity'] as string[]).includes(store.activeAgent) && store.hookStatus?.installed) {
+  if ((['cursor', 'grok', 'kimi', 'qwen', 'zcode', 'antigravity', 'workbuddy'] as string[]).includes(store.activeAgent) && store.hookStatus?.installed) {
     return { kind: 'info', text: t('session_monitor.hook_reload_hint') }
   }
   return null

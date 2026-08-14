@@ -90,6 +90,7 @@
       "kimi-code": "同时读取 Shared（~/.agents/skills）；独立插件体系 ~/.kimi-code/plugins/managed（仅用户级，暂只读）。",
       "qwen": "同时读取 Shared（~/.agents/skills）；MCP 配置位于 ~/.qwen/settings.json；扩展（~/.qwen/extensions）见下方只读列表，启停请使用 `qwen extensions` CLI。",
       "zcode": "同时读取 Shared（~/.agents/skills）；MCP 配置位于 ~/.zcode/cli/config.json；插件市场（~/.zcode/cli/plugins）见下方只读列表，启停请在 ZCode 设置中操作。",
+      "workbuddy": "Skills 位于 ~/.workbuddy/skills；MCP 配置位于 ~/.workbuddy/mcp.json；原生技能生态请在 WorkBuddy 界面中管理。",
       "dsh": "同时读取 Shared（~/.agents/skills）；Skills 在 ~/.dsh/skills（含单文件 Markdown Skill）；MCP 是 profile 的 cordis 插件实例（cordis.patch.yml），下方只读列表；插件体系即 profile 本身（dsh plugin add，本工具不管理）。"
     },
     "no_agents": "未发现可管理插件的 Agent。"
@@ -101,6 +102,7 @@
     "no_sessions": "该平台暂无会话。",
     "untitled": "（未命名会话）",
     "source_kiro_cli": "Kiro CLI",
+    "source_workbuddy_cli": "WorkBuddy CLI",
     "source_antigravity_cli": "Antigravity CLI",
     "source_antigravity_app": "Antigravity 客户端",
     "source_antigravity_ide": "Antigravity IDE",
@@ -117,6 +119,7 @@
     "role_user": "用户",
     "role_assistant": "助手",
     "thinking": "思维链",
+    "system_reminder": "系统提示",
     "loaded_summary": "已加载 {loaded} / 共 {total}",
     "path_filter_label": "路径筛选",
     "path_filter_all": "全部路径",
@@ -511,6 +514,7 @@
     "agent_kimi": "Kimi Code",
     "agent_qwen": "Qwen Code",
     "agent_zcode": "ZCode",
+    "agent_workbuddy": "WorkBuddy",
     "agent_kiro": "Kiro",
     "agent_all": "全部",
     "empty_all_hint": "任意 Agent 发起新会话后，都会实时出现在这里；进行中的排在最上面。",

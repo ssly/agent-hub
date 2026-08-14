@@ -1,6 +1,6 @@
 use super::capture::{
     ANTIGRAVITY_HOOK_ARG, CLAUDE_HOOK_ARG, CODEX_HOOK_ARG, CURSOR_HOOK_ARG, GROK_HOOK_ARG,
-    KIMI_HOOK_ARG, KIRO_HOOK_ARG, QWEN_HOOK_ARG, ZCODE_HOOK_ARG,
+    KIMI_HOOK_ARG, KIRO_HOOK_ARG, QWEN_HOOK_ARG, WORKBUDDY_HOOK_ARG, ZCODE_HOOK_ARG,
 };
 use super::types::{AgentKind, HookChangePreview, HookDiffLine, HookStatus};
 use crate::win_console::suppress_console;
@@ -74,6 +74,7 @@ fn managed_events(agent: AgentKind) -> &'static [&'static str] {
         // ZCode snapshots hook config at session start; its two managed
         // events take no matcher.
         AgentKind::ZCode => &[USER_PROMPT_SUBMIT, STOP],
+        AgentKind::Workbuddy => &[USER_PROMPT_SUBMIT, STOP, STOP_FAILURE],
         AgentKind::Antigravity => &[ANTIGRAVITY_PRE_INVOCATION, ANTIGRAVITY_STOP],
         // Kiro: UserPromptSubmit + Stop. Install writes BOTH:
         // - ~/.kiro/hooks/agent-hub.json (CLI 3.0 / IDE 1.0 KAS v2 standalone)
@@ -117,6 +118,7 @@ fn hook_arg(agent: AgentKind) -> Result<&'static str, String> {
         AgentKind::Kimi => Ok(KIMI_HOOK_ARG),
         AgentKind::Qwen => Ok(QWEN_HOOK_ARG),
         AgentKind::ZCode => Ok(ZCODE_HOOK_ARG),
+        AgentKind::Workbuddy => Ok(WORKBUDDY_HOOK_ARG),
         AgentKind::Antigravity => Ok(ANTIGRAVITY_HOOK_ARG),
         AgentKind::Kiro => Ok(KIRO_HOOK_ARG),
     }
@@ -138,6 +140,7 @@ fn config_path(agent: AgentKind) -> Result<PathBuf, String> {
         // config untouched.
         AgentKind::Qwen => Ok(home.join(".qwen").join("settings.json")),
         AgentKind::ZCode => Ok(home.join(".zcode").join("cli").join("config.json")),
+        AgentKind::Workbuddy => Ok(home.join(".workbuddy").join("settings.json")),
         // Shared by agy CLI, Antigravity 2.0, and IDE (docs + community).
         AgentKind::Antigravity => Ok(home.join(".gemini").join("config").join("hooks.json")),
         // Official global scope (~/.kiro/hooks/) applies to Kiro IDE + CLI.
@@ -155,6 +158,7 @@ fn config_label(agent: AgentKind) -> &'static str {
         AgentKind::Kimi => "Kimi Code 配置文件",
         AgentKind::Qwen => "Qwen Code 配置文件",
         AgentKind::ZCode => "ZCode 配置文件",
+        AgentKind::Workbuddy => "WorkBuddy 配置文件",
         AgentKind::Antigravity => "Antigravity Hook 配置文件",
         AgentKind::Kiro => "Kiro Hook 文件",
     }
@@ -169,6 +173,7 @@ fn agent_label(agent: AgentKind) -> &'static str {
         AgentKind::Kimi => "Kimi Code",
         AgentKind::Qwen => "Qwen Code",
         AgentKind::ZCode => "ZCode",
+        AgentKind::Workbuddy => "WorkBuddy",
         AgentKind::Antigravity => "Antigravity",
         AgentKind::Kiro => "Kiro",
     }
@@ -189,6 +194,7 @@ pub fn agent_presence_path(agent: AgentKind) -> Option<PathBuf> {
         AgentKind::Kimi => home.join(".kimi-code"),
         AgentKind::Qwen => home.join(".qwen"),
         AgentKind::ZCode => home.join(".zcode"),
+        AgentKind::Workbuddy => home.join(".workbuddy"),
         AgentKind::Kiro => home.join(".kiro"),
     })
 }
@@ -2731,7 +2737,7 @@ enabled = false
     fn agent_presence_path_covers_every_agent() {
         // The mapping must stay exhaustive (compiler-enforced) and aligned
         // with platform/registry.rs presence_path values.
-        let expected: [(AgentKind, &str); 9] = [
+        let expected: [(AgentKind, &str); 10] = [
             (AgentKind::Codex, ".codex"),
             (AgentKind::Claude, ".claude"),
             (AgentKind::Cursor, ".cursor"),
@@ -2740,6 +2746,7 @@ enabled = false
             (AgentKind::Kimi, ".kimi-code"),
             (AgentKind::Qwen, ".qwen"),
             (AgentKind::ZCode, ".zcode"),
+            (AgentKind::Workbuddy, ".workbuddy"),
             (AgentKind::Kiro, ".kiro"),
         ];
         assert_eq!(AgentKind::ALL.len(), expected.len());

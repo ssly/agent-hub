@@ -264,6 +264,16 @@ export const previewKiroHookChange = (action: 'install' | 'uninstall') =>
   invoke<any>('preview_kiro_hook_change', { action })
 export const applyKiroHookChange = (action: 'install' | 'uninstall', expectedBeforeHash: string) =>
   invoke<any>('apply_kiro_hook_change', { action, expectedBeforeHash })
+
+export const getWorkbuddySessionMonitorSnapshot = () =>
+  invoke<any>('get_workbuddy_session_monitor_snapshot')
+export const deleteWorkbuddySessionMonitorSession = (sessionId: string) =>
+  invoke<void>('delete_workbuddy_session_monitor_session', { sessionId })
+export const getWorkbuddyHookStatus = () => invoke<any>('get_workbuddy_hook_status')
+export const previewWorkbuddyHookChange = (action: 'install' | 'uninstall') =>
+  invoke<any>('preview_workbuddy_hook_change', { action })
+export const applyWorkbuddyHookChange = (action: 'install' | 'uninstall', expectedBeforeHash: string) =>
+  invoke<any>('apply_workbuddy_hook_change', { action, expectedBeforeHash })
 /** Monitor tab filter: ids of agents whose platform presence directory exists. */
 export const listAvailableMonitorAgents = () => invoke<string[]>('list_available_monitor_agents')
 

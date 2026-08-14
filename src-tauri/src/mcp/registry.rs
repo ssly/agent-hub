@@ -91,6 +91,14 @@ pub fn builtin_mcp_platforms() -> Vec<McpPlatformDef> {
             mcp_key: "mcp.servers".into(),
         },
         McpPlatformDef {
+            id: "workbuddy".into(),
+            display_name: "WorkBuddy".into(),
+            presence_path: home.join(".workbuddy"),
+            config_path: join_relative(home.clone(), ".workbuddy/mcp.json"),
+            format: McpFormat::Json,
+            mcp_key: "mcpServers".into(),
+        },
+        McpPlatformDef {
             id: "kiro".into(),
             display_name: "Kiro".into(),
             presence_path: home.join(".kiro"),
@@ -132,6 +140,7 @@ pub fn find_workspace_mcp_platform(
         "kimi-code" => workspace.join(".kimi-code").join("mcp.json"),
         "qwen" => workspace.join(".qwen").join("settings.json"),
         "cursor" => workspace.join(".cursor").join("mcp.json"),
+        "workbuddy" => workspace.join(".workbuddy").join("mcp.json"),
         "kiro" => workspace.join(".kiro").join("settings").join("mcp.json"),
         _ => return None,
     };

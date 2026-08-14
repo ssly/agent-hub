@@ -1968,7 +1968,9 @@ pub fn delete_kiro_session_monitor_session(
 #[tauri::command]
 pub fn get_kiro_hook_status() -> Result<crate::session_monitor::HookStatus, CommandError> {
     crate::session_monitor::get_hook_status(AgentKind::Kiro).map_err(CommandError::General)
-}#[tauri::command]
+}
+
+#[tauri::command]
 pub fn preview_kiro_hook_change(
     action: String,
 ) -> Result<crate::session_monitor::HookChangePreview, CommandError> {
@@ -1983,6 +1985,49 @@ pub fn apply_kiro_hook_change(
 ) -> Result<crate::session_monitor::HookStatus, CommandError> {
     crate::session_monitor::apply_hook_change(
         AgentKind::Kiro,
+        parse_hook_action(&action)?,
+        &expected_before_hash,
+    )
+    .map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn get_workbuddy_session_monitor_snapshot(
+    monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
+) -> MonitorSnapshot {
+    monitor.snapshot(AgentKind::Workbuddy)
+}
+
+#[tauri::command]
+pub fn delete_workbuddy_session_monitor_session(
+    monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
+    session_id: String,
+) -> Result<(), CommandError> {
+    monitor
+        .remove_session(AgentKind::Workbuddy, &session_id)
+        .map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn get_workbuddy_hook_status() -> Result<crate::session_monitor::HookStatus, CommandError> {
+    crate::session_monitor::get_hook_status(AgentKind::Workbuddy).map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn preview_workbuddy_hook_change(
+    action: String,
+) -> Result<crate::session_monitor::HookChangePreview, CommandError> {
+    crate::session_monitor::preview_hook_change(AgentKind::Workbuddy, parse_hook_action(&action)?)
+        .map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn apply_workbuddy_hook_change(
+    action: String,
+    expected_before_hash: String,
+) -> Result<crate::session_monitor::HookStatus, CommandError> {
+    crate::session_monitor::apply_hook_change(
+        AgentKind::Workbuddy,
         parse_hook_action(&action)?,
         &expected_before_hash,
     )

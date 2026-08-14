@@ -12,6 +12,7 @@ pub const GROK_HOOK_ARG: &str = "--agent-hub-grok-hook";
 pub const KIMI_HOOK_ARG: &str = "--agent-hub-kimi-hook";
 pub const QWEN_HOOK_ARG: &str = "--agent-hub-qwen-hook";
 pub const ZCODE_HOOK_ARG: &str = "--agent-hub-zcode-hook";
+pub const WORKBUDDY_HOOK_ARG: &str = "--agent-hub-workbuddy-hook";
 pub const ANTIGRAVITY_HOOK_ARG: &str = "--agent-hub-antigravity-hook";
 pub const KIRO_HOOK_ARG: &str = "--agent-hub-kiro-hook";
 /// Runaway-stdin guard, not a payload policy: Kimi embeds pasted images as
@@ -63,6 +64,8 @@ pub fn try_capture_hook_event() -> bool {
         AgentKind::Qwen
     } else if std::env::args().any(|arg| arg == ZCODE_HOOK_ARG) {
         AgentKind::ZCode
+    } else if std::env::args().any(|arg| arg == WORKBUDDY_HOOK_ARG) {
+        AgentKind::Workbuddy
     } else if std::env::args().any(|arg| arg == ANTIGRAVITY_HOOK_ARG) {
         AgentKind::Antigravity
     } else if std::env::args().any(|arg| arg == KIRO_HOOK_ARG) {

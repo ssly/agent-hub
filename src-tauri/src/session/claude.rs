@@ -7,7 +7,10 @@ use chrono::DateTime;
 use serde_json::Value;
 
 use crate::paths::join_relative;
-use crate::session::models::{SessionMessage, SessionSummary};
+use crate::session::models::{
+    push_pending_thinking, split_injected_context, take_pending_thinking, SessionMessage,
+    SessionSummary,
+};
 
 const PLATFORM_ID: &str = "claude-code";
 const METADATA_HEAD_LINES: usize = 100;
@@ -117,7 +120,16 @@ fn extract_session_summary(
             first_user_message = data
                 .get("message")
                 .and_then(|message| message.get("content"))
-                .and_then(extract_text_content);
+                .and_then(extract_text_content)
+                .and_then(|text| {
+                    let (body, _) = split_injected_context(&text);
+                    let trimmed = body.trim();
+                    if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed.to_string())
+                    }
+                });
         }
 
         if record_type == Some("assistant") && model.is_none() {
@@ -170,6 +182,8 @@ fn read_claude_messages_from_file(
     let mut messages = Vec::new();
     let mut matched = 0usize;
     let page_limit = limit.max(1);
+    let mut pending_thinking = String::new();
+    let mut pending_ts = 0i64;
 
     for line in reader.lines() {
         let line = match line {
@@ -184,13 +198,23 @@ fn read_claude_messages_from_file(
             continue;
         };
 
-        if matched >= offset {
-            messages.push(message);
-            if messages.len() >= page_limit {
-                break;
-            }
+        let stop =
+            fold_claude_message(message, &mut pending_thinking, &mut pending_ts, |emitted| {
+                if matched >= offset {
+                    messages.push(emitted);
+                }
+                matched += 1;
+                messages.len() >= page_limit
+            });
+        if stop {
+            return Ok(messages);
         }
-        matched += 1;
+    }
+
+    if let Some(flushed) = flush_pending_thinking(&mut pending_thinking, pending_ts) {
+        if matched >= offset && messages.len() < page_limit {
+            messages.push(flushed);
+        }
     }
 
     Ok(messages)
@@ -218,6 +242,58 @@ fn parse_claude_message_line(data: &Value) -> Option<SessionMessage> {
     Some(SessionMessage::new(record_type, content, timestamp).with_thinking(thinking))
 }
 
+/// Claude Code writes each step as its own assistant record: a thinking-only
+/// line, then tool_use (dropped), then another thinking-only line, then text.
+/// Isolated thinking bubbles look like empty assistant turns. Buffer thinking
+/// and attach it to the next visible reply; consecutive thinking-only records
+/// collapse into one section. Leftover thinking (user interrupted / EOF) is
+/// flushed as a single thinking-only message.
+///
+/// `emit` is called once per coalesced message and should return true to stop
+/// scanning (used by pagination).
+fn fold_claude_message(
+    message: SessionMessage,
+    pending_thinking: &mut String,
+    pending_ts: &mut i64,
+    mut emit: impl FnMut(SessionMessage) -> bool,
+) -> bool {
+    if message.role == "assistant" && message.content.trim().is_empty() {
+        if let Some(thinking) = message.thinking.as_deref() {
+            if pending_thinking.is_empty() {
+                *pending_ts = message.timestamp;
+            }
+            push_pending_thinking(pending_thinking, thinking);
+        }
+        return false;
+    }
+    if message.role == "assistant" {
+        return emit(attach_pending_thinking(message, pending_thinking));
+    }
+    if let Some(flushed) = flush_pending_thinking(pending_thinking, *pending_ts) {
+        if emit(flushed) {
+            return true;
+        }
+    }
+    emit(message)
+}
+
+fn attach_pending_thinking(mut message: SessionMessage, pending: &mut String) -> SessionMessage {
+    let Some(pending_text) = take_pending_thinking(pending) else {
+        return message;
+    };
+    message.thinking = Some(match message.thinking.take() {
+        Some(existing) => format!("{pending_text}\n{existing}"),
+        None => pending_text,
+    });
+    message
+}
+
+fn flush_pending_thinking(pending: &mut String, timestamp: i64) -> Option<SessionMessage> {
+    take_pending_thinking(pending).map(|thinking| {
+        SessionMessage::new("assistant", "", timestamp).with_thinking(Some(thinking))
+    })
+}
+
 /// Streaming scan that keeps only the latest user/assistant message, for the
 /// resume preview. Never collects the full transcript into memory.
 pub fn last_claude_messages(
@@ -229,6 +305,8 @@ pub fn last_claude_messages(
     let reader = BufReader::new(file);
     let mut last_user = None;
     let mut last_assistant = None;
+    let mut pending_thinking = String::new();
+    let mut pending_ts = 0i64;
 
     for line in reader.lines() {
         let line = match line {
@@ -242,11 +320,18 @@ pub fn last_claude_messages(
         let Some(message) = parse_claude_message_line(&data) else {
             continue;
         };
-        if message.role == "user" {
-            last_user = Some(message);
-        } else {
-            last_assistant = Some(message);
-        }
+        fold_claude_message(message, &mut pending_thinking, &mut pending_ts, |emitted| {
+            if emitted.role == "user" {
+                last_user = Some(emitted);
+            } else {
+                last_assistant = Some(emitted);
+            }
+            false
+        });
+    }
+
+    if let Some(flushed) = flush_pending_thinking(&mut pending_thinking, pending_ts) {
+        last_assistant = Some(flushed);
     }
 
     Ok((last_user, last_assistant))
@@ -594,6 +679,7 @@ mod tests {
         let message = parse_claude_message_line(&assistant).expect("text block should remain");
         assert_eq!(message.role, "assistant");
         assert_eq!(message.content, "已更换模板");
+        assert_eq!(message.thinking.as_deref(), Some("let me check the files"));
     }
 
     #[test]
@@ -645,5 +731,126 @@ mod tests {
         let err = delete_claude_session_in_projects_dir(dir.path(), "missing", &[])
             .expect_err("missing session should fail");
         assert!(err.contains("not found"));
+    }
+
+    fn write_session_jsonl(lines: &[serde_json::Value]) -> (tempfile::TempDir, PathBuf) {
+        use std::io::Write;
+        let dir = tempdir().expect("temp dir should create");
+        let path = dir.path().join("session.jsonl");
+        let mut file = fs::File::create(&path).expect("session file should create");
+        for line in lines {
+            writeln!(file, "{line}").expect("session line should write");
+        }
+        (dir, path)
+    }
+
+    fn assistant_thinking(ts: &str, thinking: &str) -> serde_json::Value {
+        serde_json::json!({
+            "type": "assistant",
+            "message": {"content": [{"type": "thinking", "thinking": thinking}]},
+            "timestamp": ts
+        })
+    }
+
+    fn assistant_text(ts: &str, text: &str) -> serde_json::Value {
+        serde_json::json!({
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": text}]},
+            "timestamp": ts
+        })
+    }
+
+    fn user_text(ts: &str, text: &str) -> serde_json::Value {
+        serde_json::json!({
+            "type": "user",
+            "message": {"content": text},
+            "timestamp": ts
+        })
+    }
+
+    #[test]
+    fn thinking_only_attaches_to_next_visible_reply() {
+        let (_dir, path) = write_session_jsonl(&[
+            user_text("2026-08-04T13:47:49Z", "删掉这个 skill"),
+            assistant_thinking("2026-08-04T13:48:16Z", "先找一下 skill 在哪"),
+            assistant_text("2026-08-04T13:48:17Z", "我先找一下这个 skill 在哪里。"),
+        ]);
+        let page = read_claude_messages_from_file(&path, 0, 10).expect("read");
+        assert_eq!(page.len(), 2);
+        assert_eq!(page[0].role, "user");
+        assert_eq!(page[1].content, "我先找一下这个 skill 在哪里。");
+        assert_eq!(page[1].thinking.as_deref(), Some("先找一下 skill 在哪"));
+    }
+
+    #[test]
+    fn nearby_thinking_records_merge_into_one_bubble() {
+        let (_dir, path) = write_session_jsonl(&[
+            user_text("2026-08-04T13:47:49Z", "删掉这个 skill"),
+            assistant_thinking("2026-08-04T13:48:16Z", "first thought"),
+            assistant_text("2026-08-04T13:48:17Z", "我先找一下。"),
+            assistant_thinking("2026-08-04T13:48:28Z", "second thought"),
+            assistant_thinking("2026-08-04T13:48:41Z", "third thought"),
+            assistant_thinking("2026-08-04T13:49:03Z", "fourth thought"),
+            assistant_text("2026-08-04T13:49:05Z", "已删除。"),
+        ]);
+        let page = read_claude_messages_from_file(&path, 0, 10).expect("read");
+        assert_eq!(page.len(), 3);
+        assert_eq!(page[1].content, "我先找一下。");
+        assert_eq!(page[1].thinking.as_deref(), Some("first thought"));
+        assert_eq!(page[2].content, "已删除。");
+        assert_eq!(
+            page[2].thinking.as_deref(),
+            Some("second thought\nthird thought\nfourth thought")
+        );
+    }
+
+    #[test]
+    fn leftover_thinking_flushes_as_one_bubble() {
+        let (_dir, path) = write_session_jsonl(&[
+            user_text("2026-08-04T13:47:49Z", "hi"),
+            assistant_thinking("2026-08-04T13:48:16Z", "thought a"),
+            assistant_thinking("2026-08-04T13:48:28Z", "thought b"),
+        ]);
+        let page = read_claude_messages_from_file(&path, 0, 10).expect("read");
+        assert_eq!(page.len(), 2);
+        assert_eq!(page[1].role, "assistant");
+        assert_eq!(page[1].content, "");
+        assert_eq!(page[1].thinking.as_deref(), Some("thought a\nthought b"));
+    }
+
+    #[test]
+    fn leftover_thinking_flushes_before_next_user() {
+        let (_dir, path) = write_session_jsonl(&[
+            user_text("2026-08-04T13:47:49Z", "first"),
+            assistant_thinking("2026-08-04T13:48:16Z", "orphan thought"),
+            user_text("2026-08-04T13:49:00Z", "second"),
+        ]);
+        let page = read_claude_messages_from_file(&path, 0, 10).expect("read");
+        assert_eq!(page.len(), 3);
+        assert_eq!(page[1].thinking.as_deref(), Some("orphan thought"));
+        assert_eq!(page[1].content, "");
+        assert_eq!(page[2].role, "user");
+        assert_eq!(page[2].content, "second");
+    }
+
+    #[test]
+    fn coalesced_messages_respect_offset_limit() {
+        let (_dir, path) = write_session_jsonl(&[
+            user_text("2026-08-04T13:00:00Z", "q1"),
+            assistant_thinking("2026-08-04T13:00:01Z", "t1"),
+            assistant_text("2026-08-04T13:00:02Z", "a1"),
+            user_text("2026-08-04T13:00:03Z", "q2"),
+            assistant_thinking("2026-08-04T13:00:04Z", "t2"),
+            assistant_text("2026-08-04T13:00:05Z", "a2"),
+            user_text("2026-08-04T13:00:06Z", "q3"),
+            assistant_thinking("2026-08-04T13:00:07Z", "t3"),
+            assistant_text("2026-08-04T13:00:08Z", "a3"),
+        ]);
+        let page = read_claude_messages_from_file(&path, 2, 2).expect("read");
+        assert_eq!(page.len(), 2);
+        assert_eq!(page[0].role, "user");
+        assert_eq!(page[0].content, "q2");
+        assert_eq!(page[1].content, "a2");
+        assert_eq!(page[1].thinking.as_deref(), Some("t2"));
     }
 }
