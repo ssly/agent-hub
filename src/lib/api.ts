@@ -450,9 +450,9 @@ export interface UsageProviderAvailability {
 export const getUsageProviderAvailability = () =>
   invoke<UsageProviderAvailability>('get_usage_provider_availability')
 
-// Shared usage-monitor settings (backend in-memory, both windows sync via the
-// `usage-monitor-settings-changed` event). refreshMinutes is clamped to 1–10;
-// a missing `listening` key means the agent is listened (default on).
+// Shared usage-monitor settings (backend file ~/.agent-hub/usage-monitor.json,
+// both windows sync via `usage-monitor-settings-changed`). refreshMinutes is
+// clamped to 1–10; a missing `listening` key means the agent is paused.
 export interface UsageMonitorSettings {
   refreshMinutes: number
   selectedAgent: string | null

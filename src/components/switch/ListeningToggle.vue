@@ -11,7 +11,7 @@ const { t } = useI18n()
 const store = useSwitchStore()
 
 const listened = computed(() =>
-  store.selectedAgent ? store.isAgentListened(store.selectedAgent) : true,
+  store.selectedAgent ? store.isAgentListened(store.selectedAgent) : false,
 )
 
 async function toggle() {

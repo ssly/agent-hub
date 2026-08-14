@@ -473,14 +473,14 @@ function persistOpacity() {
   localStorage.setItem(OPACITY_STORAGE_KEY, String(panelOpacity.value))
 }
 
-// --- Shared usage-monitor settings (backend in-memory) ---------------------
+// --- Shared usage-monitor settings (backend file + event) ------------------
 // The same snapshot drives the Accounts view and its sidebar settings modal;
 // `usage-monitor-settings-changed` keeps this popup in sync live.
 const monitorSettings = ref<UsageMonitorSettings | null>(null)
 const refreshMinutes = computed(() => monitorSettings.value?.refreshMinutes ?? 5)
-/** Absent key = listened (default on). */
+/** Absent key = paused (default off). */
 function isListened(provider: UsageProvider) {
-  return monitorSettings.value?.listening?.[provider] ?? true
+  return monitorSettings.value?.listening?.[provider] ?? false
 }
 /** Applies a settings snapshot; follows a selected-agent change from the
  *  other window like a local tab click (queries when unheard). A paused
@@ -1261,9 +1261,9 @@ onBeforeUnmount(() => {
             <template v-if="selectedProvider === 'codex'">
               <div class="quota-wrap" :class="{ 'is-loading': loading, 'is-mini': miniMode }">
                 <UsageOrb v-if="usageWindows.length" :windows="usageWindows" :mini="miniMode">
-                  <div v-if="!miniMode && snapshot && !error" class="credit-inline">
+                  <div v-if="!miniMode && snapshot && !error && resetCards.length" class="credit-inline">
                     <span class="credit-inline__title">{{ t('tray.reset_credit') }}</span>
-                    <div v-if="resetCards.length" class="credit-chips">
+                    <div class="credit-chips">
                       <div v-for="(card, index) in resetCards" :key="`${card.expires_at ?? 'unknown'}-${index}`" class="credit-chip">
                         <span class="credit-chip__tooltip">
                           <span>{{ t('tray.reset_credit_expiry') }}</span>
@@ -1273,7 +1273,6 @@ onBeforeUnmount(() => {
                         <span class="credit-chip__date">{{ splitExpiry(card.expires_at).date }}</span>
                       </div>
                     </div>
-                    <p v-else class="credit-empty">{{ t('tray.no_reset_credit') }}</p>
                   </div>
                 </UsageOrb>
                 <UsageOrbPlaceholder

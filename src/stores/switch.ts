@@ -89,13 +89,13 @@ export const useSwitchStore = defineStore('switch', () => {
     await loadSelectedAgent()
   }
 
-  // --- Shared usage-monitor settings (backend in-memory, synced with the
-  // tray popup via the `usage-monitor-settings-changed` event) --------------
+  // --- Shared usage-monitor settings (backend file + event, synced with
+  // the tray popup). Absent listening key = paused; user must turn it on. --
   const monitorSettings = ref<UsageMonitorSettings | null>(null)
   const refreshMinutes = computed(() => monitorSettings.value?.refreshMinutes ?? 5)
-  /** Absent key = listened (default on). */
+  /** Absent key = paused (default off). */
   function isAgentListened(agent: string) {
-    return monitorSettings.value?.listening?.[agent] ?? true
+    return monitorSettings.value?.listening?.[agent] ?? false
   }
   async function loadMonitorSettings() {
     try {

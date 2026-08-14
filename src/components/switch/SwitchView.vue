@@ -329,7 +329,7 @@ onUnmounted(() => {
 // The toggle itself lives in ListeningToggle (panel header, next to refresh).
 // Paused agents are never auto-queried here or in the tray popup.
 const listened = computed(() =>
-  store.selectedAgent ? store.isAgentListened(store.selectedAgent) : true,
+  store.selectedAgent ? store.isAgentListened(store.selectedAgent) : false,
 )
 
 let autoTimer: number | undefined
