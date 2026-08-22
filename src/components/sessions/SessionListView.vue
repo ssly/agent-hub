@@ -5,9 +5,9 @@ import { formatInt, formatSessionTime } from '@/lib/utils'
 import { useToast } from '@/composables/useToast'
 import { useHoverResetBool } from '@/composables/useHoverReset'
 import * as api from '@/lib/api'
-import { computed } from 'vue'
-import AppSelect from '@/components/ui/AppSelect.vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import AppLoading from '@/components/ui/AppLoading.vue'
+import AppSelect from '@/components/ui/AppSelect.vue'
 import SessionCard from '@/components/sessions/SessionCard.vue'
 import SessionMessagesModal from '@/components/sessions/SessionMessagesModal.vue'
 import SessionResumeModal from '@/components/sessions/SessionResumeModal.vue'
@@ -15,6 +15,56 @@ import SessionResumeModal from '@/components/sessions/SessionResumeModal.vue'
 const { t, locale } = useI18n()
 const store = useSessionsStore()
 const { showToast } = useToast()
+
+const pathFilterModel = computed({
+  get: () => store.selectedPathFilter,
+  set: (val: string) => store.changePathFilter(val),
+})
+
+const pathSelectOptions = computed(() =>
+  store.pathOptions.map(p => ({
+    value: p,
+    label:
+      p === 'all'
+        ? t('session.path_filter_all')
+        : p === 'unknown'
+          ? t('session.path_filter_unknown')
+          : p,
+  })),
+)
+
+const loadMoreSentinel = ref<HTMLElement | null>(null)
+let observer: IntersectionObserver | null = null
+
+function setupObserver() {
+  if (observer) observer.disconnect()
+  if (typeof IntersectionObserver === 'undefined') return
+
+  observer = new IntersectionObserver(
+    entries => {
+      if (entries[0]?.isIntersecting && store.hasMore && !store.loadingMore && !store.isLoading) {
+        store.loadMore()
+      }
+    },
+    { rootMargin: '300px' },
+  )
+
+  if (loadMoreSentinel.value) {
+    observer.observe(loadMoreSentinel.value)
+  }
+}
+
+onMounted(() => {
+  setupObserver()
+})
+
+watch(loadMoreSentinel, () => {
+  setupObserver()
+})
+
+onUnmounted(() => {
+  observer?.disconnect()
+})
 
 // Batch delete uses the same two-step confirm pattern as single delete: first
 // click arms the chip, a second click fires bulkDelete. The chip disarms as
@@ -67,15 +117,7 @@ async function handleBulkDelete() {
   }
 }
 
-// Map store data into the { value, label, disabled } shape AppSelect expects.
-const pathSelectOptions = computed(() =>
-  store.pathOptions.map(p => ({
-    value: p,
-    label: p === 'all' ? t('session.path_filter_all') : p === 'unknown' ? t('session.path_filter_unknown') : p,
-  }))
-)
-
-/** Display name for the card's agent badge, resolved from the platforms list. */
+// Display name for the card's agent badge, resolved from the platforms list.
 function platformName(platformId: string | undefined): string {
   const id = platformId || store.selectedPlatformId || ''
   return store.platforms.find(p => p.id === id)?.display_name || id
@@ -250,16 +292,12 @@ function clearSessionSearch() {
               <span class="ah-filter-bar__stats">
                 {{ t('session.loaded_summary', { loaded: formatInt(store.sessions.length), total: formatInt(store.sessionTotal) }) }}
               </span>
-              <div class="flex items-center gap-3 flex-wrap">
-                <div class="flex items-center gap-1.5">
-                  <span class="ah-filter-bar__label">{{ t('session.path_filter_label') }}</span>
-                  <div class="w-72">
-                    <AppSelect
-                      :model-value="store.selectedPathFilter"
-                      :options="pathSelectOptions"
-                      @update:model-value="store.changePathFilter($event)"
-                    />
-                  </div>
+              <div class="flex items-center gap-3">
+                <div v-if="!store.directoryFilter && pathSelectOptions.length > 2" class="w-64">
+                  <AppSelect
+                    v-model="pathFilterModel"
+                    :options="pathSelectOptions"
+                  />
                 </div>
                 <button class="btn btn-secondary btn-sm" @click="store.enterSelection()">
                   {{ t('session.batch_select') }}
@@ -311,7 +349,7 @@ function clearSessionSearch() {
 
           <!-- Session Cards -->
           <div v-if="store.sessions.length === 0" class="py-8 text-center" style="color: var(--ink-3)">
-            {{ store.selectedPathFilter !== 'all' ? t('session.path_filter_empty') : t('session.no_sessions') }}
+            {{ store.directoryFilter ? t('session.path_filter_empty') : t('session.no_sessions') }}
           </div>
 
           <div class="space-y-2">
@@ -335,15 +373,16 @@ function clearSessionSearch() {
             />
           </div>
 
-          <!-- Load more -->
-          <div v-if="store.hasMore" class="mt-3 flex justify-center">
-            <button
-              class="btn btn-secondary btn-sm"
-              :disabled="store.loadingMore"
-              @click="store.loadMore()"
+          <!-- Infinite scroll sentinel & status -->
+          <div ref="loadMoreSentinel" class="py-4 flex justify-center">
+            <AppLoading v-if="store.loadingMore" class="py-2">{{ t('session.loading_more') }}</AppLoading>
+            <span
+              v-else-if="!store.hasMore && store.sessions.length > 20"
+              class="text-xs"
+              style="color: var(--ink-4)"
             >
-              {{ store.loadingMore ? t('session.loading_more') : t('session.load_more') }}
-            </button>
+              {{ t('session.no_more_sessions') }}
+            </span>
           </div>
         </template>
 

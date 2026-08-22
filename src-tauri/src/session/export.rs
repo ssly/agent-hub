@@ -189,11 +189,97 @@ fn build_html(platform_id: &str, locale: &str, conversations: &[ExportConversati
     .bubble {{ padding:18px 20px; border:1px solid var(--line); border-radius:17px; background:var(--assistant); box-shadow:0 8px 24px rgba(30,42,50,.06); overflow-wrap:anywhere; }}
     .user .bubble {{ background:var(--user); border-top-right-radius:5px; }}
     .assistant .bubble {{ border-top-left-radius:5px; }}
-    .text {{ line-height:1.72; white-space:pre-wrap; }}
     .thinking {{ margin:0 0 12px; padding:8px 10px; border-radius:10px; background:#eef2f2; color:var(--muted); }}
     .thinking summary {{ cursor:pointer; font-size:12px; font-weight:700; user-select:none; }}
     .thinking pre {{ margin:8px 0 0; padding:0; overflow:visible; border-radius:0; color:var(--muted); background:transparent; font:12.5px/1.65 inherit; white-space:pre-wrap; }}
-    pre {{ margin:14px 0; padding:15px 16px; overflow:auto; border-radius:11px; color:#e8eef0; background:#172b33; font:12px/1.65 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; white-space:pre; }}
+    
+    /* Markdown Body Typography */
+    .md-body {{ line-height:1.68; font-size:14px; color:inherit; }}
+    .md-body > *:first-child {{ margin-top:0; }}
+    .md-body > *:last-child {{ margin-bottom:0; }}
+    .md-body p {{ margin:0.5em 0; line-height:1.68; }}
+    .md-body h1, .md-body h2, .md-body h3, .md-body h4, .md-body h5, .md-body h6 {{
+      margin:1.1em 0 0.35em;
+      font-weight:700;
+      line-height:1.3;
+      color:var(--ink);
+    }}
+    .md-body h1 {{ font-size:1.35em; border-bottom:1px solid var(--line); padding-bottom:0.25em; }}
+    .md-body h2 {{ font-size:1.2em; border-bottom:1px solid var(--line); padding-bottom:0.2em; }}
+    .md-body h3 {{ font-size:1.08em; }}
+    .md-body h4 {{ font-size:1em; }}
+    .md-body code {{
+      font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;
+      font-size:0.88em;
+      padding:2px 5px;
+      border-radius:4px;
+      background:rgba(0,0,0,0.06);
+      color:#b33917;
+    }}
+    .user .md-body code {{
+      background:rgba(0,0,0,0.05);
+      color:#9c2e10;
+    }}
+    .md-body pre {{
+      margin:0.8em 0;
+      padding:14px 16px;
+      overflow-x:auto;
+      border-radius:10px;
+      background:#172b33;
+      color:#e8eef0;
+      font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;
+      font-size:12.5px;
+      line-height:1.6;
+    }}
+    .md-body pre code {{
+      padding:0;
+      background:transparent;
+      color:inherit;
+      font-size:inherit;
+    }}
+    .md-body ul, .md-body ol {{
+      margin:0.5em 0;
+      padding-left:1.4em;
+    }}
+    .md-body li {{
+      margin:0.25em 0;
+      line-height:1.6;
+    }}
+    .md-body blockquote {{
+      margin:0.6em 0;
+      padding:4px 12px;
+      border-left:3px solid var(--accent);
+      background:rgba(53,111,123,0.06);
+      border-radius:0 4px 4px 0;
+      color:var(--muted);
+    }}
+    .md-body blockquote > *:first-child {{ margin-top:0; }}
+    .md-body blockquote > *:last-child {{ margin-bottom:0; }}
+    .md-body table {{
+      width:100%;
+      margin:0.8em 0;
+      border-collapse:collapse;
+      font-size:13px;
+    }}
+    .md-body th, .md-body td {{
+      padding:6px 10px;
+      border:1px solid var(--line);
+      text-align:left;
+    }}
+    .md-body th {{
+      background:rgba(0,0,0,0.04);
+      font-weight:600;
+    }}
+    .md-body hr {{
+      margin:1.2em 0;
+      border:0;
+      border-top:1px solid var(--line);
+    }}
+    .md-body a {{
+      color:var(--accent);
+      text-decoration:underline;
+      text-underline-offset:2px;
+    }}
     .empty {{ padding:28px; border:1px dashed var(--line); border-radius:14px; color:var(--muted); text-align:center; }}
     [hidden] {{ display:none !important; }}
     @media (max-width:760px) {{ .layout {{ display:block; }} .sidebar {{ position:relative; height:auto; max-height:44vh; }} .content {{ padding:24px 14px 60px; }} .session-header {{ padding:20px; }} .session-header h2 {{ font-size:24px; }} .message {{ max-width:96%; }} }}
@@ -289,6 +375,115 @@ fn build_html(platform_id: &str, locale: &str, conversations: &[ExportConversati
     html
 }
 
+use pulldown_cmark::{html, Event, Options, Parser};
+
+struct DisplayMessage {
+    role: String,
+    timestamp: i64,
+    system: Option<String>,
+    thinking: Option<String>,
+    content: String,
+}
+
+fn split_injected_context(text: &str) -> (String, Option<String>) {
+    let mut body = text.to_string();
+    let mut system_parts = Vec::new();
+
+    // Extract <system-reminder>...</system-reminder>
+    while let Some(start) = body.find("<system-reminder") {
+        if let Some(end_tag_start) = body[start..].find("</system-reminder>") {
+            let full_end = start + end_tag_start + "</system-reminder>".len();
+            let block = &body[start..full_end];
+            if let Some(inner_start) = block.find('>') {
+                let inner = &block[inner_start + 1..block.len() - "</system-reminder>".len()];
+                let trimmed = inner.trim();
+                if !trimmed.is_empty() {
+                    system_parts.push(trimmed.to_string());
+                }
+            }
+            body.replace_range(start..full_end, "");
+        } else {
+            break;
+        }
+    }
+
+    // Extract <user_query>...</user_query>
+    if let Some(start) = body.find("<user_query") {
+        if let Some(end_tag_start) = body[start..].find("</user_query>") {
+            let full_end = start + end_tag_start + "</user_query>".len();
+            let block = &body[start..full_end];
+            if let Some(inner_start) = block.find('>') {
+                let inner = &block[inner_start + 1..block.len() - "</user_query>".len()];
+                let inner_trimmed = inner.trim().to_string();
+                body.replace_range(start..full_end, &inner_trimmed);
+            }
+        }
+    }
+
+    let cleaned_body = body.trim().to_string();
+    let combined_system = if system_parts.is_empty() {
+        None
+    } else {
+        Some(system_parts.join("\n\n"))
+    };
+    (cleaned_body, combined_system)
+}
+
+fn group_conversation_messages(messages: &[SessionMessage]) -> Vec<DisplayMessage> {
+    let mut groups: Vec<DisplayMessage> = Vec::new();
+    for msg in messages {
+        let (content, extracted_system) = split_injected_context(&msg.content);
+        let combined_system = match (&msg.system, extracted_system) {
+            (Some(s), Some(ext)) => Some(format!("{}\n\n{}", s.trim(), ext.trim())),
+            (Some(s), None) => Some(s.clone()),
+            (None, Some(ext)) => Some(ext),
+            (None, None) => None,
+        };
+
+        if msg.role == "assistant" {
+            if let Some(last) = groups.last_mut() {
+                if last.role == "assistant" {
+                    last.timestamp = msg.timestamp;
+                    if let Some(th) = &msg.thinking {
+                        let prev = last.thinking.take().unwrap_or_default();
+                        last.thinking = Some(if prev.is_empty() {
+                            th.clone()
+                        } else {
+                            format!("{}\n\n{}", prev, th)
+                        });
+                    }
+                    if let Some(sys) = combined_system {
+                        let prev = last.system.take().unwrap_or_default();
+                        last.system = Some(if prev.is_empty() {
+                            sys
+                        } else {
+                            format!("{}\n\n{}", prev, sys)
+                        });
+                    }
+                    if !content.is_empty() {
+                        if last.content.is_empty() {
+                            last.content = content;
+                        } else {
+                            last.content.push_str("\n\n");
+                            last.content.push_str(&content);
+                        }
+                    }
+                    continue;
+                }
+            }
+        }
+
+        groups.push(DisplayMessage {
+            role: msg.role.clone(),
+            timestamp: msg.timestamp,
+            system: combined_system,
+            thinking: msg.thinking.clone(),
+            content,
+        });
+    }
+    groups
+}
+
 fn render_conversation(
     html: &mut String,
     index: usize,
@@ -314,7 +509,8 @@ fn render_conversation(
     )
     .expect("writing to String cannot fail");
 
-    if conversation.messages.is_empty() {
+    let display_messages = group_conversation_messages(&conversation.messages);
+    if display_messages.is_empty() {
         writeln!(
             html,
             "        <div class=\"empty\">{}</div>",
@@ -322,7 +518,7 @@ fn render_conversation(
         )
         .expect("writing to String cannot fail");
     }
-    for message in &conversation.messages {
+    for message in &display_messages {
         let role_class = if message.role == "user" {
             "user"
         } else {
@@ -372,55 +568,25 @@ fn render_conversation(
 }
 
 fn render_message_content(content: &str) -> String {
-    let mut output = String::new();
-    let mut text = String::new();
-    let mut code = String::new();
-    let mut in_code = false;
+    if content.trim().is_empty() {
+        return String::new();
+    }
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_TABLES);
+    options.insert(Options::ENABLE_FOOTNOTES);
+    options.insert(Options::ENABLE_STRIKETHROUGH);
+    options.insert(Options::ENABLE_TASKLISTS);
+    options.insert(Options::ENABLE_HEADING_ATTRIBUTES);
 
-    for line in content.lines() {
-        if line.trim_start().starts_with("```") {
-            if in_code {
-                write!(
-                    output,
-                    "<pre><code>{}</code></pre>",
-                    escape_html(code.trim_end())
-                )
-                .expect("writing to String cannot fail");
-                code.clear();
-            } else if !text.is_empty() {
-                write!(
-                    output,
-                    "<div class=\"text\">{}</div>",
-                    escape_html(text.trim_end())
-                )
-                .expect("writing to String cannot fail");
-                text.clear();
-            }
-            in_code = !in_code;
-            continue;
-        }
-        let target = if in_code { &mut code } else { &mut text };
-        target.push_str(line);
-        target.push('\n');
-    }
+    let parser = Parser::new_ext(content, options).map(|event| match event {
+        Event::Html(text) => Event::Text(text),
+        Event::InlineHtml(text) => Event::Text(text),
+        other => other,
+    });
 
-    if in_code || !code.is_empty() {
-        write!(
-            output,
-            "<pre><code>{}</code></pre>",
-            escape_html(code.trim_end())
-        )
-        .expect("writing to String cannot fail");
-    }
-    if !text.is_empty() || output.is_empty() {
-        write!(
-            output,
-            "<div class=\"text\">{}</div>",
-            escape_html(text.trim_end())
-        )
-        .expect("writing to String cannot fail");
-    }
-    output
+    let mut html_output = String::new();
+    html::push_html(&mut html_output, parser);
+    format!("<div class=\"md-body\">{}</div>", html_output)
 }
 
 fn project_name(project_path: &str) -> String {
@@ -511,7 +677,18 @@ mod tests {
             render_message_content("hello <script>alert(1)</script>\n```rust\nlet x = 1 < 2;\n```");
         assert!(!rendered.contains("<script>"));
         assert!(rendered.contains("&lt;script&gt;"));
-        assert!(rendered.contains("<pre><code>let x = 1 &lt; 2;</code></pre>"));
+        assert!(rendered.contains("<pre><code class=\"language-rust\">let x = 1 &lt; 2;\n</code></pre>"));
+    }
+
+    #[test]
+    fn message_content_formats_markdown_elements() {
+        let rendered = render_message_content("# Title\n\n**bold** and *italic*\n\n- item 1\n- item 2\n\n> quote");
+        assert!(rendered.contains("<h1>Title</h1>"));
+        assert!(rendered.contains("<strong>bold</strong>"));
+        assert!(rendered.contains("<em>italic</em>"));
+        assert!(rendered.contains("<ul>"));
+        assert!(rendered.contains("<li>item 1</li>"));
+        assert!(rendered.contains("<blockquote>"));
     }
 
     #[test]

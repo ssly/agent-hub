@@ -102,7 +102,8 @@ export async function pickPluginDirectory(): Promise<string | null> {
 }
 
 // Sessions
-export const listSessionPlatforms = () => invoke<any[]>('list_session_platforms')
+export const listSessionPlatforms = (pathFilter?: string | null) =>
+  invoke<any[]>('list_session_platforms', { pathFilter: pathFilter || null })
 export const listSessions = (platformId: string, pathFilter: string, offset: number, limit: number) =>
   invoke<any>('list_sessions', { platformId, pathFilter, offset, limit })
 export const listSessionTerminals = () => invoke<any[]>('list_session_terminals')

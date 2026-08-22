@@ -48,7 +48,7 @@ async function persistRefreshMinutes() {
 }
 
 const workspaceName = computed(() => {
-  if (!pluginsStore.workspaceDirectory) return t('plugin.scope_global')
+  if (!pluginsStore.workspaceDirectory) return t('plugin.scope_select_dir')
   const parts = pluginsStore.workspaceDirectory.split(/[\\/]/).filter(Boolean)
   return parts[parts.length - 1] || pluginsStore.workspaceDirectory
 })
@@ -71,6 +71,32 @@ async function handlePickDirectory() {
 async function handleUseGlobalDirectory() {
   await pluginsStore.setWorkspaceDirectory(null)
   appStore.setView('plugins')
+}
+
+const isPickingSessionDirectory = ref(false)
+
+const sessionDirectoryName = computed(() => {
+  if (!sessionsStore.directoryFilter) return t('session.scope_select_dir')
+  const parts = sessionsStore.directoryFilter.split(/[\\/]/).filter(Boolean)
+  return parts[parts.length - 1] || sessionsStore.directoryFilter
+})
+
+async function handlePickSessionDirectory() {
+  if (isPickingSessionDirectory.value) return
+  isPickingSessionDirectory.value = true
+  try {
+    const directory = await pickPluginDirectory()
+    if (!directory) return
+    await sessionsStore.setDirectoryFilter(directory)
+  } catch (error: any) {
+    showToast(t('session.scope_pick_failed', { error: error?.message || String(error) }), 'error')
+  } finally {
+    isPickingSessionDirectory.value = false
+  }
+}
+
+async function handleClearSessionDirectory() {
+  await sessionsStore.setDirectoryFilter(null)
 }
 
 const tabs = [
@@ -218,8 +244,8 @@ function handleSessionSearch(e: Event) {
         </button>
       </nav>
 
+      <!-- Scope picker (Plugins tab) -->
       <div v-if="appStore.currentTab === 'plugins'" class="ah-scope-picker">
-        <div class="ah-scope-picker__label">{{ t('plugin.scope_label') }}</div>
         <div class="ah-scope-picker__control">
           <button
             type="button"
@@ -228,12 +254,9 @@ function handleSessionSearch(e: Event) {
             :title="pluginsStore.workspaceDirectory || t('plugin.scope_global_hint')"
             @click="handlePickDirectory"
           >
-            <Globe2 v-if="pluginsStore.isGlobalScope" :size="14" />
-            <FolderOpen v-else :size="14" />
+            <FolderOpen :size="13" class="ah-scope-picker__icon shrink-0" />
             <span class="ah-scope-picker__text">
-              <strong>{{ workspaceName }}</strong>
-              <small v-if="pluginsStore.workspaceDirectory">{{ pluginsStore.workspaceDirectory }}</small>
-              <small v-else>{{ t('plugin.scope_choose') }}</small>
+              {{ workspaceName }}
             </span>
           </button>
           <button
@@ -244,7 +267,35 @@ function handleSessionSearch(e: Event) {
             :aria-label="t('plugin.scope_use_global')"
             @click="handleUseGlobalDirectory"
           >
-            <X :size="13" />
+            <X :size="12" />
+          </button>
+        </div>
+      </div>
+
+      <!-- Scope picker (Sessions tab) -->
+      <div v-if="appStore.currentTab === 'sessions'" class="ah-scope-picker">
+        <div class="ah-scope-picker__control">
+          <button
+            type="button"
+            class="ah-scope-picker__main"
+            :disabled="isPickingSessionDirectory"
+            :title="sessionsStore.directoryFilter || t('session.scope_all_hint')"
+            @click="handlePickSessionDirectory"
+          >
+            <FolderOpen :size="13" class="ah-scope-picker__icon shrink-0" />
+            <span class="ah-scope-picker__text">
+              {{ sessionDirectoryName }}
+            </span>
+          </button>
+          <button
+            v-if="sessionsStore.directoryFilter"
+            type="button"
+            class="ah-scope-picker__reset"
+            :title="t('session.scope_clear')"
+            :aria-label="t('session.scope_clear')"
+            @click="handleClearSessionDirectory"
+          >
+            <X :size="12" />
           </button>
         </div>
       </div>
@@ -306,7 +357,7 @@ function handleSessionSearch(e: Event) {
 
       <!-- Version (+ footer shortcuts: monitor panel, language, theme) -->
       <div
-        class="relative px-3 py-2 text-center cursor-pointer select-none transition-colors hover:bg-[color:var(--sunken)]"
+        class="sidebar-footer cursor-pointer select-none transition-colors hover:bg-[color:var(--sunken)]"
         style="border-top: 1px solid var(--hairline)"
         @click="appStore.openAbout"
         :title="appStore.isDownloading ? t('about.downloading_title', { percent: appStore.updateProgress }) : (appStore.availableUpdate ? `发现新版本 v${appStore.availableUpdate.version}，点击查看` : t('about.title'))"
@@ -344,16 +395,16 @@ function handleSessionSearch(e: Event) {
         <!-- Downloading: spinner + percent -->
         <span
           v-if="appStore.isDownloading"
-          class="inline-flex items-center justify-center gap-1.5"
-          style="color: var(--accent); font-size: 11px"
+          class="sidebar-footer-version inline-flex items-center gap-1.5"
+          style="color: var(--accent)"
         >
           <svg class="about-spin" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
           {{ appStore.updateProgress }}%
         </span>
         <span
           v-else
+          class="sidebar-footer-version"
           :style="appStore.availableUpdate ? { color: 'var(--warning)' } : { color: 'var(--ink-4)' }"
-          style="font-size: 11px"
         >
           v{{ appStore.appVersion }}
           <span v-if="appStore.availableUpdate" class="ml-1 text-[10px] font-semibold">{{ t('about.update_available_short') }}</span>
@@ -395,14 +446,25 @@ function handleSessionSearch(e: Event) {
 </template>
 
 <style scoped>
+.sidebar-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+}
 .sidebar-footer-actions {
-  position: absolute;
-  left: 8px;
-  top: 50%;
-  transform: translateY(-50%);
   display: inline-flex;
   align-items: center;
   gap: 2px;
+  flex: none;
+}
+.sidebar-footer-version {
+  flex: none;
+  margin-left: auto;
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
 }
 .sidebar-footer-btn {
   display: inline-flex;
@@ -463,58 +525,74 @@ function handleSessionSearch(e: Event) {
 .ah-nav-item:hover .ah-nav-item__icon { color: var(--ink-2); }
 .ah-nav-item.is-active .ah-nav-item__icon { color: var(--accent); }
 .ah-scope-picker {
-  padding: 10px;
+  padding: 6px 10px;
   border-bottom: 1px solid var(--hairline);
-}
-.ah-scope-picker__label {
-  margin: 0 4px 5px;
-  color: var(--ink-4);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: .06em;
-  text-transform: uppercase;
 }
 .ah-scope-picker__control {
   display: flex;
-  align-items: stretch;
+  align-items: center;
   min-width: 0;
+  height: 28px;
   border: 1px solid var(--hairline);
-  border-radius: 9px;
+  border-radius: var(--radius-sm, 6px);
   background: var(--surface);
   overflow: hidden;
+  transition: border-color var(--dur-fast) var(--ease-soft);
+}
+.ah-scope-picker__control:hover {
+  border-color: var(--border-hover, var(--hairline));
 }
 .ah-scope-picker__main {
   min-width: 0;
   flex: 1;
-  padding: 8px 9px;
+  height: 100%;
+  padding: 0 8px;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   color: var(--ink-2);
+  font-size: 11.5px;
+  font-weight: 500;
   text-align: left;
+  background: transparent;
+  border: none;
   cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-soft), color var(--dur-fast) var(--ease-soft);
 }
-.ah-scope-picker__main:hover { background: var(--hover); }
-.ah-scope-picker__main:disabled { cursor: wait; opacity: .6; }
-.ah-scope-picker__text { min-width: 0; display: grid; gap: 1px; }
-.ah-scope-picker__text strong,
-.ah-scope-picker__text small {
+.ah-scope-picker__main:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.ah-scope-picker__main:disabled {
+  cursor: wait;
+  opacity: .6;
+}
+.ah-scope-picker__icon {
+  color: var(--ink-3);
+}
+.ah-scope-picker__text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.ah-scope-picker__text strong { color: var(--ink); font-size: 12px; font-weight: 600; }
-.ah-scope-picker__text small { color: var(--ink-4); font-size: 10px; }
 .ah-scope-picker__reset {
-  width: 30px;
-  flex: 0 0 30px;
+  width: 24px;
+  flex: 0 0 24px;
+  height: 100%;
   display: grid;
   place-items: center;
+  border: none;
   border-left: 1px solid var(--hairline);
+  background: transparent;
   color: var(--ink-4);
   cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-soft), background var(--dur-fast) var(--ease-soft);
 }
-.ah-scope-picker__reset:hover { color: var(--ink); background: var(--hover); }
+.ah-scope-picker__reset:hover {
+  color: var(--ink);
+  background: var(--hover);
+}
 .about-spin {
   animation: about-spin 0.8s linear infinite;
 }

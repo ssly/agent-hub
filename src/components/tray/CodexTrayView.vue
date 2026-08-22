@@ -263,15 +263,14 @@ function monitorIsChatgpt(row: AgentSessionState) {
   return row.agent === 'codex' && row.source === 'chatgpt'
 }
 
-/** Compact clock for each monitor row (HH:mm:ss only). */
+/** Compact clock for each monitor row (mm:ss only). */
 function formatMonitorClock(timestamp: number): string {
   if (!timestamp) return ''
   const date = new Date(timestamp)
   if (Number.isNaN(date.getTime())) return ''
-  const hh = String(date.getHours()).padStart(2, '0')
   const mm = String(date.getMinutes()).padStart(2, '0')
   const ss = String(date.getSeconds()).padStart(2, '0')
-  return `${hh}:${mm}:${ss}`
+  return `${mm}:${ss}`
 }
 
 async function loadMonitorSnapshots() {
@@ -1407,7 +1406,11 @@ onBeforeUnmount(() => {
             <span class="monitor-question">
               <!-- Long prompts: clamp tooltip to 3 lines (no ghost 4th line). -->
               <span
-                v-tooltip:[monitorTipPlacement(index)].clamp="miniMode ? '' : (row.userPrompt || t('session_monitor.no_prompt'))"
+                v-tooltip="miniMode ? '' : {
+                  text: row.userPrompt || t('session_monitor.no_prompt'),
+                  clamp: true,
+                  placement: monitorTipPlacement(index),
+                }"
               >
                 {{ row.userPrompt || t('session_monitor.no_prompt') }}
               </span>

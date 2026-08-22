@@ -23,102 +23,162 @@ pub use models::{
 #[cfg(target_os = "windows")]
 use crate::win_console::suppress_console;
 
-const MAX_SESSION_PAGE_SIZE: usize = 200;
+const MAX_SESSION_PAGE_SIZE: usize = 1000;
 const PATH_FILTER_ALL: &str = "all";
 const PATH_FILTER_UNKNOWN: &str = "unknown";
 
-pub fn list_session_platforms() -> Result<Vec<SessionPlatform>, String> {
+pub fn list_session_platforms(path_filter: Option<&str>) -> Result<Vec<SessionPlatform>, String> {
+    let is_filtered = match path_filter {
+        Some(filter) => {
+            let t = filter.trim();
+            !t.is_empty() && t != PATH_FILTER_ALL
+        }
+        None => false,
+    };
+
+    if !is_filtered {
+        let mut platforms = Vec::new();
+
+        let codex_count = codex::count_codex_sessions()?;
+        if codex_count > 0 {
+            platforms.push(SessionPlatform {
+                id: "codex".to_string(),
+                display_name: "Codex".to_string(),
+                session_count: codex_count,
+            });
+        }
+
+        // Order mirrors platform/registry.rs (session subset only).
+        let claude_count = claude::count_claude_sessions()?;
+        if claude_count > 0 {
+            platforms.push(SessionPlatform {
+                id: "claude-code".to_string(),
+                display_name: "Claude Code".to_string(),
+                session_count: claude_count,
+            });
+        }
+
+        let antigravity_count = antigravity::count_antigravity_sessions()?;
+        if antigravity_count > 0 {
+            platforms.push(SessionPlatform {
+                id: "antigravity".to_string(),
+                display_name: "Antigravity".to_string(),
+                session_count: antigravity_count,
+            });
+        }
+
+        let grok_count = grok::count_grok_sessions()?;
+        if grok_count > 0 {
+            platforms.push(SessionPlatform {
+                id: "grok".to_string(),
+                display_name: "Grok Build".to_string(),
+                session_count: grok_count,
+            });
+        }
+
+        let kimi_count = kimi::count_kimi_sessions()?;
+        if kimi_count > 0 {
+            platforms.push(SessionPlatform {
+                id: "kimi".to_string(),
+                display_name: "Kimi Code".to_string(),
+                session_count: kimi_count,
+            });
+        }
+
+        let qwen_count = qwen::count_qwen_sessions()?;
+        if qwen_count > 0 {
+            platforms.push(SessionPlatform {
+                id: "qwen".to_string(),
+                display_name: "Qwen Code".to_string(),
+                session_count: qwen_count,
+            });
+        }
+
+        let zcode_count = zcode::count_zcode_sessions()?;
+        if zcode_count > 0 {
+            platforms.push(SessionPlatform {
+                id: "zcode".to_string(),
+                display_name: "ZCode".to_string(),
+                session_count: zcode_count,
+            });
+        }
+
+        let workbuddy_count = workbuddy::count_workbuddy_sessions()?;
+        if workbuddy_count > 0 {
+            platforms.push(SessionPlatform {
+                id: "workbuddy".to_string(),
+                display_name: "WorkBuddy".to_string(),
+                session_count: workbuddy_count,
+            });
+        }
+
+        let kiro_count = kiro::count_kiro_sessions()?;
+        if kiro_count > 0 {
+            platforms.push(SessionPlatform {
+                id: "kiro".to_string(),
+                display_name: "Kiro".to_string(),
+                session_count: kiro_count,
+            });
+        }
+
+        let dsh_count = dsh::count_dsh_sessions()?;
+        if dsh_count > 0 {
+            platforms.push(SessionPlatform {
+                id: "dsh".to_string(),
+                display_name: "DeepSeek Harness".to_string(),
+                session_count: dsh_count,
+            });
+        }
+
+        return Ok(platforms);
+    }
+
+    let filter = path_filter.unwrap().trim();
     let mut platforms = Vec::new();
 
-    let codex_count = codex::count_codex_sessions()?;
-    if codex_count > 0 {
-        platforms.push(SessionPlatform {
-            id: "codex".to_string(),
-            display_name: "Codex".to_string(),
-            session_count: codex_count,
-        });
-    }
+    let check_platform = |id: &str, display_name: &str, count_fn: fn() -> Result<usize, String>| -> Result<Option<SessionPlatform>, String> {
+        let total = count_fn()?;
+        if total == 0 {
+            return Ok(None);
+        }
+        let all_sessions = list_sessions_all(id)?;
+        let matching = filter_sessions_by_path(all_sessions, filter).len();
+        Ok(Some(SessionPlatform {
+            id: id.to_string(),
+            display_name: display_name.to_string(),
+            session_count: matching,
+        }))
+    };
 
-    // Order mirrors platform/registry.rs (session subset only).
-    let claude_count = claude::count_claude_sessions()?;
-    if claude_count > 0 {
-        platforms.push(SessionPlatform {
-            id: "claude-code".to_string(),
-            display_name: "Claude Code".to_string(),
-            session_count: claude_count,
-        });
+    if let Some(p) = check_platform("codex", "Codex", codex::count_codex_sessions)? {
+        platforms.push(p);
     }
-
-    let antigravity_count = antigravity::count_antigravity_sessions()?;
-    if antigravity_count > 0 {
-        platforms.push(SessionPlatform {
-            id: "antigravity".to_string(),
-            display_name: "Antigravity".to_string(),
-            session_count: antigravity_count,
-        });
+    if let Some(p) = check_platform("claude-code", "Claude Code", claude::count_claude_sessions)? {
+        platforms.push(p);
     }
-
-    let grok_count = grok::count_grok_sessions()?;
-    if grok_count > 0 {
-        platforms.push(SessionPlatform {
-            id: "grok".to_string(),
-            display_name: "Grok Build".to_string(),
-            session_count: grok_count,
-        });
+    if let Some(p) = check_platform("antigravity", "Antigravity", antigravity::count_antigravity_sessions)? {
+        platforms.push(p);
     }
-
-    let kimi_count = kimi::count_kimi_sessions()?;
-    if kimi_count > 0 {
-        platforms.push(SessionPlatform {
-            id: "kimi".to_string(),
-            display_name: "Kimi Code".to_string(),
-            session_count: kimi_count,
-        });
+    if let Some(p) = check_platform("grok", "Grok Build", grok::count_grok_sessions)? {
+        platforms.push(p);
     }
-
-    let qwen_count = qwen::count_qwen_sessions()?;
-    if qwen_count > 0 {
-        platforms.push(SessionPlatform {
-            id: "qwen".to_string(),
-            display_name: "Qwen Code".to_string(),
-            session_count: qwen_count,
-        });
+    if let Some(p) = check_platform("kimi", "Kimi Code", kimi::count_kimi_sessions)? {
+        platforms.push(p);
     }
-
-    let zcode_count = zcode::count_zcode_sessions()?;
-    if zcode_count > 0 {
-        platforms.push(SessionPlatform {
-            id: "zcode".to_string(),
-            display_name: "ZCode".to_string(),
-            session_count: zcode_count,
-        });
+    if let Some(p) = check_platform("qwen", "Qwen Code", qwen::count_qwen_sessions)? {
+        platforms.push(p);
     }
-
-    let workbuddy_count = workbuddy::count_workbuddy_sessions()?;
-    if workbuddy_count > 0 {
-        platforms.push(SessionPlatform {
-            id: "workbuddy".to_string(),
-            display_name: "WorkBuddy".to_string(),
-            session_count: workbuddy_count,
-        });
+    if let Some(p) = check_platform("zcode", "ZCode", zcode::count_zcode_sessions)? {
+        platforms.push(p);
     }
-
-    let kiro_count = kiro::count_kiro_sessions()?;
-    if kiro_count > 0 {
-        platforms.push(SessionPlatform {
-            id: "kiro".to_string(),
-            display_name: "Kiro".to_string(),
-            session_count: kiro_count,
-        });
+    if let Some(p) = check_platform("workbuddy", "WorkBuddy", workbuddy::count_workbuddy_sessions)? {
+        platforms.push(p);
     }
-
-    let dsh_count = dsh::count_dsh_sessions()?;
-    if dsh_count > 0 {
-        platforms.push(SessionPlatform {
-            id: "dsh".to_string(),
-            display_name: "DeepSeek Harness".to_string(),
-            session_count: dsh_count,
-        });
+    if let Some(p) = check_platform("kiro", "Kiro", kiro::count_kiro_sessions)? {
+        platforms.push(p);
+    }
+    if let Some(p) = check_platform("dsh", "DeepSeek Harness", dsh::count_dsh_sessions)? {
+        platforms.push(p);
     }
 
     Ok(platforms)
@@ -215,7 +275,13 @@ fn filter_sessions_by_path(
     }
     sessions
         .into_iter()
-        .filter(|session| normalize_project_path(&session.project_path).as_deref() == Some(filter))
+        .filter(|session| {
+            if let Some(p) = normalize_project_path(&session.project_path) {
+                crate::paths::paths_match(&p, filter)
+            } else {
+                false
+            }
+        })
         .collect()
 }
 
@@ -829,7 +895,7 @@ mod tests {
 
     #[test]
     fn pagination_advances_without_crashing() {
-        let platforms = list_session_platforms().expect("session platforms should list");
+        let platforms = list_session_platforms(None).expect("session platforms should list");
         let Some(platform) = platforms.first() else {
             return;
         };
@@ -971,7 +1037,7 @@ mod tests {
 
     #[test]
     fn resume_preview_smoke_test() {
-        let platforms = list_session_platforms().expect("platforms should list");
+        let platforms = list_session_platforms(None).expect("platforms should list");
         for platform in platforms {
             let Ok(page) = list_sessions(&platform.id, PATH_FILTER_ALL, 0, 1) else {
                 continue;
@@ -1056,9 +1122,12 @@ mod tests {
         let unknown = filter_sessions_by_path(sessions.clone(), PATH_FILTER_UNKNOWN);
         assert_eq!(unknown.len(), 1);
         assert_eq!(unknown[0].id, "2");
-        let exact = filter_sessions_by_path(sessions, "/tmp/a");
+        let exact = filter_sessions_by_path(sessions.clone(), "/tmp/a");
         assert_eq!(exact.len(), 1);
         assert_eq!(exact[0].id, "1");
+        let trailing = filter_sessions_by_path(sessions, "/tmp/a/");
+        assert_eq!(trailing.len(), 1);
+        assert_eq!(trailing[0].id, "1");
     }
 
     #[test]

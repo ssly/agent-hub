@@ -296,7 +296,16 @@ export async function getQwenPlugins() {
 }
 
 // Sessions
-export async function listSessionPlatforms() { await delay(); return SESSION_PLATFORMS }
+export async function listSessionPlatforms(pathFilter?: string) {
+  await delay()
+  if (pathFilter && pathFilter !== 'all') {
+    return SESSION_PLATFORMS.map((p, index) => ({
+      ...p,
+      session_count: index % 3 === 0 ? 3 : index % 3 === 1 ? 1 : 0,
+    }))
+  }
+  return SESSION_PLATFORMS
+}
 export async function listSessions(_platformId: string, _pathFilter: string, offset: number, limit: number) {
   await delay(200); return makeSessions(offset, limit)
 }

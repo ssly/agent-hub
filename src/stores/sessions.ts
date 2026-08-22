@@ -14,7 +14,7 @@ export const useSessionsStore = defineStore('sessions', () => {
   const isLoading = ref(false)
   const loadingMore = ref(false)
   const loadError = ref('')
-  const pageSize = 50
+  const pageSize = 150
 
   const searchQuery = ref('')
   const searchResults = ref<any[]>([])
@@ -27,11 +27,13 @@ export const useSessionsStore = defineStore('sessions', () => {
   const isBulkDeleting = ref(false)
   const isBulkExporting = ref(false)
 
+  // Directory filter for path-first session exploration (mirrors plugins workspace)
+  const directoryFilter = ref<string | null>(localStorage.getItem('ah-sessions-directory-filter') || null)
 
   async function refreshPlatforms(keepPathFilter = false) {
     loadError.value = ''
     try {
-      platforms.value = await api.listSessionPlatforms()
+      platforms.value = await api.listSessionPlatforms(directoryFilter.value)
     } catch (e: any) {
       platforms.value = []
       loadError.value = e?.SyncError || e?.message || String(e)
@@ -45,7 +47,9 @@ export const useSessionsStore = defineStore('sessions', () => {
     if (!exists) {
       selectedPlatformId.value = platforms.value[0].id
     }
-    if (!keepPathFilter) selectedPathFilter.value = 'all'
+    if (!keepPathFilter) {
+      selectedPathFilter.value = directoryFilter.value || 'all'
+    }
     await loadSessions(false)
   }
 
@@ -63,9 +67,13 @@ export const useSessionsStore = defineStore('sessions', () => {
   async function loadSessions(append: boolean) {
     if (!selectedPlatformId.value) return
     const offset = append ? sessionOffset.value : 0
+    const filter = directoryFilter.value || selectedPathFilter.value || 'all'
     try {
-      const page = await api.listSessions(selectedPlatformId.value, selectedPathFilter.value || 'all', offset, pageSize)
+      const page = await api.listSessions(selectedPlatformId.value, filter, offset, pageSize)
       const pagePaths = Array.isArray(page?.paths) && page.paths.length > 0 ? page.paths : ['all', 'unknown']
+      if (directoryFilter.value && !pagePaths.includes(directoryFilter.value)) {
+        pagePaths.push(directoryFilter.value)
+      }
       pathOptions.value = pagePaths
       const pageSessions = Array.isArray(page?.sessions) ? page.sessions : []
       sessions.value = append ? [...sessions.value, ...pageSessions] : pageSessions
@@ -83,9 +91,28 @@ export const useSessionsStore = defineStore('sessions', () => {
     }
   }
 
+  async function setDirectoryFilter(directory: string | null) {
+    directoryFilter.value = directory || null
+    if (directory) {
+      localStorage.setItem('ah-sessions-directory-filter', directory)
+      selectedPathFilter.value = directory
+    } else {
+      localStorage.removeItem('ah-sessions-directory-filter')
+      selectedPathFilter.value = 'all'
+    }
+    searchQuery.value = ''
+    searchResults.value = []
+    isLoading.value = true
+    try {
+      await refreshPlatforms(true)
+    } finally {
+      isLoading.value = false
+    }
+  }
+
   async function selectPlatform(id: string) {
     selectedPlatformId.value = id
-    selectedPathFilter.value = 'all'
+    selectedPathFilter.value = directoryFilter.value || 'all'
     searchQuery.value = ''
     searchResults.value = []
     isLoading.value = true
@@ -106,7 +133,7 @@ export const useSessionsStore = defineStore('sessions', () => {
   }
 
   async function changePathFilter(filter: string) {
-    selectedPathFilter.value = filter || 'all'
+    selectedPathFilter.value = filter
     searchQuery.value = ''
     searchResults.value = []
     isLoading.value = true
@@ -206,6 +233,7 @@ export const useSessionsStore = defineStore('sessions', () => {
     platforms, sessions, selectedPlatformId, selectedPathFilter, pathOptions,
     sessionTotal, sessionOffset, hasMore,
     isLoading, loadingMore, loadError,
+    directoryFilter, setDirectoryFilter,
     messagesModalOpen, activeSession,
     resumeModalOpen, resumeTarget,
     searchQuery, searchResults, isSearching, searchError,

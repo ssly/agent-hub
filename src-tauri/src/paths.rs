@@ -36,6 +36,28 @@ pub fn normalize_project_path_display(value: &str) -> Option<String> {
     }
 }
 
+/// Compare two project paths for equality after normalization.
+///
+/// Handles differences in trailing slashes, URI schemes (`file://`), percent-encoding,
+/// Windows backslashes / drive roots, and case-insensitivity on Windows.
+pub fn paths_match(a: &str, b: &str) -> bool {
+    let norm_a = normalize_project_path_display(a).unwrap_or_else(|| a.trim().to_string());
+    let norm_b = normalize_project_path_display(b).unwrap_or_else(|| b.trim().to_string());
+    if norm_a.is_empty() || norm_b.is_empty() {
+        return norm_a == norm_b;
+    }
+    let clean_a = norm_a.trim_end_matches(['/', '\\']);
+    let clean_b = norm_b.trim_end_matches(['/', '\\']);
+    #[cfg(target_os = "windows")]
+    {
+        clean_a.eq_ignore_ascii_case(clean_b)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        clean_a == clean_b
+    }
+}
+
 fn strip_file_uri(input: &str) -> String {
     let Some(after_scheme) = input
         .strip_prefix("file://")
@@ -273,6 +295,15 @@ mod tests {
             Some("/Users/demo/projects/app".to_string())
         );
         assert_eq!(normalize_project_path_display("   "), None);
+    }
+
+    #[test]
+    fn paths_match_handles_slashes_and_schemes() {
+        assert!(paths_match("/Users/demo/app", "/Users/demo/app"));
+        assert!(paths_match("/Users/demo/app/", "/Users/demo/app"));
+        assert!(paths_match("file:///Users/demo/app", "/Users/demo/app/"));
+        assert!(paths_match("file:///Users/demo/my%20app", "/Users/demo/my app"));
+        assert!(!paths_match("/Users/demo/app1", "/Users/demo/app2"));
     }
 
     #[test]

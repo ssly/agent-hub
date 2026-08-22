@@ -644,8 +644,10 @@ pub fn read_skill_file(
 // --- Session Commands ---
 
 #[tauri::command(async)]
-pub fn list_session_platforms() -> Result<Vec<session::SessionPlatform>, CommandError> {
-    session::list_session_platforms().map_err(CommandError::SyncError)
+pub fn list_session_platforms(
+    path_filter: Option<String>,
+) -> Result<Vec<session::SessionPlatform>, CommandError> {
+    session::list_session_platforms(path_filter.as_deref()).map_err(CommandError::SyncError)
 }
 
 #[tauri::command(async)]

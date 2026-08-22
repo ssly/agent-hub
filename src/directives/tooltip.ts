@@ -8,11 +8,22 @@ import type { Directive } from 'vue'
  *   v-tooltip:bottom / :top / :left / :right
  *   v-tooltip.clamp="text"          — clamp body to 3 lines + ellipsis
  *   v-tooltip:top.clamp="text"
+ *   v-tooltip="{ text, clamp, placement }"
  *
  * Dynamic args work (`v-tooltip:[side]="text"`). Empty value shows nothing.
  * A single tooltip element is shared app-wide (appended to <body>); colors
  * invert with the theme via --ink / --canvas (styles in theme.css § Tooltip).
  */
+
+export type TooltipPlacement = 'bottom' | 'left' | 'right' | 'top'
+export type TooltipValue =
+  | string
+  | {
+      text?: string
+      clamp?: boolean
+      placement?: TooltipPlacement
+    }
+  | undefined
 
 let tipEl: HTMLDivElement | null = null
 
@@ -31,15 +42,24 @@ function hide() {
   tipEl?.classList.remove('is-visible')
 }
 
+function usedLineHeight(style: CSSStyleDeclaration): number {
+  const raw = parseFloat(style.lineHeight)
+  if (Number.isFinite(raw) && raw >= 8) return raw
+  const font = parseFloat(style.fontSize)
+  return (Number.isFinite(font) && font > 0 ? font : 12) * 1.45
+}
+
 function clampToThreeLines(tip: HTMLElement, text: string) {
   const style = getComputedStyle(tip)
   const limit =
-    parseFloat(style.lineHeight) * 3 +
-    parseFloat(style.paddingTop) +
-    parseFloat(style.paddingBottom)
+    usedLineHeight(style) * 3 +
+    (parseFloat(style.paddingTop) || 0) +
+    (parseFloat(style.paddingBottom) || 0)
+  tip.textContent = text
   if (tip.scrollHeight <= limit + 1) return
   // Binary search the longest prefix that, with an ellipsis appended, still
-  // fits three lines.
+  // fits three lines. Re-apply the winning slice after the loop — the last
+  // probe may have been a too-long candidate.
   let lo = 0
   let hi = text.length
   while (lo < hi) {
@@ -48,12 +68,19 @@ function clampToThreeLines(tip: HTMLElement, text: string) {
     if (tip.scrollHeight <= limit + 1) lo = mid
     else hi = mid - 1
   }
+  tip.textContent = lo > 0 ? `${text.slice(0, lo)}…` : '…'
+}
+
+function capWidth(margin: number): number {
+  const root = parseFloat(getComputedStyle(document.documentElement).fontSize)
+  const rem = (Number.isFinite(root) && root > 0 ? root : 16) * 26
+  return Math.min(rem, window.innerWidth - margin * 2)
 }
 
 function show(
   el: HTMLElement,
   text: string,
-  placement: 'bottom' | 'left' | 'right' | 'top',
+  placement: TooltipPlacement,
   clamp: boolean,
 ) {
   if (!text) return
@@ -69,12 +96,13 @@ function show(
   const margin = 16
 
   // Reset geometry before measuring: shrink-to-fit would otherwise size the
-  // box against the previous show's leftover position. Keep a real margin
-  // from the window edges — in the 400px usage tray an edge-to-edge bubble
-  // reads as broken.
+  // box against the previous show's leftover position. Cap width first so a
+  // clamped tip is measured (and cut) at the width it will actually use —
+  // measuring at full window width then shrinking later unwraps 3 lines into
+  // a tall stack of path fragments.
   tip.style.left = '0px'
   tip.style.top = '0px'
-  tip.style.maxWidth = `${window.innerWidth - margin * 2}px`
+  tip.style.maxWidth = `${capWidth(margin)}px`
   if (clamp) clampToThreeLines(tip, content)
 
   const rect = el.getBoundingClientRect()
@@ -104,6 +132,7 @@ function show(
     const space = Math.max(leftSpace, rightSpace)
     if (space < 96) return false
     tip.style.maxWidth = `${space}px`
+    if (clamp) clampToThreeLines(tip, content)
     const shrunk = tip.getBoundingClientRect()
     placeAt(leftSpace >= rightSpace ? rect.left - shrunk.width - 6 : rect.right + 6, shrunk.height)
     return true
@@ -139,9 +168,9 @@ function show(
   tip.style.top = `${top}px`
 }
 
-type TooltipPlacement = 'bottom' | 'left' | 'right' | 'top'
 type TooltipElement = HTMLElement & {
   __ahTooltip__?: { onEnter: () => void; onLeave: () => void }
+  __ahTooltipConfig__?: { text: string; placement: TooltipPlacement; clamp: boolean }
 }
 
 function parsePlacement(arg: string | undefined): TooltipPlacement {
@@ -149,18 +178,34 @@ function parsePlacement(arg: string | undefined): TooltipPlacement {
   return 'bottom'
 }
 
-export const vTooltip: Directive<TooltipElement, string | undefined> = {
+function resolveBinding(
+  value: TooltipValue,
+  arg: string | undefined,
+  clampModifier: boolean,
+): { text: string; placement: TooltipPlacement; clamp: boolean } {
+  if (value && typeof value === 'object') {
+    return {
+      text: value.text ?? '',
+      placement: value.placement ?? parsePlacement(arg),
+      clamp: value.clamp === true || clampModifier,
+    }
+  }
+  return {
+    text: value ?? '',
+    placement: parsePlacement(arg),
+    clamp: clampModifier,
+  }
+}
+
+export const vTooltip: Directive<TooltipElement, TooltipValue> = {
   mounted(el, binding) {
-    el.dataset.ahTooltip = binding.value ?? ''
-    el.dataset.ahTooltipPlacement = parsePlacement(binding.arg)
-    el.dataset.ahTooltipClamp = binding.modifiers.clamp ? '1' : ''
+    el.__ahTooltipConfig__ = resolveBinding(binding.value, binding.arg, !!binding.modifiers.clamp)
     const handlers = {
-      onEnter: () => show(
-        el,
-        el.dataset.ahTooltip || '',
-        parsePlacement(el.dataset.ahTooltipPlacement),
-        el.dataset.ahTooltipClamp === '1',
-      ),
+      onEnter: () => {
+        const cfg = el.__ahTooltipConfig__
+        if (!cfg) return
+        show(el, cfg.text, cfg.placement, cfg.clamp)
+      },
       onLeave: hide,
     }
     el.__ahTooltip__ = handlers
@@ -168,9 +213,7 @@ export const vTooltip: Directive<TooltipElement, string | undefined> = {
     el.addEventListener('mouseleave', handlers.onLeave)
   },
   updated(el, binding) {
-    el.dataset.ahTooltip = binding.value ?? ''
-    el.dataset.ahTooltipPlacement = parsePlacement(binding.arg)
-    el.dataset.ahTooltipClamp = binding.modifiers.clamp ? '1' : ''
+    el.__ahTooltipConfig__ = resolveBinding(binding.value, binding.arg, !!binding.modifiers.clamp)
   },
   unmounted(el) {
     const handlers = el.__ahTooltip__
