@@ -137,6 +137,7 @@
     "resume_last_answer": "Last Answer",
     "resume_command_label": "Resume Command",
     "resume_command_hint": "Copy the command below into your terminal",
+    "resume_command_windows_note": "(Please run in PowerShell)",
     "resume_empty": "(none)",
     "copy_failed": "Copy failed: {error}",
     "find_in_messages": "Find in session (⌘F / Ctrl+F)",

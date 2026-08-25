@@ -137,6 +137,7 @@
     "resume_last_answer": "最后回答",
     "resume_command_label": "恢复指令",
     "resume_command_hint": "将下列指令拷贝到终端",
+    "resume_command_windows_note": "（请使用 PowerShell 执行）",
     "resume_empty": "（暂无）",
     "copy_failed": "复制失败：{error}",
     "find_in_messages": "在会话中搜索 (⌘F / Ctrl+F)",

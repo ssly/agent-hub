@@ -4,7 +4,10 @@ import { useI18n } from 'vue-i18n'
 import AppModal from '@/components/ui/AppModal.vue'
 import AppLoading from '@/components/ui/AppLoading.vue'
 import { useToast } from '@/composables/useToast'
+import { platform } from '@/lib/utils'
 import * as api from '@/lib/api'
+
+const isWindows = platform === 'windows'
 
 // Self-fetching resume modal (copy-command flow) shared by the Sessions
 // browser and the Monitor. Parents pass the platform/session identity and the
@@ -100,6 +103,9 @@ watch(() => props.show, async open => {
             {{ copied ? t('action.copied') : t('action.copy') }}
           </button>
         </div>
+        <p v-if="isWindows" class="ah-resume-command__note">
+          {{ t('session.resume_command_windows_note') }}
+        </p>
       </div>
     </div>
     <template #footer>
@@ -160,5 +166,10 @@ watch(() => props.show, async open => {
   color: var(--ink);
   white-space: pre-wrap;
   word-break: break-all;
+}
+.ah-resume-command__note {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: var(--ink-4);
 }
 </style>

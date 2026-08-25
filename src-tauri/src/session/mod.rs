@@ -347,31 +347,65 @@ pub fn resume_session(
     project_path: &str,
     terminal_id: &str,
 ) -> Result<String, String> {
-    let full_command = build_full_resume_command(platform_id, session_id, project_path)?;
+    // Auto-launch writes a .bat that cmd.exe runs, so Windows still needs `&`.
+    // The copy-paste preview uses PowerShell `;` — see paste_resume_sep().
+    let full_command =
+        build_chained_resume_command(platform_id, session_id, project_path, launch_resume_sep())?;
 
     launch_terminal_with_command(terminal_id, &full_command)?;
     Ok(full_command)
 }
 
-/// `cd <project> && <cli> resume <id>` — the exact string a user can paste
-/// into a terminal. Platform-aware quoting and separator.
+/// Paste-ready `cd <project><sep><cli> resume <id>`. Unix shells get `&&`;
+/// Windows gets PowerShell's statement separator `;` — cmd-style `&` is the
+/// call operator in PowerShell and cannot chain commands.
 fn build_full_resume_command(
     platform_id: &str,
     session_id: &str,
     project_path: &str,
 ) -> Result<String, String> {
-    let resume_command = build_resume_command(platform_id, session_id)?;
+    build_chained_resume_command(platform_id, session_id, project_path, paste_resume_sep())
+}
 
-    let full_command = if project_path.trim().is_empty() {
-        resume_command
+fn paste_resume_sep() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "; "
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        " && "
+    }
+}
+
+fn launch_resume_sep() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        " & "
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        " && "
+    }
+}
+
+fn build_chained_resume_command(
+    platform_id: &str,
+    session_id: &str,
+    project_path: &str,
+    sep: &str,
+) -> Result<String, String> {
+    let resume_command = build_resume_command(platform_id, session_id)?;
+    if project_path.trim().is_empty() {
+        Ok(resume_command)
     } else {
-        #[cfg(target_os = "macos")]
-        let sep = " && ";
-        #[cfg(not(target_os = "macos"))]
-        let sep = " & ";
-        format!("cd {}{}{}", shell_quote(project_path), sep, resume_command)
-    };
-    Ok(full_command)
+        Ok(format!(
+            "cd {}{}{}",
+            shell_quote(project_path),
+            sep,
+            resume_command
+        ))
+    }
 }
 
 const RESUME_PREVIEW_MAX_CHARS: usize = 300;
@@ -443,8 +477,7 @@ fn shell_quote(value: &str) -> String {
 
 /// Whether a CLI name resolves on PATH. Platform-aware so Windows never
 /// shells out through `sh` (Git for Windows ships `sh.exe`; spawning it
-/// without CREATE_NO_WINDOW flashes a blank console when the user merely
-/// opens the resume modal — e.g. Grok/Kimi/Kiro `command_exists` probes).
+/// without CREATE_NO_WINDOW flashes a blank console).
 fn command_exists(command: &str) -> bool {
     #[cfg(target_os = "windows")]
     {
@@ -797,55 +830,33 @@ pub fn delete_sessions(platform_id: &str, session_ids: &[String]) -> BatchDelete
 }
 
 fn build_resume_command(platform_id: &str, session_id: &str) -> Result<String, String> {
+    // Always emit the paste-ready command. Agent Hub's GUI PATH is often
+    // thinner than the user's terminal (especially on Windows), so probing
+    // here would hide the command the user can still run in PowerShell.
     match platform_id {
         "claude-code" => Ok(format!("claude --resume {}", shell_quote(session_id))),
         "codex" => Ok(format!("codex resume {}", shell_quote(session_id))),
-        "kiro" => {
-            if !command_exists("kiro-cli") {
-                return Err("Kiro CLI is not available on PATH.".to_string());
-            }
-            Ok(format!(
-                "kiro-cli chat --resume-id {}",
-                shell_quote(session_id)
-            ))
-        }
-        "grok" => {
-            if !command_exists("grok") {
-                return Err("Grok CLI is not available on PATH.".to_string());
-            }
-            Ok(format!("grok --resume {}", shell_quote(session_id)))
-        }
-        "kimi" => {
-            if !command_exists("kimi") {
-                return Err("Kimi Code CLI is not available on PATH.".to_string());
-            }
-            Ok(format!("kimi --session {}", shell_quote(session_id)))
-        }
-        "qwen" => {
-            if !command_exists("qwen") {
-                return Err("Qwen Code CLI is not available on PATH.".to_string());
-            }
-            Ok(format!("qwen --resume {}", shell_quote(session_id)))
-        }
+        "kiro" => Ok(format!(
+            "kiro-cli chat --resume-id {}",
+            shell_quote(session_id)
+        )),
+        "grok" => Ok(format!("grok --resume {}", shell_quote(session_id))),
+        "kimi" => Ok(format!("kimi --session {}", shell_quote(session_id))),
+        "qwen" => Ok(format!("qwen --resume {}", shell_quote(session_id))),
         "workbuddy" => {
             let bin = if command_exists("codebuddy") {
                 "codebuddy"
             } else if command_exists("workbuddy") {
                 "workbuddy"
             } else {
-                return Err("WorkBuddy / CodeBuddy CLI is not available on PATH.".to_string());
+                "codebuddy"
             };
             Ok(format!("{} -r {}", bin, shell_quote(session_id)))
         }
-        "antigravity" => {
-            if !command_exists("agy") {
-                return Err("Antigravity CLI (agy) is not available on PATH.".to_string());
-            }
-            Ok(format!(
-                "agy --conversation={}",
-                shell_quote(session_id)
-            ))
-        }
+        "antigravity" => Ok(format!(
+            "agy --conversation={}",
+            shell_quote(session_id)
+        )),
         // ZCode is an Electron desktop app: sessions have no terminal resume
         // command. The resume modal surfaces this error instead of a command.
         "zcode" => Err(
@@ -938,12 +949,9 @@ mod tests {
 
     #[test]
     fn build_resume_command_for_kiro_contains_resume_id() {
-        if !command_exists("kiro-cli") {
-            return;
-        }
         let command = build_resume_command("kiro", "abc-123").expect("command should build");
         assert!(command.contains("kiro-cli chat --resume-id"));
-        assert!(command.contains("'abc-123'"));
+        assert!(command.contains(&shell_quote("abc-123")));
     }
 
     #[test]
@@ -961,12 +969,9 @@ mod tests {
 
     #[test]
     fn build_resume_command_for_grok_contains_resume_flag() {
-        if !command_exists("grok") {
-            return;
-        }
         let command = build_resume_command("grok", "abc-123").expect("command should build");
         assert!(command.contains("grok --resume"));
-        assert!(command.contains("'abc-123'"));
+        assert!(command.contains(&shell_quote("abc-123")));
     }
 
     #[test]
@@ -984,12 +989,9 @@ mod tests {
 
     #[test]
     fn build_resume_command_for_kimi_contains_session_flag() {
-        if !command_exists("kimi") {
-            return;
-        }
         let command = build_resume_command("kimi", "abc-123").expect("command should build");
         assert!(command.contains("kimi --session"));
-        assert!(command.contains("'abc-123'"));
+        assert!(command.contains(&shell_quote("abc-123")));
     }
 
     #[test]
@@ -1007,12 +1009,67 @@ mod tests {
 
     #[test]
     fn build_resume_command_for_qwen_contains_resume_flag() {
-        if !command_exists("qwen") {
-            return;
-        }
         let command = build_resume_command("qwen", "abc-123").expect("command should build");
         assert!(command.contains("qwen --resume"));
-        assert!(command.contains("'abc-123'"));
+        assert!(command.contains(&shell_quote("abc-123")));
+    }
+
+    #[test]
+    fn build_resume_command_for_antigravity_and_workbuddy_without_path_probe() {
+        let agy = build_resume_command("antigravity", "abc-123").expect("agy command should build");
+        assert!(agy.contains("agy --conversation="));
+        assert!(agy.contains(&shell_quote("abc-123")));
+
+        let wb = build_resume_command("workbuddy", "abc-123").expect("workbuddy command should build");
+        assert!(wb.contains(" -r "));
+        assert!(wb.contains(&shell_quote("abc-123")));
+        assert!(wb.starts_with("codebuddy ") || wb.starts_with("workbuddy "));
+    }
+
+    #[test]
+    fn full_resume_command_chains_cd_with_shell_separator() {
+        // claude-code does not probe PATH, so this stays deterministic.
+        let command = build_full_resume_command("claude-code", "abc-123", "/tmp/proj")
+            .expect("command should build");
+        assert!(command.starts_with("cd "));
+        assert!(command.contains("claude --resume"));
+        #[cfg(target_os = "windows")]
+        {
+            assert!(
+                command.contains("; claude --resume "),
+                "Windows paste command must use PowerShell `;`, got {command}"
+            );
+            assert!(
+                !command.contains(" & "),
+                "cmd-style `&` is the PowerShell call operator and cannot chain, got {command}"
+            );
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert!(
+                command.contains(" && claude --resume "),
+                "Unix paste command must use `&&`, got {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn launch_resume_command_keeps_cmd_separator_on_windows() {
+        let command = build_chained_resume_command(
+            "claude-code",
+            "abc-123",
+            r"D:\Coding\proj",
+            launch_resume_sep(),
+        )
+        .expect("command should build");
+        #[cfg(target_os = "windows")]
+        {
+            assert!(command.contains(" & claude --resume "));
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert!(command.contains(" && claude --resume "));
+        }
     }
 
     #[test]
@@ -1045,13 +1102,19 @@ mod tests {
             let Some(session) = page.sessions.first() else {
                 continue;
             };
-            // Tolerate errors (CLI absent on PATH, env races): when a preview IS
-            // produced, its command must never be empty.
-            if let Ok(preview) =
-                get_session_resume_preview(&platform.id, &session.id, &session.project_path)
-            {
-                assert!(!preview.command.is_empty());
+            // ZCode/DSH have no terminal resume. Every other platform must
+            // still produce a paste-ready command even if the CLI is missing.
+            let preview = get_session_resume_preview(
+                &platform.id,
+                &session.id,
+                &session.project_path,
+            );
+            if platform.id == "zcode" || platform.id == "dsh" {
+                assert!(preview.is_err(), "{} should reject terminal resume", platform.id);
+                continue;
             }
+            let preview = preview.expect("resume preview should build");
+            assert!(!preview.command.is_empty());
         }
     }
 
