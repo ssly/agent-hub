@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, reactive } from 'vue'
 import * as api from '@/lib/api'
 
 export const useSessionsStore = defineStore('sessions', () => {
@@ -21,9 +21,10 @@ export const useSessionsStore = defineStore('sessions', () => {
   const isSearching = ref(false)
   const searchError = ref('')
 
-  // Batch selection mode (sessions list).
+  // Batch selection mode (sessions list). Per-id map so toggling one card
+  // only invalidates that card's selected binding, not the whole Set.
   const selectionMode = ref(false)
-  const selectedIds = ref<Set<string>>(new Set())
+  const selectedMap = reactive<Record<string, true>>({})
   const isBulkDeleting = ref(false)
   const isBulkExporting = ref(false)
 
@@ -177,31 +178,33 @@ export const useSessionsStore = defineStore('sessions', () => {
     selectionMode.value = true
   }
 
+  function clearSelection() {
+    for (const id of Object.keys(selectedMap)) delete selectedMap[id]
+  }
+
   function exitSelection() {
     selectionMode.value = false
-    selectedIds.value = new Set()
+    clearSelection()
   }
 
   function toggleSelected(id: string) {
-    const next = new Set(selectedIds.value)
-    if (next.has(id)) next.delete(id)
-    else next.add(id)
-    selectedIds.value = next
+    if (selectedMap[id]) delete selectedMap[id]
+    else selectedMap[id] = true
   }
 
   function selectAllLoaded() {
-    selectedIds.value = new Set(sessions.value.map((s: any) => s.id))
+    for (const session of sessions.value) selectedMap[session.id] = true
   }
 
-  function clearSelection() {
-    selectedIds.value = new Set()
+  function isSelected(id: string) {
+    return selectedMap[id] === true
   }
 
-  const selectedCount = computed(() => selectedIds.value.size)
+  const selectedCount = computed(() => Object.keys(selectedMap).length)
 
   async function bulkDelete(): Promise<{ deleted: number; failed: Array<{ session_id: string; error: string }> }> {
     const platformId = selectedPlatformId.value
-    const ids = Array.from(selectedIds.value)
+    const ids = Object.keys(selectedMap)
     if (!platformId || ids.length === 0) {
       return { deleted: 0, failed: [] }
     }
@@ -219,7 +222,7 @@ export const useSessionsStore = defineStore('sessions', () => {
 
   async function bulkExport(locale: string): Promise<api.SessionExportResult | null> {
     const platformId = selectedPlatformId.value
-    const ids = Array.from(selectedIds.value)
+    const ids = Object.keys(selectedMap)
     if (!platformId || ids.length === 0) return null
     isBulkExporting.value = true
     try {
@@ -237,7 +240,7 @@ export const useSessionsStore = defineStore('sessions', () => {
     messagesModalOpen, activeSession,
     resumeModalOpen, resumeTarget,
     searchQuery, searchResults, isSearching, searchError,
-    selectionMode, selectedIds, selectedCount, isBulkDeleting, isBulkExporting,
+    selectionMode, selectedMap, selectedCount, isBulkDeleting, isBulkExporting, isSelected,
     refreshPlatforms, loadSessions, selectPlatform, openResume,
     changePathFilter, loadMore, openMessages, doSearch,
     enterSelection, exitSelection, toggleSelected, selectAllLoaded, clearSelection, bulkDelete, bulkExport,

@@ -518,7 +518,10 @@ mod tests {
     fn codex_client_source_maps_known_values() {
         assert_eq!(codex_client_source("vscode").as_deref(), Some("chatgpt"));
         assert_eq!(codex_client_source("cli").as_deref(), Some("terminal"));
-        assert_eq!(codex_client_source("codex_cli").as_deref(), Some("terminal"));
+        assert_eq!(
+            codex_client_source("codex_cli").as_deref(),
+            Some("terminal")
+        );
         assert_eq!(codex_client_source("exec"), None);
         assert_eq!(codex_client_source("{\"subagent\":{}}"), None);
     }

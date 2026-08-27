@@ -189,10 +189,7 @@ fn list_kimi_state_paths(root: &Path) -> Vec<PathBuf> {
     paths
 }
 
-fn read_kimi_state(
-    path: &Path,
-    work_dirs: &HashMap<String, String>,
-) -> Option<SessionSummary> {
+fn read_kimi_state(path: &Path, work_dirs: &HashMap<String, String>) -> Option<SessionSummary> {
     let id = path
         .parent()
         .and_then(|dir| dir.file_name())
@@ -272,13 +269,8 @@ fn find_kimi_session_dir_in(root: &Path, session_id: &str) -> Result<PathBuf, St
 
 fn delete_kimi_session_in_dir(root: &Path, session_id: &str) -> Result<(), String> {
     let dir = find_kimi_session_dir_in(root, session_id)?;
-    fs::remove_dir_all(&dir).map_err(|err| {
-        format!(
-            "Failed to delete Kimi session {}: {}",
-            dir.display(),
-            err
-        )
-    })
+    fs::remove_dir_all(&dir)
+        .map_err(|err| format!("Failed to delete Kimi session {}: {}", dir.display(), err))
 }
 
 /// The main agent's transcript lives in `agents/main/wire.jsonl`; subagent
@@ -645,7 +637,8 @@ mod tests {
         write_session(temp.path(), "wd_one_aaa", "session_1");
         write_session(temp.path(), "wd_two_bbb", "session_2");
 
-        let found = find_kimi_session_dir_in(temp.path(), "session_2").expect("dir should be found");
+        let found =
+            find_kimi_session_dir_in(temp.path(), "session_2").expect("dir should be found");
         assert!(found.ends_with("wd_two_bbb/session_2"));
     }
 }

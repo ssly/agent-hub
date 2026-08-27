@@ -1,0 +1,5 @@
+# Bundle self-activation if this package is added with `dsh plugin add`.
+# Agent Hub also inserts the same row into the profile cordis.patch.yml.
+- insert:
+    - id: agent-hub-monitor
+      name: agent-hub-dsh-monitor

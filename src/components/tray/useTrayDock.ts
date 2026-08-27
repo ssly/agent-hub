@@ -4,10 +4,11 @@ import { collapseUsageTray, expandUsageTray } from '@/lib/api'
 
 /**
  * Edge-dock ("吸附") state for the usage tray window, macOS-Dock style:
- * the panel snaps to a monitor's outer left/right edge and collapses into a
- * thin strip; hovering the edge slides the panel back out, moving the cursor
- * away slides it back in. Dragging the expanded panel away from the edge
- * leaves dock mode entirely.
+ * the panel snaps to a monitor's outer left/right/top edge and collapses
+ * into a thin strip; hovering the edge slides the panel back out, moving
+ * the cursor away slides it back in. Top dock expands downward from the
+ * work-area top. Dragging the expanded panel away from the edge leaves
+ * dock mode entirely.
  *
  * All geometry, drag detection and animation live in the backend (`tray.rs`)
  * because the native `WindowEvent::Moved` stream is the only drag signal
@@ -16,7 +17,7 @@ import { collapseUsageTray, expandUsageTray } from '@/lib/api'
  * mirrors that state and forwards hover expand/collapse intents.
  */
 
-export type DockEdge = 'left' | 'right'
+export type DockEdge = 'left' | 'right' | 'top'
 
 export interface TrayDockOptions {
   /** Invoked when dock mode is exited so the panel can re-measure itself. */

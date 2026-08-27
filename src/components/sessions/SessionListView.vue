@@ -136,6 +136,9 @@ function sessionBadge(session: { platform_id?: string; source?: string | null })
   if (id === 'kiro' && session.source === 'terminal') {
     return t('session.source_kiro_cli')
   }
+  if (id === 'cursor' && session.source === 'terminal') {
+    return t('session.source_cursor_cli')
+  }
   if (id === 'antigravity') {
     if (session.source === 'terminal') return t('session.source_antigravity_cli')
     if (session.source === 'antigravity-ide') return t('session.source_antigravity_ide')
@@ -359,13 +362,14 @@ function clearSessionSearch() {
               :badge="sessionBadge(session)"
               :badge-agent-id="sessionBadgeAgentId(session)"
               :badge-icon="sessionBadgeIcon(session)"
-              :time="formatSessionTime(session.updated_at, locale)"
+              :updated-at="session.updated_at"
               :title="session.title || t('session.untitled')"
               :subtitle="session.project_path || t('session.no_project')"
               :model="session.model"
               :tokens="session.tokens_used"
               :selecting="store.selectionMode"
-              :selected="store.selectedIds.has(session.id)"
+              :selected="!!store.selectedMap[session.id]"
+              v-memo="[store.selectionMode, !!store.selectedMap[session.id], session.updated_at, session.title]"
               @open="store.openMessages(session)"
               @resume="store.openResume(session)"
               @delete="handleDelete(session)"

@@ -13,12 +13,13 @@ pub enum AgentKind {
     ZCode,
     Workbuddy,
     Kiro,
+    Dsh,
 }
 
 impl AgentKind {
     /// Same relative order as `platform/registry.rs` builtin platforms
     /// (monitor subset: no Shared).
-    pub const ALL: [AgentKind; 10] = [
+    pub const ALL: [AgentKind; 11] = [
         Self::Codex,
         Self::Claude,
         Self::Cursor,
@@ -29,6 +30,7 @@ impl AgentKind {
         Self::ZCode,
         Self::Workbuddy,
         Self::Kiro,
+        Self::Dsh,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -43,6 +45,7 @@ impl AgentKind {
             Self::ZCode => "zcode",
             Self::Workbuddy => "workbuddy",
             Self::Kiro => "kiro",
+            Self::Dsh => "dsh",
         }
     }
 
@@ -58,6 +61,7 @@ impl AgentKind {
             Self::ZCode => "zcode-state.json",
             Self::Workbuddy => "workbuddy-state.json",
             Self::Kiro => "kiro-state.json",
+            Self::Dsh => "dsh-state.json",
         }
     }
 
@@ -73,6 +77,7 @@ impl AgentKind {
             Self::ZCode => "session-monitor:zcode-changed",
             Self::Workbuddy => "session-monitor:workbuddy-changed",
             Self::Kiro => "session-monitor:kiro-changed",
+            Self::Dsh => "session-monitor:dsh-changed",
         }
     }
 }
@@ -94,6 +99,10 @@ pub enum SessionSource {
 #[serde(rename_all = "lowercase")]
 pub enum RuntimeStatus {
     Running,
+    /// Turn is blocked on a user permission/approval prompt.
+    Waiting,
+    /// Turn died on an API/tool error (`StopFailure`, Cursor `stop` + `error`).
+    Failed,
     Ended,
 }
 

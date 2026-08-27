@@ -153,6 +153,7 @@ function makeMcpServers(platformId: string) {
 const SESSION_PLATFORMS = [
   { id: 'codex', display_name: 'Codex', session_count: 5 },
   { id: 'claude-code', display_name: 'Claude Code', session_count: 28 },
+  { id: 'cursor', display_name: 'Cursor', session_count: 3 },
   { id: 'antigravity', display_name: 'Antigravity', session_count: 6 },
   { id: 'grok', display_name: 'Grok Build', session_count: 2 },
   { id: 'kimi', display_name: 'Kimi Code', session_count: 4 },
@@ -714,6 +715,16 @@ let claudeMonitorSessions = [
     assistantReply: null,
     updatedAt: Date.now() - 30_000,
   },
+  {
+    sessionId: 'c4f2a1-waiting',
+    turnId: 'prompt-2',
+    source: 'terminal',
+    status: 'waiting',
+    cwd: '/Users/demo/projects/web-app',
+    userPrompt: '运行测试并提交这次改动。',
+    assistantReply: null,
+    updatedAt: Date.now() - 8_000,
+  },
 ]
 
 let cursorMonitorSessions = [
@@ -1202,10 +1213,101 @@ export async function applyWorkbuddyHookChange(action: 'install' | 'uninstall', 
   return getWorkbuddyHookStatus()
 }
 
+const DSH_PLUGIN_COMMAND = 'agent-hub-dsh-monitor'
+let dshHookInstalled = false
+let dshMonitorSessions = [
+  {
+    sessionId: 'dsh-mock-1',
+    turnId: 'turn-1',
+    source: 'terminal',
+    status: 'running',
+    cwd: '/Users/demo/projects/agent-hub',
+    userPrompt: '给 DeepSeek Harness 加上会话监听插件。',
+    assistantReply: null,
+    updatedAt: Date.now() - 8_000,
+  },
+]
+
+export async function getDshSessionMonitorSnapshot() {
+  await delay()
+  return {
+    revision: 1,
+    sessions: dshMonitorSessions,
+  }
+}
+
+export async function deleteDshSessionMonitorSession(sessionId: string) {
+  await delay()
+  dshMonitorSessions = dshMonitorSessions.filter(session => session.sessionId !== sessionId)
+}
+
+export async function getDshHookStatus() {
+  await delay()
+  return makeHookStatus(dshHookInstalled, '~/.dsh/profiles/web/cordis.patch.yml', DSH_PLUGIN_COMMAND, 1)
+}
+
+export async function previewDshHookChange(action: 'install' | 'uninstall') {
+  await delay()
+  const adding = action === 'install'
+  return {
+    action,
+    configPath: '~/.dsh/profiles/web/cordis.patch.yml',
+    command: DSH_PLUGIN_COMMAND,
+    beforeHash: 'mock-before-hash',
+    added: adding ? 3 : 1,
+    removed: adding ? 1 : 3,
+    changed: true,
+    diffLines: adding
+      ? [
+          { tag: 'removed', content: '[]' },
+          { tag: 'added', content: '- insert:' },
+          { tag: 'added', content: '    - id: agent-hub-monitor' },
+          { tag: 'added', content: '      name: agent-hub-dsh-monitor' },
+          { tag: 'context', content: '# Also copies agent-hub-dsh-monitor into ~/.dsh/profiles/web/node_modules/ and ~/.dsh/profiles/node_modules/' },
+        ]
+      : [
+          { tag: 'removed', content: '- insert:' },
+          { tag: 'removed', content: '    - id: agent-hub-monitor' },
+          { tag: 'removed', content: '      name: agent-hub-dsh-monitor' },
+          { tag: 'added', content: '[]' },
+          { tag: 'context', content: '# Also removes agent-hub-dsh-monitor from ~/.dsh/profiles/web/node_modules/ and ~/.dsh/profiles/node_modules/' },
+        ],
+  }
+}
+
+export async function applyDshHookChange(action: 'install' | 'uninstall', _expectedBeforeHash: string) {
+  await delay(300)
+  dshHookInstalled = action === 'install'
+  return getDshHookStatus()
+}
+
+let dshWebState: 'stopped' | 'starting' | 'running' = 'stopped'
+
+export async function getDshWebStatus() {
+  await delay()
+  return {
+    state: dshWebState,
+    url: dshWebState === 'running' ? 'http://127.0.0.1:3080' : null,
+    error: null,
+  }
+}
+
+export async function startDshWeb() {
+  await delay(300)
+  dshWebState = 'running'
+  return getDshWebStatus()
+}
+
+export async function stopDshWeb() {
+  await delay(200)
+  dshWebState = 'stopped'
+  return getDshWebStatus()
+}
+
 // Browser preview shows every monitor agent (no real home directory to probe).
 export async function listAvailableMonitorAgents() {
   await delay()
-  return ['codex', 'claude', 'cursor', 'antigravity', 'grok', 'kimi', 'qwen', 'zcode', 'workbuddy', 'kiro']
+  return ['codex', 'claude', 'cursor', 'antigravity', 'grok', 'kimi', 'qwen', 'zcode', 'workbuddy', 'kiro', 'dsh']
 }
 
 // App

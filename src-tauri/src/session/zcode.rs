@@ -51,8 +51,7 @@ pub fn search_zcode_messages(
     let db_path = zcode_messages_db_path()?;
     let mut results = Vec::new();
     for session in sessions {
-        let Ok(messages) = read_zcode_messages_from_db(&db_path, &session.id, 0, usize::MAX)
-        else {
+        let Ok(messages) = read_zcode_messages_from_db(&db_path, &session.id, 0, usize::MAX) else {
             continue;
         };
         for msg in messages {
@@ -149,9 +148,7 @@ fn read_zcode_messages_from_db(
         )
         .map_err(|err| err.to_string())?;
     let mut part_stmt = conn
-        .prepare(
-            "SELECT data FROM part WHERE message_id = ?1 ORDER BY time_created, id",
-        )
+        .prepare("SELECT data FROM part WHERE message_id = ?1 ORDER BY time_created, id")
         .map_err(|err| err.to_string())?;
 
     let rows = msg_stmt
@@ -535,13 +532,7 @@ mod tests {
         for idx in 0..3 {
             let message_id = format!("msg_{idx}");
             let part_id = format!("part_{idx}");
-            insert_message(
-                &db_path,
-                &message_id,
-                "sess_1",
-                idx,
-                r#"{"role":"user"}"#,
-            );
+            insert_message(&db_path, &message_id, "sess_1", idx, r#"{"role":"user"}"#);
             insert_part(
                 &db_path,
                 &part_id,
@@ -552,8 +543,7 @@ mod tests {
             );
         }
 
-        let page =
-            read_zcode_messages_from_db(&db_path, "sess_1", 1, 1).expect("page should load");
+        let page = read_zcode_messages_from_db(&db_path, "sess_1", 1, 1).expect("page should load");
         assert_eq!(page.len(), 1);
         assert_eq!(page[0].content, "m1");
     }

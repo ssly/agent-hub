@@ -72,8 +72,16 @@ pub fn list_antigravity_sessions_all() -> Result<Vec<SessionSummary>, String> {
 
     let mut sessions = Vec::new();
     for row in rows {
-        let (id, title, preview, step_count, last_modified, workspace_uris, app_data_dir, last_user) =
-            row.map_err(|err| err.to_string())?;
+        let (
+            id,
+            title,
+            preview,
+            step_count,
+            last_modified,
+            workspace_uris,
+            app_data_dir,
+            last_user,
+        ) = row.map_err(|err| err.to_string())?;
         if id.trim().is_empty() {
             continue;
         }
@@ -270,9 +278,7 @@ fn resolve_transcript_path(session_id: &str) -> Result<PathBuf, String> {
     for app in candidates {
         let path = join_relative(
             crate::paths::home_dir(),
-            &format!(
-                ".gemini/{app}/brain/{session_id}/.system_generated/logs/transcript.jsonl"
-            ),
+            &format!(".gemini/{app}/brain/{session_id}/.system_generated/logs/transcript.jsonl"),
         );
         if path.is_file() {
             return Ok(path);
@@ -407,7 +413,9 @@ fn parse_iso8601_millis(value: &str) -> Option<i64> {
     // the standard library isn't available for dates. Rely on `time`? Check
     // Cargo.toml… not listed. Use a pragmatic approach: call `date` parsing
     // via manual components for the common form.
-    let (date, rest) = trimmed.split_once('T').or_else(|| trimmed.split_once(' '))?;
+    let (date, rest) = trimmed
+        .split_once('T')
+        .or_else(|| trimmed.split_once(' '))?;
     let mut date_parts = date.split('-');
     let year: i32 = date_parts.next()?.parse().ok()?;
     let month: u32 = date_parts.next()?.parse().ok()?;
@@ -419,11 +427,7 @@ fn parse_iso8601_millis(value: &str) -> Option<i64> {
     let hour: u32 = time_parts.next()?.parse().ok()?;
     let minute: u32 = time_parts.next()?.parse().ok()?;
     let second_frac = time_parts.next().unwrap_or("0");
-    let second: u32 = second_frac
-        .split('.')
-        .next()?
-        .parse()
-        .ok()?;
+    let second: u32 = second_frac.split('.').next()?.parse().ok()?;
 
     // Days from civil date to Unix epoch using Howard Hinnant's algorithm.
     let days = days_from_civil(year, month, day)?;

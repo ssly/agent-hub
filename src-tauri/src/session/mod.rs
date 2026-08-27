@@ -1,6 +1,7 @@
 pub(crate) mod antigravity;
 mod claude;
 mod codex;
+mod cursor;
 pub(crate) mod dsh;
 mod export;
 mod grok;
@@ -55,6 +56,15 @@ pub fn list_session_platforms(path_filter: Option<&str>) -> Result<Vec<SessionPl
                 id: "claude-code".to_string(),
                 display_name: "Claude Code".to_string(),
                 session_count: claude_count,
+            });
+        }
+
+        let cursor_count = cursor::count_cursor_sessions()?;
+        if cursor_count > 0 {
+            platforms.push(SessionPlatform {
+                id: "cursor".to_string(),
+                display_name: "Cursor".to_string(),
+                session_count: cursor_count,
             });
         }
 
@@ -136,7 +146,10 @@ pub fn list_session_platforms(path_filter: Option<&str>) -> Result<Vec<SessionPl
     let filter = path_filter.unwrap().trim();
     let mut platforms = Vec::new();
 
-    let check_platform = |id: &str, display_name: &str, count_fn: fn() -> Result<usize, String>| -> Result<Option<SessionPlatform>, String> {
+    let check_platform = |id: &str,
+                          display_name: &str,
+                          count_fn: fn() -> Result<usize, String>|
+     -> Result<Option<SessionPlatform>, String> {
         let total = count_fn()?;
         if total == 0 {
             return Ok(None);
@@ -156,7 +169,14 @@ pub fn list_session_platforms(path_filter: Option<&str>) -> Result<Vec<SessionPl
     if let Some(p) = check_platform("claude-code", "Claude Code", claude::count_claude_sessions)? {
         platforms.push(p);
     }
-    if let Some(p) = check_platform("antigravity", "Antigravity", antigravity::count_antigravity_sessions)? {
+    if let Some(p) = check_platform("cursor", "Cursor", cursor::count_cursor_sessions)? {
+        platforms.push(p);
+    }
+    if let Some(p) = check_platform(
+        "antigravity",
+        "Antigravity",
+        antigravity::count_antigravity_sessions,
+    )? {
         platforms.push(p);
     }
     if let Some(p) = check_platform("grok", "Grok Build", grok::count_grok_sessions)? {
@@ -171,7 +191,11 @@ pub fn list_session_platforms(path_filter: Option<&str>) -> Result<Vec<SessionPl
     if let Some(p) = check_platform("zcode", "ZCode", zcode::count_zcode_sessions)? {
         platforms.push(p);
     }
-    if let Some(p) = check_platform("workbuddy", "WorkBuddy", workbuddy::count_workbuddy_sessions)? {
+    if let Some(p) = check_platform(
+        "workbuddy",
+        "WorkBuddy",
+        workbuddy::count_workbuddy_sessions,
+    )? {
         platforms.push(p);
     }
     if let Some(p) = check_platform("kiro", "Kiro", kiro::count_kiro_sessions)? {
@@ -215,6 +239,7 @@ fn list_sessions_all(platform_id: &str) -> Result<Vec<models::SessionSummary>, S
     let mut sessions = match platform_id {
         "claude-code" => claude::list_claude_sessions_all(),
         "codex" => codex::list_codex_sessions_all(),
+        "cursor" => cursor::list_cursor_sessions_all(),
         "antigravity" => antigravity::list_antigravity_sessions_all(),
         "kiro" => kiro::list_kiro_sessions_all(),
         "grok" => grok::list_grok_sessions_all(),
@@ -435,6 +460,7 @@ fn last_session_messages(
     match platform_id {
         "claude-code" => claude::last_claude_messages(session_id),
         "codex" => codex::last_codex_messages(session_id),
+        "cursor" => cursor::last_cursor_messages(session_id),
         "antigravity" => antigravity::last_antigravity_messages(session_id),
         "kiro" => kiro::last_kiro_messages(session_id),
         "grok" => grok::last_grok_messages(session_id),
@@ -555,9 +581,7 @@ fn is_terminal_available(terminal_id: &str) -> bool {
                 || mac_app_bundle("iTerm2.app").is_some()
                 || command_exists("iterm2")
         }
-        "ghostty" => {
-            command_exists("ghostty") || mac_app_bundle("Ghostty.app").is_some()
-        }
+        "ghostty" => command_exists("ghostty") || mac_app_bundle("Ghostty.app").is_some(),
         "warp" => command_exists("warp") || mac_app_bundle("Warp.app").is_some(),
         _ => false,
     }
@@ -724,6 +748,7 @@ pub fn get_session_messages(
     match platform_id {
         "claude-code" => claude::get_claude_messages(session_id, offset, limit),
         "codex" => codex::get_codex_messages(session_id, offset, limit),
+        "cursor" => cursor::get_cursor_messages(session_id, offset, limit),
         "antigravity" => antigravity::get_antigravity_messages(session_id, offset, limit),
         "kiro" => kiro::get_kiro_messages(session_id, offset, limit),
         "grok" => grok::get_grok_messages(session_id, offset, limit),
@@ -744,6 +769,7 @@ pub fn search_session_messages(
     match platform_id {
         "claude-code" => claude::search_claude_messages(&query_lower),
         "codex" => codex::search_codex_messages(&query_lower),
+        "cursor" => cursor::search_cursor_messages(&query_lower),
         "antigravity" => antigravity::search_antigravity_messages(&query_lower),
         "kiro" => kiro::search_kiro_messages(&query_lower),
         "grok" => grok::search_grok_messages(&query_lower),
@@ -760,6 +786,7 @@ pub fn delete_session(platform_id: &str, session_id: &str) -> Result<(), String>
     match platform_id {
         "claude-code" => claude::delete_claude_session(session_id),
         "codex" => codex::delete_codex_session(session_id),
+        "cursor" => cursor::delete_cursor_session(session_id),
         "antigravity" => antigravity::delete_antigravity_session(session_id),
         "kiro" => kiro::delete_kiro_session(session_id),
         "grok" => grok::delete_grok_session(session_id),
@@ -843,6 +870,7 @@ fn build_resume_command(platform_id: &str, session_id: &str) -> Result<String, S
         "grok" => Ok(format!("grok --resume {}", shell_quote(session_id))),
         "kimi" => Ok(format!("kimi --session {}", shell_quote(session_id))),
         "qwen" => Ok(format!("qwen --resume {}", shell_quote(session_id))),
+        "cursor" => Ok(format!("agent --resume={}", shell_quote(session_id))),
         "workbuddy" => {
             let bin = if command_exists("codebuddy") {
                 "codebuddy"
@@ -1020,7 +1048,8 @@ mod tests {
         assert!(agy.contains("agy --conversation="));
         assert!(agy.contains(&shell_quote("abc-123")));
 
-        let wb = build_resume_command("workbuddy", "abc-123").expect("workbuddy command should build");
+        let wb =
+            build_resume_command("workbuddy", "abc-123").expect("workbuddy command should build");
         assert!(wb.contains(" -r "));
         assert!(wb.contains(&shell_quote("abc-123")));
         assert!(wb.starts_with("codebuddy ") || wb.starts_with("workbuddy "));
@@ -1087,8 +1116,8 @@ mod tests {
 
     #[test]
     fn build_resume_command_for_zcode_reports_desktop_app() {
-        let err = build_resume_command("zcode", "sess_abc")
-            .expect_err("zcode resume should be rejected");
+        let err =
+            build_resume_command("zcode", "sess_abc").expect_err("zcode resume should be rejected");
         assert!(err.contains("desktop application"));
     }
 
@@ -1104,13 +1133,14 @@ mod tests {
             };
             // ZCode/DSH have no terminal resume. Every other platform must
             // still produce a paste-ready command even if the CLI is missing.
-            let preview = get_session_resume_preview(
-                &platform.id,
-                &session.id,
-                &session.project_path,
-            );
+            let preview =
+                get_session_resume_preview(&platform.id, &session.id, &session.project_path);
             if platform.id == "zcode" || platform.id == "dsh" {
-                assert!(preview.is_err(), "{} should reject terminal resume", platform.id);
+                assert!(
+                    preview.is_err(),
+                    "{} should reject terminal resume",
+                    platform.id
+                );
                 continue;
             }
             let preview = preview.expect("resume preview should build");

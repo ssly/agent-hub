@@ -431,9 +431,9 @@ pub fn sync_skill_cmd(
         }
         // A same-named skill at the target is not a hard failure: the
         // frontend turns this marker into an overwrite/skip confirm dialog.
-        Err(crate::sync::SyncError::TargetExists(path)) => Err(CommandError::SyncError(
-            format!("target_exists:{path}"),
-        )),
+        Err(crate::sync::SyncError::TargetExists(path)) => {
+            Err(CommandError::SyncError(format!("target_exists:{path}")))
+        }
         Err(e) => Err(CommandError::SyncError(e.to_string())),
     }
 }
@@ -773,8 +773,7 @@ pub fn restore_trash_item_cmd(
     id: String,
     overwrite: Option<bool>,
 ) -> Result<String, CommandError> {
-    crate::trash::restore_item(&id, overwrite.unwrap_or(false))
-        .map_err(CommandError::SyncError)?;
+    crate::trash::restore_item(&id, overwrite.unwrap_or(false)).map_err(CommandError::SyncError)?;
     let mut s = state.lock().unwrap();
     for p in s.platforms.iter_mut() {
         crate::platform::invalidate_platform_skills(p);
@@ -1088,15 +1087,14 @@ pub async fn download_and_install_update_resumable<R: Runtime>(
         .and_then(|value| value.parse::<u64>().ok());
     // Prefer Content-Range's full size. On 206, Content-Length is remaining
     // bytes only — do not treat it as full total by itself.
-    let total = parse_total_from_content_range(response.headers().get(CONTENT_RANGE)).or_else(
-        || {
+    let total =
+        parse_total_from_content_range(response.headers().get(CONTENT_RANGE)).or_else(|| {
             if response.status() == StatusCode::PARTIAL_CONTENT {
                 content_length.map(|len| len.saturating_add(resumed_from))
             } else {
                 content_length
             }
-        },
-    );
+        });
 
     let mut file = if resumed_from > 0 && response.status() == StatusCode::PARTIAL_CONTENT {
         OpenOptions::new()
@@ -1165,7 +1163,11 @@ pub async fn download_and_install_update_resumable<R: Runtime>(
                 "下载不完整（{} / {} 字节）{}。请重试或改用另一下载源。",
                 downloaded,
                 expected,
-                if use_mirror { "，国内镜像可能中断" } else { "" }
+                if use_mirror {
+                    "，国内镜像可能中断"
+                } else {
+                    ""
+                }
             )));
         }
     }
@@ -1930,11 +1932,8 @@ pub fn get_antigravity_hook_status() -> Result<crate::session_monitor::HookStatu
 pub fn preview_antigravity_hook_change(
     action: String,
 ) -> Result<crate::session_monitor::HookChangePreview, CommandError> {
-    crate::session_monitor::preview_hook_change(
-        AgentKind::Antigravity,
-        parse_hook_action(&action)?,
-    )
-    .map_err(CommandError::General)
+    crate::session_monitor::preview_hook_change(AgentKind::Antigravity, parse_hook_action(&action)?)
+        .map_err(CommandError::General)
 }
 
 #[tauri::command]
@@ -2034,6 +2033,64 @@ pub fn apply_workbuddy_hook_change(
         &expected_before_hash,
     )
     .map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn get_dsh_session_monitor_snapshot(
+    monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
+) -> MonitorSnapshot {
+    monitor.snapshot(AgentKind::Dsh)
+}
+
+#[tauri::command]
+pub fn delete_dsh_session_monitor_session(
+    monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
+    session_id: String,
+) -> Result<(), CommandError> {
+    monitor
+        .remove_session(AgentKind::Dsh, &session_id)
+        .map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn get_dsh_hook_status() -> Result<crate::session_monitor::HookStatus, CommandError> {
+    crate::session_monitor::get_hook_status(AgentKind::Dsh).map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn preview_dsh_hook_change(
+    action: String,
+) -> Result<crate::session_monitor::HookChangePreview, CommandError> {
+    crate::session_monitor::preview_hook_change(AgentKind::Dsh, parse_hook_action(&action)?)
+        .map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn apply_dsh_hook_change(
+    action: String,
+    expected_before_hash: String,
+) -> Result<crate::session_monitor::HookStatus, CommandError> {
+    crate::session_monitor::apply_hook_change(
+        AgentKind::Dsh,
+        parse_hook_action(&action)?,
+        &expected_before_hash,
+    )
+    .map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn get_dsh_web_status() -> crate::session_monitor::DshWebStatus {
+    crate::session_monitor::dsh_web_status()
+}
+
+#[tauri::command]
+pub fn start_dsh_web() -> Result<crate::session_monitor::DshWebStatus, CommandError> {
+    crate::session_monitor::dsh_web_start().map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn stop_dsh_web() -> Result<crate::session_monitor::DshWebStatus, CommandError> {
+    crate::session_monitor::dsh_web_stop().map_err(CommandError::General)
 }
 
 /// Monitor tab agent filter: ids of agents whose platform presence directory

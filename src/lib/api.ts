@@ -275,6 +275,26 @@ export const previewWorkbuddyHookChange = (action: 'install' | 'uninstall') =>
   invoke<any>('preview_workbuddy_hook_change', { action })
 export const applyWorkbuddyHookChange = (action: 'install' | 'uninstall', expectedBeforeHash: string) =>
   invoke<any>('apply_workbuddy_hook_change', { action, expectedBeforeHash })
+
+export const getDshSessionMonitorSnapshot = () =>
+  invoke<any>('get_dsh_session_monitor_snapshot')
+export const deleteDshSessionMonitorSession = (sessionId: string) =>
+  invoke<void>('delete_dsh_session_monitor_session', { sessionId })
+export const getDshHookStatus = () => invoke<any>('get_dsh_hook_status')
+export const previewDshHookChange = (action: 'install' | 'uninstall') =>
+  invoke<any>('preview_dsh_hook_change', { action })
+export const applyDshHookChange = (action: 'install' | 'uninstall', expectedBeforeHash: string) =>
+  invoke<any>('apply_dsh_hook_change', { action, expectedBeforeHash })
+
+export interface DshWebStatus {
+  state: 'stopped' | 'starting' | 'running'
+  url?: string | null
+  error?: string | null
+}
+
+export const getDshWebStatus = () => invoke<DshWebStatus>('get_dsh_web_status')
+export const startDshWeb = () => invoke<DshWebStatus>('start_dsh_web')
+export const stopDshWeb = () => invoke<DshWebStatus>('stop_dsh_web')
 /** Monitor tab filter: ids of agents whose platform presence directory exists. */
 export const listAvailableMonitorAgents = () => invoke<string[]>('list_available_monitor_agents')
 

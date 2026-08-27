@@ -105,7 +105,7 @@ fn normalize_windows_path_shape(input: &str) -> String {
 
     // Extended-length / device prefixes from Win32 APIs (Codex cwd etc.).
     // \\?\C:\Users\…  //?/C:/Users/…  \?\C:\Users\… (sometimes shown that way)
-    const EXTENDED: &[&str] = &[r"\\?\", r"//?/", r"\?\", r"/?/" ];
+    const EXTENDED: &[&str] = &[r"\\?\", r"//?/", r"\?\", r"/?/"];
     for prefix in EXTENDED {
         if let Some(rest) = s.strip_prefix(prefix) {
             s = rest.to_string();
@@ -302,7 +302,10 @@ mod tests {
         assert!(paths_match("/Users/demo/app", "/Users/demo/app"));
         assert!(paths_match("/Users/demo/app/", "/Users/demo/app"));
         assert!(paths_match("file:///Users/demo/app", "/Users/demo/app/"));
-        assert!(paths_match("file:///Users/demo/my%20app", "/Users/demo/my app"));
+        assert!(paths_match(
+            "file:///Users/demo/my%20app",
+            "/Users/demo/my app"
+        ));
         assert!(!paths_match("/Users/demo/app1", "/Users/demo/app2"));
     }
 
@@ -315,7 +318,10 @@ mod tests {
         );
         assert_eq!(
             join_relative(base.clone(), r"AppData\Roaming\npm"),
-            PathBuf::from("/base").join("AppData").join("Roaming").join("npm")
+            PathBuf::from("/base")
+                .join("AppData")
+                .join("Roaming")
+                .join("npm")
         );
         // Mixed separators and empty segments collapse cleanly.
         assert_eq!(

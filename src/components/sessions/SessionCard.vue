@@ -3,7 +3,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Monitor, Play, Terminal, Trash2 } from 'lucide-vue-next'
 import { useHoverResetBool } from '@/composables/useHoverReset'
-import { formatInt } from '@/lib/utils'
+import { formatInt, formatSessionTime } from '@/lib/utils'
 import AgentIcon from '@/components/agents/AgentIcon.vue'
 import SessionClientIcon from '@/components/sessions/SessionClientIcon.vue'
 
@@ -26,8 +26,11 @@ const props = withDefaults(defineProps<{
   badgeIcon?: string | null
   source?: 'terminal' | 'chatgpt' | 'cursor' | 'antigravity' | 'antigravity-ide' | null
   sourceLabel?: string
-  status?: 'running' | 'ended' | null
+  status?: 'running' | 'waiting' | 'failed' | 'ended' | null
   time?: string
+  /** Unix seconds or ms; formatted here so the parent list does not
+   *  toLocaleString every row on each selection toggle. Ignored when `time` is set. */
+  updatedAt?: number | string | null
   /** Hint shown left of the time while the delete confirm is armed
    *  (Monitor only: its delete removes the row, not the real session). */
   deleteNote?: string
@@ -44,6 +47,7 @@ const props = withDefaults(defineProps<{
   badgeIcon: null,
   source: null,
   status: null,
+  updatedAt: null,
   model: null,
   tokens: null,
   resumable: true,
@@ -57,7 +61,7 @@ const emit = defineEmits<{
   toggleSelect: []
 }>()
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const { armed: confirmDelete, arm: armDelete, reset: resetDelete } = useHoverResetBool()
 
 /** Hide source when the primary badge already names the same client/source. */
@@ -67,6 +71,19 @@ const showSource = computed(() => {
   if (props.badgeIcon === 'chatgpt' && props.source === 'chatgpt') return false
   if (props.badge && props.sourceLabel === props.badge) return false
   return true
+})
+
+const statusLabel = computed(() => {
+  if (props.status === 'running') return t('session_monitor.status_running')
+  if (props.status === 'waiting') return t('session_monitor.status_waiting')
+  if (props.status === 'failed') return t('session_monitor.status_failed')
+  return t('session_monitor.status_ended')
+})
+
+const displayTime = computed(() => {
+  if (props.time) return props.time
+  if (props.updatedAt == null || props.updatedAt === '') return ''
+  return formatSessionTime(props.updatedAt, locale.value)
 })
 
 function handleClick() {
@@ -92,6 +109,8 @@ function handleDelete() {
       'session-card--selecting': selecting,
       'session-card--selected': selecting && selected,
       'session-card--running': status === 'running',
+      'session-card--waiting': status === 'waiting',
+      'session-card--failed': status === 'failed',
     }"
     @click="handleClick"
   >
@@ -125,14 +144,14 @@ function handleDelete() {
         </span>
         <span v-if="status" class="session-status" :class="`session-status--${status}`">
           <span class="session-status__dot" />
-          {{ status === 'running' ? t('session_monitor.status_running') : t('session_monitor.status_ended') }}
+          {{ statusLabel }}
         </span>
       </div>
       <div class="session-card__right">
         <!-- Delete semantics hint (Monitor passes it): shown only while the
              delete confirm is armed, i.e. after the first click. -->
         <span v-if="deleteNote && confirmDelete" class="session-card__delete-note">{{ deleteNote }}</span>
-        <span v-if="time" class="session-card__time">{{ time }}</span>
+        <span v-if="displayTime" class="session-card__time">{{ displayTime }}</span>
         <!-- Inline actions revealed on card hover: [note] [time] [resume] [delete].
              Icon-only; labels show via v-tooltip. -->
         <div
@@ -276,11 +295,21 @@ function handleDelete() {
   border-radius: 999px;
   background: currentColor;
 }
-.session-status--running { color: var(--success); }
+.session-status--running { color: var(--signal-green); }
+.session-status--waiting { color: var(--signal-yellow); }
+.session-status--failed { color: var(--signal-red); }
 .session-status--ended { color: var(--ink-4); }
 .session-card--running {
-  border-color: color-mix(in srgb, var(--success) 45%, var(--hairline));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--success) 7%, transparent);
+  border-color: color-mix(in srgb, var(--signal-green) 45%, var(--hairline));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--signal-green) 7%, transparent);
+}
+.session-card--waiting {
+  border-color: color-mix(in srgb, var(--signal-yellow) 45%, var(--hairline));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--signal-yellow) 7%, transparent);
+}
+.session-card--failed {
+  border-color: color-mix(in srgb, var(--signal-red) 45%, var(--hairline));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--signal-red) 7%, transparent);
 }
 .session-card__icon-btn {
   display: inline-flex;

@@ -14,7 +14,15 @@ export type SessionSource =
   | 'antigravity'
   /** Antigravity IDE surface. */
   | 'antigravity-ide'
-export type RuntimeStatus = 'running' | 'ended'
+export type RuntimeStatus = 'running' | 'waiting' | 'failed' | 'ended'
+
+/** Sort key: working, waiting-for-confirm, failed, then ended. */
+export function monitorStatusRank(status: RuntimeStatus): number {
+  if (status === 'running') return 0
+  if (status === 'waiting') return 1
+  if (status === 'failed') return 2
+  return 3
+}
 export type MonitorAgent =
   | 'codex'
   | 'claude'
@@ -26,6 +34,7 @@ export type MonitorAgent =
   | 'zcode'
   | 'workbuddy'
   | 'kiro'
+  | 'dsh'
 /** Same relative order as platform/registry.rs (skip Shared). */
 export const MONITOR_AGENTS: MonitorAgent[] = [
   'codex',
@@ -38,9 +47,44 @@ export const MONITOR_AGENTS: MonitorAgent[] = [
   'zcode',
   'workbuddy',
   'kiro',
+  'dsh',
 ]
 /** Sidebar tab: one of the agents, or the merged "all" view. */
 export type MonitorTab = MonitorAgent | 'all'
+/** Agents whose hooks can report the yellow waiting-for-confirm light. */
+export const WAITING_MONITOR_AGENTS: readonly MonitorAgent[] = [
+  'codex',
+  'claude',
+  'grok',
+  'kimi',
+  'qwen',
+  'zcode',
+  'workbuddy',
+  'dsh',
+]
+/** Agents whose hooks can report a red failed light (`StopFailure` / Cursor `error`). */
+export const FAILED_MONITOR_AGENTS: readonly MonitorAgent[] = [
+  'claude',
+  'cursor',
+  'grok',
+  'kimi',
+  'qwen',
+  'workbuddy',
+  'dsh',
+]
+
+/** Capability lights on the agent icon row: 红 / 黄 / 绿 only (no gray). */
+export function monitorAgentLights(agent: MonitorTab): RuntimeStatus[] {
+  const lights: RuntimeStatus[] = []
+  if (agent === 'all' || FAILED_MONITOR_AGENTS.includes(agent as MonitorAgent)) {
+    lights.push('failed')
+  }
+  if (agent === 'all' || WAITING_MONITOR_AGENTS.includes(agent as MonitorAgent)) {
+    lights.push('waiting')
+  }
+  lights.push('running')
+  return lights
+}
 /** Agents whose monitor feed is driven by installed hooks. */
 export type HookAgent = MonitorAgent
 export const HOOK_AGENTS: HookAgent[] = [...MONITOR_AGENTS]
@@ -49,7 +93,7 @@ export const HOOK_AGENTS: HookAgent[] = [...MONITOR_AGENTS]
 export const MONITOR_AGENT_PLATFORM: Partial<Record<MonitorAgent, string>> = {
   codex: 'codex',
   claude: 'claude-code',
-  // cursor: no sessions browser adapter yet
+  cursor: 'cursor',
   antigravity: 'antigravity',
   grok: 'grok',
   kimi: 'kimi',
@@ -57,6 +101,7 @@ export const MONITOR_AGENT_PLATFORM: Partial<Record<MonitorAgent, string>> = {
   zcode: 'zcode',
   workbuddy: 'workbuddy',
   kiro: 'kiro',
+  dsh: 'dsh',
 }
 
 export interface SessionState {
@@ -115,6 +160,7 @@ const CHANGED_EVENTS: Record<MonitorAgent, string> = {
   zcode: 'session-monitor:zcode-changed',
   workbuddy: 'session-monitor:workbuddy-changed',
   kiro: 'session-monitor:kiro-changed',
+  dsh: 'session-monitor:dsh-changed',
 }
 
 const snapshotApi: Record<MonitorAgent, () => Promise<MonitorSnapshot>> = {
@@ -128,6 +174,7 @@ const snapshotApi: Record<MonitorAgent, () => Promise<MonitorSnapshot>> = {
   zcode: api.getZCodeSessionMonitorSnapshot,
   workbuddy: api.getWorkbuddySessionMonitorSnapshot,
   kiro: api.getKiroSessionMonitorSnapshot,
+  dsh: api.getDshSessionMonitorSnapshot,
 }
 
 const deleteSessionApi: Record<MonitorAgent, (sessionId: string) => Promise<void>> = {
@@ -141,6 +188,7 @@ const deleteSessionApi: Record<MonitorAgent, (sessionId: string) => Promise<void
   zcode: api.deleteZCodeSessionMonitorSession,
   workbuddy: api.deleteWorkbuddySessionMonitorSession,
   kiro: api.deleteKiroSessionMonitorSession,
+  dsh: api.deleteDshSessionMonitorSession,
 }
 
 const hookApi: Record<HookAgent, {
@@ -198,6 +246,11 @@ const hookApi: Record<HookAgent, {
     preview: api.previewKiroHookChange,
     apply: api.applyKiroHookChange,
   },
+  dsh: {
+    status: api.getDshHookStatus,
+    preview: api.previewDshHookChange,
+    apply: api.applyDshHookChange,
+  },
 }
 
 function emptySnapshot(): MonitorSnapshot {
@@ -221,6 +274,7 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     zcode: emptySnapshot(),
     workbuddy: emptySnapshot(),
     kiro: emptySnapshot(),
+    dsh: emptySnapshot(),
   })
   const hookStatuses = ref<Record<HookAgent, HookStatus | null>>({
     codex: null,
@@ -233,9 +287,12 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     zcode: null,
     workbuddy: null,
     kiro: null,
+    dsh: null,
   })
   const loading = ref(false)
   const hookLoading = ref(false)
+  const dshWeb = ref<api.DshWebStatus | null>(null)
+  const dshWebBusy = ref(false)
   const error = ref('')
   const previewOpen = ref(false)
   const previewLoading = ref(false)
@@ -278,7 +335,8 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
       )
       : snapshots.value[tab].sessions.map(session => ({ ...session, agent: tab }))
     return sessions.sort((a, b) => {
-      if (a.status !== b.status) return a.status === 'running' ? -1 : 1
+      const rank = monitorStatusRank(a.status) - monitorStatusRank(b.status)
+      if (rank !== 0) return rank
       return b.updatedAt - a.updatedAt
     })
   })
@@ -481,6 +539,32 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
   // Deleting from the monitor only drops the row from the local snapshot —
   // the on-disk session record is untouched (that is the Sessions browser's
   // delete). The card's two-step confirm mirrors the Sessions UX.
+  async function refreshDshWebStatus() {
+    try {
+      dshWeb.value = await api.getDshWebStatus()
+    } catch (cause) {
+      dshWeb.value = { state: 'stopped', error: errorMessage(cause) }
+    }
+  }
+
+  async function startDshWeb() {
+    dshWebBusy.value = true
+    try {
+      dshWeb.value = await api.startDshWeb()
+    } finally {
+      dshWebBusy.value = false
+    }
+  }
+
+  async function stopDshWeb() {
+    dshWebBusy.value = true
+    try {
+      dshWeb.value = await api.stopDshWeb()
+    } finally {
+      dshWebBusy.value = false
+    }
+  }
+
   async function deleteSession(sessionId: string, agent?: MonitorAgent) {
     const target = agent ?? (activeAgent.value === 'all' ? undefined : activeAgent.value)
     if (!target) return
@@ -523,6 +607,8 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     hookStatus,
     loading,
     hookLoading,
+    dshWeb,
+    dshWebBusy,
     error,
     previewOpen,
     previewLoading,
@@ -540,6 +626,9 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     openHookPreview,
     closeHookPreview,
     applyHookPreview,
+    refreshDshWebStatus,
+    startDshWeb,
+    stopDshWeb,
     deleteSession,
     messagesModalOpen,
     resumeModalOpen,

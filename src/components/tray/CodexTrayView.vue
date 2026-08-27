@@ -19,6 +19,7 @@ import {
   getKiroSessionMonitorSnapshot,
   getQwenSessionMonitorSnapshot,
   getWorkbuddySessionMonitorSnapshot,
+  getDshSessionMonitorSnapshot,
   getUsageProviderAvailability,
   getUsageMonitorSettings,
   getZCodeSessionMonitorSnapshot,
@@ -41,7 +42,7 @@ import type {
   UsageProviderAvailability,
   UsageWindow,
 } from '@/lib/api'
-import type { AgentSessionState, MonitorAgent, MonitorSnapshot } from '@/stores/session-monitor'
+import { monitorStatusRank, type AgentSessionState, type MonitorAgent, type MonitorSnapshot, type RuntimeStatus } from '@/stores/session-monitor'
 import AgentIcon from '@/components/agents/AgentIcon.vue'
 import SessionClientIcon from '@/components/sessions/SessionClientIcon.vue'
 import UsageOrb, { type OrbTone, type OrbWindow } from './UsageOrb.vue'
@@ -106,7 +107,7 @@ let resizeSequence = 0
 // Same data the Monitor tab shows (backend snapshots + change events), but
 // reduced to one line per session: status dot + agent + user question.
 // Same order as MONITOR_AGENTS / platform registry (monitor subset).
-const MONITOR_AGENTS_LIST: MonitorAgent[] = ['codex', 'claude', 'cursor', 'antigravity', 'grok', 'kimi', 'qwen', 'zcode', 'workbuddy', 'kiro']
+const MONITOR_AGENTS_LIST: MonitorAgent[] = ['codex', 'claude', 'cursor', 'antigravity', 'grok', 'kimi', 'qwen', 'zcode', 'workbuddy', 'kiro', 'dsh']
 const MONITOR_CHANGED_EVENTS: Record<MonitorAgent, string> = {
   codex: 'session-monitor:codex-changed',
   claude: 'session-monitor:claude-changed',
@@ -118,6 +119,7 @@ const MONITOR_CHANGED_EVENTS: Record<MonitorAgent, string> = {
   zcode: 'session-monitor:zcode-changed',
   workbuddy: 'session-monitor:workbuddy-changed',
   kiro: 'session-monitor:kiro-changed',
+  dsh: 'session-monitor:dsh-changed',
 }
 const MONITOR_SNAPSHOT_API: Record<MonitorAgent, () => Promise<MonitorSnapshot>> = {
   codex: getCodexSessionMonitorSnapshot,
@@ -130,6 +132,7 @@ const MONITOR_SNAPSHOT_API: Record<MonitorAgent, () => Promise<MonitorSnapshot>>
   zcode: getZCodeSessionMonitorSnapshot,
   workbuddy: getWorkbuddySessionMonitorSnapshot,
   kiro: getKiroSessionMonitorSnapshot,
+  dsh: getDshSessionMonitorSnapshot,
 }
 const monitorSnapshots = ref<Record<MonitorAgent, MonitorSnapshot>>({
   codex: { revision: 0, sessions: [] },
@@ -142,6 +145,7 @@ const monitorSnapshots = ref<Record<MonitorAgent, MonitorSnapshot>>({
   zcode: { revision: 0, sessions: [] },
   workbuddy: { revision: 0, sessions: [] },
   kiro: { revision: 0, sessions: [] },
+  dsh: { revision: 0, sessions: [] },
 })
 
 // Agents whose platform presence directory exists (backend probe). null =
@@ -172,7 +176,8 @@ const monitorRows = computed<AgentSessionState[]>(() =>
   visibleMonitorAgents.value
     .flatMap(agent => monitorSnapshots.value[agent].sessions.map(session => ({ ...session, agent })))
     .sort((a, b) => {
-      if (a.status !== b.status) return a.status === 'running' ? -1 : 1
+      const rank = monitorStatusRank(a.status) - monitorStatusRank(b.status)
+      if (rank !== 0) return rank
       return b.updatedAt - a.updatedAt
     })
     .slice(0, MONITOR_STRIP_LIMIT),
@@ -229,13 +234,15 @@ function cancelDockCollapse() {
 /** Strip content: usage bar on top (smallest quota window of the visible
  *  provider) + one dot per monitor session below — each half follows the
  *  panel's own hide toggles (usageHidden / monitorHidden). The native strip
- *  height follows whatever is actually shown; the watcher lives next to
+ *  long axis follows whatever is actually shown (height on left/right,
+ *  width on top after a CCW 90° rotate); the watcher lives next to
  *  stripUsage (see below) because watch getters evaluate eagerly and must
  *  not touch TDZ bindings. */
 const STRIP_DOT_PX = 5
 const STRIP_GAP_PX = 4
 const STRIP_PAD_PX = 8
 const STRIP_BAR_HEIGHT = 48
+const STRIP_THICK_PX = 20
 
 /** Top 3 rows: tip below; bottom 3: tip above — keeps long prompts inside the panel. */
 function monitorTipPlacement(index: number): 'top' | 'bottom' {
@@ -287,10 +294,10 @@ async function loadMonitorSnapshots() {
 }
 
 // --- Status-transition pulse ----------------------------------------------
-// When a visible session flips running↔ended, a large dot blooms at the
-// panel center, shrinks to row-dot size, then glides along a soft arc to the
-// row it belongs to — running flips green, ended flips gray.
-interface MonitorPulse { id: number; key: string; status: 'running' | 'ended' }
+// When a visible session flips running↔waiting↔ended, a large dot blooms at
+// the panel center, shrinks to row-dot size, then glides along a soft arc to
+// the row it belongs to — running green, waiting yellow, ended gray.
+interface MonitorPulse { id: number; key: string; status: RuntimeStatus }
 const pulses = ref<MonitorPulse[]>([])
 const knownMonitorStatus = new Map<string, string>()
 // The first watcher pass only seeds statuses — everything already on screen
@@ -321,9 +328,9 @@ watch(monitorRows, rows => {
       // session appearing already-running (e.g. a fresh ChatGPT desktop
       // thread — it has no prior "ended" row to flip from).
       const flipped = previous !== undefined && previous !== row.status
-      const appearedRunning = previous === undefined && row.status === 'running'
-      if (flipped || appearedRunning) {
-        void spawnPulse(key, row.status as MonitorPulse['status'])
+      const appearedLive = previous === undefined && row.status !== 'ended'
+      if (flipped || appearedLive) {
+        void spawnPulse(key, row.status)
       }
     }
     knownMonitorStatus.set(key, row.status)
@@ -742,29 +749,25 @@ const stripUsageBars = computed<{ percent: number }[]>(() => {
   }))
 })
 
-// Strip height follows its content (bar segment + dots). Registered here,
-// after every referenced binding exists: watch getters run once eagerly.
+// Strip long axis follows its content (bar segment + dots). Registered
+// here, after every referenced binding exists: watch getters run once eagerly.
+const stripLongPx = computed(() => {
+  const showBar = !usageHidden.value && stripUsageBars.value.length > 0
+  const dots = monitorHidden.value ? 0 : monitorRows.value.length
+  const items = (showBar ? 1 : 0) + dots
+  return items === 0
+    ? 24
+    : STRIP_PAD_PX * 2
+      + (showBar ? STRIP_BAR_HEIGHT : 0)
+      + dots * STRIP_DOT_PX
+      + STRIP_GAP_PX * (items - 1)
+})
+
 watch(
-  [
-    () => monitorRows.value.length,
-    () => stripUsageBars.value.length > 0,
-    () => usageHidden.value,
-    () => monitorHidden.value,
-    docked,
-    dockExpanded,
-  ],
-  ([count, hasUsage, usageOff, monitorOff]) => {
+  [stripLongPx, docked, dockExpanded],
+  () => {
     if (!docked.value || dockExpanded.value) return
-    const showBar = !usageOff && hasUsage
-    const dots = monitorOff ? 0 : count
-    const items = (showBar ? 1 : 0) + dots
-    const height = items === 0
-      ? 24
-      : STRIP_PAD_PX * 2
-        + (showBar ? STRIP_BAR_HEIGHT : 0)
-        + dots * STRIP_DOT_PX
-        + STRIP_GAP_PX * (items - 1)
-    void resizeUsageTrayDock(height).catch(() => {})
+    void resizeUsageTrayDock(stripLongPx.value).catch(() => {})
   },
   { flush: 'post' },
 )
@@ -1073,36 +1076,49 @@ onBeforeUnmount(() => {
     @click="opacityOpen = false; intervalOpen = false"
   >
     <!-- Docked edge strip: one status dot per monitored session (same data
-         as the monitor strip below — green working, gray ended). Height
-         follows the dot count. Hovering slides the panel out. -->
+         as the monitor strip below — green working, yellow waiting for
+         confirm, gray ended). Long axis follows the dot count. Top dock
+         rotates this column 90° CCW into a horizontal bar. Hovering
+         slides the panel out. -->
     <section
       v-if="docked && !dockExpanded"
       class="tray-dock-strip"
+      :class="{ 'tray-dock-strip--top': docked === 'top' }"
       data-tauri-drag-region="deep"
-      :style="{ opacity: panelOpacity / 100 }"
+      :style="{
+        opacity: panelOpacity / 100,
+        '--strip-long': `${stripLongPx}px`,
+        '--strip-thick': `${STRIP_THICK_PX}px`,
+      }"
       @mouseenter="expandDock"
     >
-      <span
-        v-if="!usageHidden && stripUsageBars.length"
-        class="tray-dock-bars"
-      >
+      <div class="tray-dock-strip__inner">
         <span
-          v-for="(bar, index) in stripUsageBars"
-          :key="index"
-          class="tray-dock-bar"
-          :class="index === 0 ? 'tray-dock-bar--tank' : 'tray-dock-bar--ring'"
+          v-if="!usageHidden && stripUsageBars.length"
+          class="tray-dock-bars"
         >
-          <span class="tray-dock-bar__fill" :style="{ height: `${bar.percent}%` }" />
+          <span
+            v-for="(bar, index) in stripUsageBars"
+            :key="index"
+            class="tray-dock-bar"
+            :class="index === 0 ? 'tray-dock-bar--tank' : 'tray-dock-bar--ring'"
+          >
+            <span class="tray-dock-bar__fill" :style="{ height: `${bar.percent}%` }" />
+          </span>
         </span>
-      </span>
-      <template v-if="!monitorHidden">
-        <span
-          v-for="row in monitorRows"
-          :key="monitorRowKey(row)"
-          class="tray-dock-dot"
-          :class="{ 'tray-dock-dot--running': row.status === 'running' }"
-        />
-      </template>
+        <template v-if="!monitorHidden">
+          <span
+            v-for="row in monitorRows"
+            :key="monitorRowKey(row)"
+            class="tray-dock-dot"
+            :class="{
+              'tray-dock-dot--running': row.status === 'running',
+              'tray-dock-dot--waiting': row.status === 'waiting',
+              'tray-dock-dot--failed': row.status === 'failed',
+            }"
+          />
+        </template>
+      </div>
     </section>
     <section
       v-else
@@ -1474,6 +1490,9 @@ onBeforeUnmount(() => {
   --tray-success: #5A8F6B;
   --tray-warning: #B07A3E;
   --tray-danger: #B0524A;
+  --tray-signal-red: #E03131;
+  --tray-signal-yellow: #F5C400;
+  --tray-signal-green: #2BB24A;
   --tray-hairline: rgba(42, 42, 46, .07);
   --tray-border: rgba(42, 42, 46, .12);
   --tray-on-accent: #FDFCF9;
@@ -1525,21 +1544,35 @@ onBeforeUnmount(() => {
 }
 
 /* Docked edge strip: thin bar at the screen edge showing one status dot per
-   monitored session (green working, gray ended); height follows dot count.
-   Fills the whole window (fixed, inset 0) so the shell inset doesn't
-   squeeze the dots. */
+   monitored session (green working, yellow waiting, gray ended); long axis
+   follows dot count. Fills the whole window (fixed, inset 0) so the shell
+   inset doesn't squeeze the dots. Top dock rotates the same column 90° CCW. */
 .tray-dock-strip {
   position: fixed;
   inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  cursor: pointer;
+  border-radius: 0;
+  background: var(--tray-panel-bg);
+  box-shadow: var(--tray-panel-shadow);
+}
+.tray-dock-strip__inner {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 4px;
-  cursor: pointer;
-  border-radius: 0;
-  background: var(--tray-panel-bg);
-  box-shadow: var(--tray-panel-shadow);
+  width: 100%;
+  height: 100%;
+}
+.tray-dock-strip--top .tray-dock-strip__inner {
+  flex: 0 0 auto;
+  width: var(--strip-thick, 20px);
+  height: var(--strip-long, 72px);
+  transform: rotate(-90deg);
 }
 .tray-dock-dot {
   width: 5px;
@@ -1548,8 +1581,16 @@ onBeforeUnmount(() => {
   background: var(--tray-ink-4);
 }
 .tray-dock-dot--running {
-  background: var(--tray-success);
-  box-shadow: 0 0 4px var(--tray-success);
+  background: var(--tray-signal-green);
+  box-shadow: 0 0 4px var(--tray-signal-green);
+}
+.tray-dock-dot--waiting {
+  background: var(--tray-signal-yellow);
+  box-shadow: 0 0 4px var(--tray-signal-yellow);
+}
+.tray-dock-dot--failed {
+  background: var(--tray-signal-red);
+  box-shadow: 0 0 4px var(--tray-signal-red);
 }
 /* Usage half of the strip: up to two slim vertical bars side by side
    (smallest window tank-green, next window accent-blue — mirroring the
@@ -2014,7 +2055,9 @@ onBeforeUnmount(() => {
   height: 7px;
   border-radius: 999px;
 }
-.monitor-dot.is-running { background: var(--tray-success); }
+.monitor-dot.is-running { background: var(--tray-signal-green); }
+.monitor-dot.is-waiting { background: var(--tray-signal-yellow); }
+.monitor-dot.is-failed { background: var(--tray-signal-red); }
 .monitor-dot.is-ended { background: var(--tray-ink-4); }
 
 /* Status-transition pulse: blooms at the panel center at full size, then the
@@ -2032,8 +2075,16 @@ onBeforeUnmount(() => {
   opacity: 0;
 }
 .monitor-pulse.is-running {
-  background: var(--tray-success);
-  box-shadow: 0 0 26px color-mix(in srgb, var(--tray-success) 55%, transparent);
+  background: var(--tray-signal-green);
+  box-shadow: 0 0 26px color-mix(in srgb, var(--tray-signal-green) 55%, transparent);
+}
+.monitor-pulse.is-waiting {
+  background: var(--tray-signal-yellow);
+  box-shadow: 0 0 26px color-mix(in srgb, var(--tray-signal-yellow) 55%, transparent);
+}
+.monitor-pulse.is-failed {
+  background: var(--tray-signal-red);
+  box-shadow: 0 0 26px color-mix(in srgb, var(--tray-signal-red) 55%, transparent);
 }
 .monitor-pulse.is-ended {
   background: var(--tray-ink-4);
@@ -2097,6 +2148,9 @@ onBeforeUnmount(() => {
   --tray-success: #8FB89A;
   --tray-warning: #D69963;
   --tray-danger: #D88078;
+  --tray-signal-red: #FF4D4D;
+  --tray-signal-yellow: #FFD60A;
+  --tray-signal-green: #32D74B;
   --tray-hairline: rgba(231, 233, 240, .06);
   --tray-border: rgba(231, 233, 240, .10);
   /* Text on accent buttons / inverted chips (pairs with light ink). */
@@ -2131,6 +2185,9 @@ onBeforeUnmount(() => {
     --tray-success: #8FB89A;
     --tray-warning: #D69963;
     --tray-danger: #D88078;
+    --tray-signal-red: #FF4D4D;
+    --tray-signal-yellow: #FFD60A;
+    --tray-signal-green: #32D74B;
     --tray-hairline: rgba(231, 233, 240, .06);
     --tray-border: rgba(231, 233, 240, .10);
     --tray-on-accent: #171B25;

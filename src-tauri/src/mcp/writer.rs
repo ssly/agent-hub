@@ -3,8 +3,7 @@ use std::fs;
 use serde_json::Value;
 
 use super::parser::{
-    apply_json_server, apply_toml_server, parse_server_config_input_with_format,
-    remove_json_server,
+    apply_json_server, apply_toml_server, parse_server_config_input_with_format, remove_json_server,
 };
 use super::registry::{find_mcp_platform, McpFormat};
 

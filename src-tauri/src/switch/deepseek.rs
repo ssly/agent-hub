@@ -3,7 +3,8 @@
 //! The key is read automatically from DeepSeek Harness's own credential
 //! layering — no manual entry in Agent Hub:
 //!   1. process env `DEEPSEEK_API_KEY`
-//!   2. `$DSH_HOME|~/.dsh/.credentials.yaml` (`DEEPSEEK_API_KEY` entry)
+//!   2. `$DSH_HOME|~/.dsh/.credentials.yaml` (`refs.DEEPSEEK_API_KEY`,
+//!      with a fallback to the pre-release flat `DEEPSEEK_API_KEY` root)
 //!   3. `$DSH_HOME|~/.dsh/.env` (dotenv line `DEEPSEEK_API_KEY=…`)
 //! The full key never leaves the machine except as the Bearer token of the
 //! official balance endpoint.
@@ -64,16 +65,31 @@ fn dsh_home() -> Option<PathBuf> {
 }
 
 /// `DEEPSEEK_API_KEY` from the harness credentials document
-/// (`$DSH_HOME/.credentials.yaml`, a strict flat string map).
+/// (`$DSH_HOME/.credentials.yaml`).
+///
+/// Current dsh writes a versioned layout (`version: 1` + `refs:` map).
+/// Pre-release builds wrote a flat string map; those files still exist on
+/// disk until the next harness boot migrates them, so both shapes are read.
 fn read_harness_credentials_key() -> Option<String> {
     let path = dsh_home()?.join(".credentials.yaml");
     let content = std::fs::read_to_string(path).ok()?;
-    let doc: serde_yaml::Value = serde_yaml::from_str(&content).ok()?;
-    doc.get("DEEPSEEK_API_KEY")
-        .and_then(|v| v.as_str())
+    parse_credentials_key(&content)
+}
+
+fn yaml_nonempty_string(value: &serde_yaml::Value) -> Option<String> {
+    value
+        .as_str()
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
+}
+
+fn parse_credentials_key(content: &str) -> Option<String> {
+    let doc: serde_yaml::Value = serde_yaml::from_str(content).ok()?;
+    doc.get("refs")
+        .and_then(|refs| refs.get("DEEPSEEK_API_KEY"))
+        .and_then(yaml_nonempty_string)
+        .or_else(|| doc.get("DEEPSEEK_API_KEY").and_then(yaml_nonempty_string))
 }
 
 /// `DEEPSEEK_API_KEY=` line from the harness env fallback (`$DSH_HOME/.env`).
@@ -176,7 +192,7 @@ fn map_deepseek_usage(raw: &serde_json::Value, fetched_at: u64) -> DeepSeekUsage
 
 async fn fetch_deepseek_usage() -> Result<DeepSeekUsageResponse, String> {
     let api_key = read_api_key().ok_or_else(|| {
-        "未找到 DeepSeek API Key：未检测到 DeepSeek Harness 的凭证（~/.dsh/.credentials.yaml 或环境变量），也没有本地保存的 Key。请先在 dsh 中登录，或在上方手动保存 Key。".to_string()
+        "未找到 DeepSeek API Key：未检测到 DeepSeek Harness 的凭证（~/.dsh/.credentials.yaml 或环境变量）。请先在 dsh 中登录。".to_string()
     })?;
 
     let client = reqwest::Client::builder()
@@ -281,7 +297,10 @@ mod tests {
 
     #[test]
     fn parses_dotenv_key_variants() {
-        assert_eq!(parse_dotenv_key("DEEPSEEK_API_KEY=sk-a\n"), Some("sk-a".into()));
+        assert_eq!(
+            parse_dotenv_key("DEEPSEEK_API_KEY=sk-a\n"),
+            Some("sk-a".into())
+        );
         assert_eq!(
             parse_dotenv_key("export DEEPSEEK_API_KEY=\"sk-b\"\n"),
             Some("sk-b".into())
@@ -292,5 +311,35 @@ mod tests {
         );
         assert_eq!(parse_dotenv_key("# comment\nOTHER_KEY=x\n"), None);
         assert_eq!(parse_dotenv_key("DEEPSEEK_API_KEY=\n"), None);
+    }
+
+    #[test]
+    fn parses_versioned_credentials_refs() {
+        let content =
+            "version: 1\nrefs:\n  DEEPSEEK_API_KEY: sk-versioned\n  OPENAI_API_KEY: sk-other\n";
+        assert_eq!(parse_credentials_key(content), Some("sk-versioned".into()));
+    }
+
+    #[test]
+    fn parses_legacy_flat_credentials() {
+        let content = "DEEPSEEK_API_KEY: sk-flat\nOPENAI_API_KEY: sk-other\n";
+        assert_eq!(parse_credentials_key(content), Some("sk-flat".into()));
+    }
+
+    #[test]
+    fn versioned_credentials_without_deepseek_key_are_absent() {
+        let content = "version: 1\nrefs:\n  OPENAI_API_KEY: sk-other\n";
+        assert_eq!(parse_credentials_key(content), None);
+    }
+
+    #[test]
+    fn empty_or_malformed_credentials_are_absent() {
+        assert_eq!(parse_credentials_key(""), None);
+        assert_eq!(parse_credentials_key("version: 1\nrefs: {}\n"), None);
+        assert_eq!(
+            parse_credentials_key("version: 1\nrefs:\n  DEEPSEEK_API_KEY: \"\"\n"),
+            None
+        );
+        assert_eq!(parse_credentials_key("not: [valid"), None);
     }
 }

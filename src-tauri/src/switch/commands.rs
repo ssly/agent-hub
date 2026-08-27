@@ -1894,12 +1894,7 @@ fn read_keychain_credentials() -> Option<String> {
     use std::process::{Command, Stdio};
 
     let mut child = Command::new("security")
-        .args([
-            "find-generic-password",
-            "-s",
-            CLAUDE_KEYCHAIN_SERVICE,
-            "-w",
-        ])
+        .args(["find-generic-password", "-s", CLAUDE_KEYCHAIN_SERVICE, "-w"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -2201,7 +2196,9 @@ async fn fetch_claude_usage() -> Result<ClaudeUsageResponse, String> {
     map_claude_usage(
         &raw,
         oauth.account_name,
-        oauth.subscription_type.unwrap_or_else(|| "unknown".to_string()),
+        oauth
+            .subscription_type
+            .unwrap_or_else(|| "unknown".to_string()),
         u64::try_from(Utc::now().timestamp()).unwrap_or(0),
     )
 }
@@ -2403,8 +2400,8 @@ mod tests {
             }
         });
 
-        let usage = map_grok_usage(&raw, None, 1)
-            .expect("maps legacy Grok monthly billing response");
+        let usage =
+            map_grok_usage(&raw, None, 1).expect("maps legacy Grok monthly billing response");
         assert_eq!(usage.plan_type, "Grok");
         assert_eq!(usage.period_type, "monthly");
         assert_eq!(usage.limit_value, Some(15_000.0));
@@ -2678,9 +2675,7 @@ api_key = "sk-kimi-test-abc123"
         // Wrapper present but no accessToken.
         assert!(parse_claude_credentials(r#"{"claudeAiOauth": {"expiresAt": 1}}"#).is_err());
         // Empty accessToken is rejected too.
-        assert!(
-            parse_claude_credentials(r#"{"claudeAiOauth": {"accessToken": "  "}}"#).is_err()
-        );
+        assert!(parse_claude_credentials(r#"{"claudeAiOauth": {"accessToken": "  "}}"#).is_err());
         // Not JSON at all.
         assert!(parse_claude_credentials("not json").is_err());
     }
@@ -2765,10 +2760,9 @@ api_key = "sk-kimi-test-abc123"
     #[test]
     fn profile_meta_defaults_kind_to_token() {
         // Profiles saved before OAuth support have no kind field.
-        let meta: ProfileMeta = serde_json::from_str(
-            r#"{"id":"abc","note":"work","saved_at":"2026-01-01T00:00:00Z"}"#,
-        )
-        .expect("old meta.json should still parse");
+        let meta: ProfileMeta =
+            serde_json::from_str(r#"{"id":"abc","note":"work","saved_at":"2026-01-01T00:00:00Z"}"#)
+                .expect("old meta.json should still parse");
         assert_eq!(meta.kind, "token");
         assert_eq!(meta.identity, None);
 
@@ -2800,9 +2794,14 @@ api_key = "sk-kimi-test-abc123"
         }"#;
         let stripped = remove_claude_env_token(settings).expect("should strip");
         let val: serde_json::Value = serde_json::from_str(&stripped).unwrap();
-        assert!(val.get("env").and_then(|e| e.get("ANTHROPIC_AUTH_TOKEN")).is_none());
+        assert!(val
+            .get("env")
+            .and_then(|e| e.get("ANTHROPIC_AUTH_TOKEN"))
+            .is_none());
         assert_eq!(
-            val.get("env").and_then(|e| e.get("ANTHROPIC_BASE_URL")).and_then(|v| v.as_str()),
+            val.get("env")
+                .and_then(|e| e.get("ANTHROPIC_BASE_URL"))
+                .and_then(|v| v.as_str()),
             Some("https://proxy.example.com")
         );
         assert_eq!(val.get("model").and_then(|v| v.as_str()), Some("opus"));

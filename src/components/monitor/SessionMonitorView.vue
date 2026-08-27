@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Activity, CheckCircle2, CircleStop } from 'lucide-vue-next'
 import AppModal from '@/components/ui/AppModal.vue'
@@ -13,10 +13,12 @@ import {
   HOOK_AGENTS,
   MONITOR_AGENT_PLATFORM,
   type MonitorAgent,
+  type MonitorTab,
   type HookAgent,
   type AgentSessionState,
   type SessionState,
 } from '@/stores/session-monitor'
+import MonitorStatusLights from '@/components/monitor/MonitorStatusLights.vue'
 
 const { t, locale } = useI18n()
 const store = useSessionMonitorStore()
@@ -46,10 +48,11 @@ const HOOK_CONFIG_PATHS: Record<string, string> = {
   zcode: '~/.zcode/cli/config.json',
   workbuddy: '~/.workbuddy/settings.json',
   kiro: '~/.kiro/hooks/agent-hub.json',
+  dsh: '~/.dsh/profiles/web/cordis.patch.yml',
 }
 const defaultConfigPath = computed(() => HOOK_CONFIG_PATHS[store.activeAgent] ?? '')
 const runningCount = computed(
-  () => store.displaySessions.filter(session => session.status === 'running').length,
+  () => store.displaySessions.filter(session => session.status === 'running' || session.status === 'waiting').length,
 )
 
 // Outdated hook installs: managed handlers exist but no longer match the
@@ -75,7 +78,14 @@ const primaryNotice = computed<{ kind: 'info' | 'warning' | 'error'; text: strin
   if (store.error) return { kind: 'error', text: store.error }
   if (store.hookStatus?.issue) return { kind: 'warning', text: store.hookStatus.issue }
   if (outdatedHookAgents.value.length) {
-    return { kind: 'warning', text: t('session_monitor.hook_upgrade_hint', { agents: outdatedHookAgentNames.value }) }
+    const onlyDsh = outdatedHookAgents.value.length === 1 && outdatedHookAgents.value[0] === 'dsh'
+    return {
+      kind: 'warning',
+      text: t(
+        onlyDsh ? 'session_monitor.plugin_upgrade_hint' : 'session_monitor.hook_upgrade_hint',
+        { agents: outdatedHookAgentNames.value },
+      ),
+    }
   }
   if (store.activeAgent === 'codex' && store.hookStatus?.installed) {
     return { kind: 'warning', text: t('session_monitor.trust_hint') }
@@ -101,6 +111,83 @@ function agentLabel(agent: MonitorAgent): string {
   return t(`session_monitor.agent_${agent}`)
 }
 
+/** DSH has no command hooks; install writes an observe-only Cordis plugin. */
+function usesPlugin(agent: string): boolean {
+  return agent === 'dsh'
+}
+
+function tMech(hookKey: string, pluginKey: string, agent?: string, params?: Record<string, unknown>) {
+  const key = usesPlugin(agent ?? store.activeAgent) ? pluginKey : hookKey
+  return params ? t(key, params) : t(key)
+}
+
+const isDsh = computed(() => store.activeAgent === 'dsh')
+const dshWebState = computed(() => store.dshWeb?.state ?? 'stopped')
+
+function ipcError(error: unknown): string {
+  const cause = error as { General?: string; message?: string }
+  return cause.General || cause.message || String(error)
+}
+
+function dshStartLabel(): string {
+  if (dshWebState.value === 'starting' || (store.dshWebBusy && dshWebState.value !== 'running')) {
+    return t('session_monitor.starting_dsh')
+  }
+  if (store.dshWebBusy && dshWebState.value === 'running') {
+    return t('session_monitor.stopping_dsh')
+  }
+  if (dshWebState.value === 'running') return t('session_monitor.stop_dsh')
+  return t('session_monitor.start_dsh')
+}
+
+async function handleDshWebToggle() {
+  try {
+    if (dshWebState.value === 'running') {
+      await store.stopDshWeb()
+      showToast(t('session_monitor.dsh_stopped'), 'success')
+      return
+    }
+    await store.startDshWeb()
+    if (store.dshWeb?.state === 'running') {
+      showToast(t('session_monitor.dsh_started'), 'success')
+    }
+  } catch (cause) {
+    const message = ipcError(cause)
+    showToast(
+      message.includes('npx') ? t('session_monitor.dsh_npx_missing') : message,
+      'error',
+    )
+    void store.refreshDshWebStatus()
+  }
+}
+
+let dshPoll: ReturnType<typeof setInterval> | null = null
+
+function stopDshPoll() {
+  if (dshPoll != null) {
+    clearInterval(dshPoll)
+    dshPoll = null
+  }
+}
+
+watch(isDsh, (on) => {
+  stopDshPoll()
+  if (!on) return
+  void store.refreshDshWebStatus()
+  dshPoll = setInterval(() => {
+    void store.refreshDshWebStatus()
+  }, 1500)
+}, { immediate: true })
+
+watch(dshWebState, (state, previous) => {
+  if (state === 'running' && previous === 'starting') {
+    showToast(t('session_monitor.dsh_started'), 'success')
+  }
+  if (state === 'stopped' && previous === 'starting' && store.dshWeb?.error) {
+    showToast(store.dshWeb.error, 'error')
+  }
+})
+
 /** Card badge: mark the concrete client when the capture channel proves it.
  *  Codex rows carry hook-detected provenance: the ChatGPT desktop / IDE
  *  client is marked as such. Antigravity splits CLI / desktop / IDE via the
@@ -108,6 +195,10 @@ function agentLabel(agent: MonitorAgent): string {
 function agentBadgeLabel(session: AgentSessionState): string {
   if (session.agent === 'codex' && session.source === 'chatgpt') {
     return t('session_monitor.source_chatgpt')
+  }
+  if (session.agent === 'cursor') {
+    if (session.source === 'terminal') return t('session.source_cursor_cli')
+    if (session.source === 'cursor') return t('session.source_cursor_app')
   }
   if (session.agent === 'antigravity') {
     if (session.source === 'terminal') return t('session.source_antigravity_cli')
@@ -134,12 +225,17 @@ function agentBadgeAgentId(session: AgentSessionState): string | undefined {
  */
 function agentSource(session: AgentSessionState): SessionState['source'] | null {
   if (session.agent === 'codex' && session.source === 'chatgpt') return null
+  // Badge already encodes Cursor CLI vs desktop client.
+  if (session.agent === 'cursor') return null
   // Badge already encodes Antigravity product (CLI / client / IDE).
   if (session.agent === 'antigravity') return null
   // Kiro hook payloads do not reliably distinguish CLI vs IDE; capture always
   // stamps source=terminal as a default. Do not surface a CLI/IDE (or
   // generic "terminal") chip until we have a real discriminator.
   if (session.agent === 'kiro') return null
+  // DSH plugin stamps source=terminal; the web UI is the usual surface and
+  // there is no client discriminator in the inbox payload.
+  if (session.agent === 'dsh') return null
   return session.source ?? null
 }
 
@@ -182,26 +278,30 @@ function emptyHint(): string {
   }
   return store.hookStatus?.installed
     ? t('session_monitor.empty_installed_hint', { agent: agentLabel(store.activeAgent as MonitorAgent) })
-    : t('session_monitor.empty_hook_hint')
+    : tMech('session_monitor.empty_hook_hint', 'session_monitor.empty_plugin_hint')
 }
 
 function previewExplanation(): string {
   if (!store.preview) return ''
-  if (store.previewKind === 'reset') return t('session_monitor.reset_explanation')
+  const agent = store.previewAgent
+  if (store.previewKind === 'reset') {
+    return tMech('session_monitor.reset_explanation', 'session_monitor.reset_plugin_explanation', agent)
+  }
   return store.previewKind === 'install'
-    ? t('session_monitor.install_explanation')
-    : t('session_monitor.uninstall_explanation')
+    ? tMech('session_monitor.install_explanation', 'session_monitor.install_plugin_explanation', agent)
+    : tMech('session_monitor.uninstall_explanation', 'session_monitor.uninstall_plugin_explanation', agent)
 }
 
 function previewTitle(): string {
   const agent = agentLabel(store.previewAgent)
+  const params = { agent }
   if (store.previewKind === 'reset') {
-    return t('session_monitor.reset_preview_title', { agent })
+    return tMech('session_monitor.reset_preview_title', 'session_monitor.reset_plugin_preview_title', store.previewAgent, params)
   }
   if (store.previewKind === 'uninstall') {
-    return t('session_monitor.uninstall_preview_title', { agent })
+    return tMech('session_monitor.uninstall_preview_title', 'session_monitor.uninstall_plugin_preview_title', store.previewAgent, params)
   }
-  return t('session_monitor.install_preview_title', { agent })
+  return tMech('session_monitor.install_preview_title', 'session_monitor.install_plugin_preview_title', store.previewAgent, params)
 }
 
 function confirmLabel(): string {
@@ -216,8 +316,13 @@ async function handleApplyHook() {
   const agent = store.previewAgent
   await store.applyHookPreview()
   if (!store.previewError && kind) {
-    const key =
-      kind === 'reset'
+    const key = usesPlugin(agent)
+      ? kind === 'reset'
+        ? 'session_monitor.reset_plugin_success'
+        : kind === 'uninstall'
+          ? 'session_monitor.uninstall_plugin_success'
+          : 'session_monitor.install_plugin_success'
+      : kind === 'reset'
         ? 'session_monitor.reset_success'
         : kind === 'uninstall'
           ? 'session_monitor.uninstall_success'
@@ -242,6 +347,10 @@ onMounted(() => {
     })
   })
 })
+
+onUnmounted(() => {
+  stopDshPoll()
+})
 </script>
 
 <template>
@@ -251,31 +360,40 @@ onMounted(() => {
         <h1 class="ah-page-title">{{ t('session_monitor.title') }}</h1>
         <p class="session-monitor-subtitle">{{ t('session_monitor.subtitle') }}</p>
       </div>
-      <!-- Exactly one action: install | reset (outdated) | uninstall. -->
-      <button
-        v-if="supportsHooks && !showBootLoading && hookOutdated"
-        class="btn btn-primary"
-        :disabled="store.previewLoading || store.hookLoading"
-        @click="store.openHookPreview(store.activeAgent as HookAgent, 'reset')"
-      >
-        {{ t('session_monitor.reset_hook') }}
-      </button>
-      <button
-        v-else-if="supportsHooks && !showBootLoading && store.hookStatus?.installed"
-        class="btn btn-danger"
-        :disabled="store.previewLoading || store.hookLoading"
-        @click="store.openHookPreview(store.activeAgent as HookAgent, 'uninstall')"
-      >
-        {{ t('session_monitor.uninstall_hook') }}
-      </button>
-      <button
-        v-else-if="supportsHooks && !showBootLoading"
-        class="btn btn-primary"
-        :disabled="store.previewLoading || store.hookLoading"
-        @click="store.openHookPreview(store.activeAgent as HookAgent, 'install')"
-      >
-        {{ t('session_monitor.install_hook') }}
-      </button>
+      <div v-if="supportsHooks && !showBootLoading" class="session-monitor-heading__actions">
+        <button
+          v-if="isDsh"
+          class="btn btn-secondary"
+          :disabled="store.dshWebBusy || dshWebState === 'starting'"
+          @click="handleDshWebToggle"
+        >
+          {{ dshStartLabel() }}
+        </button>
+        <button
+          v-if="hookOutdated"
+          class="btn btn-primary"
+          :disabled="store.previewLoading || store.hookLoading"
+          @click="store.openHookPreview(store.activeAgent as HookAgent, 'reset')"
+        >
+          {{ tMech('session_monitor.reset_hook', 'session_monitor.reset_plugin') }}
+        </button>
+        <button
+          v-else-if="store.hookStatus?.installed"
+          class="btn btn-danger"
+          :disabled="store.previewLoading || store.hookLoading"
+          @click="store.openHookPreview(store.activeAgent as HookAgent, 'uninstall')"
+        >
+          {{ tMech('session_monitor.uninstall_hook', 'session_monitor.uninstall_plugin') }}
+        </button>
+        <button
+          v-else
+          class="btn btn-primary"
+          :disabled="store.previewLoading || store.hookLoading"
+          @click="store.openHookPreview(store.activeAgent as HookAgent, 'install')"
+        >
+          {{ tMech('session_monitor.install_hook', 'session_monitor.install_plugin') }}
+        </button>
+      </div>
     </div>
 
     <!-- Boot shell: enter first, load later. Zero heavy children while loading. -->
@@ -305,8 +423,8 @@ onMounted(() => {
           <div class="min-w-0">
             <div class="hook-card__title">
               {{ store.hookStatus?.installed
-                ? t('session_monitor.hook_installed', { agent: agentLabel(store.activeAgent as MonitorAgent) })
-                : t('session_monitor.hook_missing', { agent: agentLabel(store.activeAgent as MonitorAgent) }) }}
+                ? tMech('session_monitor.hook_installed', 'session_monitor.plugin_installed', store.activeAgent, { agent: agentLabel(store.activeAgent as MonitorAgent) })
+                : tMech('session_monitor.hook_missing', 'session_monitor.plugin_missing', store.activeAgent, { agent: agentLabel(store.activeAgent as MonitorAgent) }) }}
             </div>
             <div class="hook-card__path">
               {{ store.hookStatus?.configPath || defaultConfigPath }}
@@ -314,6 +432,7 @@ onMounted(() => {
           </div>
         </div>
         <div class="hook-card__meta">
+          <MonitorStatusLights :agent="store.activeAgent as MonitorTab" />
           <span>{{ t('session_monitor.running_summary', { count: runningCount }) }}</span>
           <span>{{ t('session_monitor.total_summary', { count: store.snapshot.sessions.length }) }}</span>
         </div>
@@ -363,7 +482,7 @@ onMounted(() => {
         >
           <div class="session-row__line">
             <span>{{ t('session_monitor.assistant_reply') }}</span>
-            <p>{{ session.assistantReply || (session.status === 'running' ? t('session_monitor.waiting_reply', { agent: agentLabel(session.agent) }) : t('session_monitor.no_reply')) }}</p>
+            <p>{{ session.assistantReply || (session.status === 'waiting' ? t('session_monitor.waiting_confirm') : session.status === 'running' ? t('session_monitor.waiting_reply', { agent: agentLabel(session.agent) }) : session.status === 'failed' ? t('session_monitor.status_failed') : t('session_monitor.no_reply')) }}</p>
           </div>
         </SessionCard>
       </div>
@@ -411,7 +530,7 @@ onMounted(() => {
               <dd>{{ store.preview.configPath }}</dd>
             </div>
             <div>
-              <dt>{{ t('session_monitor.hook_command') }}</dt>
+              <dt>{{ tMech('session_monitor.hook_command', 'session_monitor.plugin_name', store.previewAgent) }}</dt>
               <dd>{{ store.preview.command }}</dd>
             </div>
           </dl>
@@ -451,6 +570,7 @@ onMounted(() => {
 <style scoped>
 .session-monitor-page { max-width: 960px; margin: 0 auto; padding: 28px 32px 48px; }
 .session-monitor-heading { align-items: flex-end; }
+.session-monitor-heading__actions { display: flex; align-items: center; gap: 8px; flex: none; }
 .session-monitor-subtitle { margin-top: 5px; color: var(--ink-3); font-size: 13px; }
 .hook-card { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 14px; }
 .hook-card__loading { width: 100%; min-height: 52px; display: flex; align-items: center; justify-content: center; padding: 6px 0; }

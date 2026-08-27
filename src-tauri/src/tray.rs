@@ -70,9 +70,9 @@ static TRAY_OVERLAY_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::Ato
 static TRAY_POSITION: std::sync::Mutex<Option<(i32, i32)>> = std::sync::Mutex::new(None);
 
 /// Docked strip size / snap trigger distance, in logical px (scaled per monitor).
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 const DOCK_STRIP_WIDTH: f64 = 20.0;
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 const DOCK_STRIP_HEIGHT: f64 = 72.0;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 const SNAP_DISTANCE: f64 = 28.0;
@@ -179,7 +179,10 @@ fn schedule_edge_snap(window: &tauri::WebviewWindow) {
             }
         }
         use std::sync::atomic::Ordering;
-        if tray_docked() || TRAY_ANIMATING.load(Ordering::Relaxed) || TRAY_HOVERED.load(Ordering::Relaxed) {
+        if tray_docked()
+            || TRAY_ANIMATING.load(Ordering::Relaxed)
+            || TRAY_HOVERED.load(Ordering::Relaxed)
+        {
             return;
         }
         let recent_move = LAST_MOVE
@@ -250,8 +253,9 @@ pub fn set_usage_tray_overlay(open: bool) {
 }
 
 /// The docked strip shows one status dot per monitored session, so its
-/// height follows the dot count; the frontend measures and pushes it here.
-/// Only applies while collapsed into the strip; width stays the strip width.
+/// long axis follows the dot count; the frontend measures and pushes it
+/// here. Only applies while collapsed into the strip. Left/right keep the
+/// 20px thickness as width; top keeps it as height and grows sideways.
 #[tauri::command]
 pub fn resize_usage_tray_dock(app: AppHandle, height: f64) {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -261,22 +265,37 @@ pub fn resize_usage_tray_dock(app: AppHandle, height: f64) {
             && !TRAY_ANIMATING.load(std::sync::atomic::Ordering::Relaxed)
         {
             let scale = window.scale_factor().unwrap_or(1.0);
-            let h = (height.clamp(24.0, 400.0) * scale).round().max(1.0) as u32;
-            let w = (DOCK_STRIP_WIDTH * scale).round().max(1.0) as u32;
-            // Keep X anchored to the dock edge while height changes.
+            let long = (height.clamp(24.0, 400.0) * scale).round().max(1.0) as u32;
+            let thick = (DOCK_STRIP_WIDTH * scale).round().max(1.0) as u32;
             if let Ok(pos) = window.outer_position() {
-                let x = match dock_edge() {
-                    Some("right") => {
-                        if let Some(ctx) = snap_context(&window) {
-                            ctx.fr - w as i32
-                        } else {
-                            pos.x
-                        }
-                    }
-                    _ => pos.x,
-                };
-                set_tray_physical_frame(&window, x, pos.y, w, h);
+                let ctx = snap_context(&window);
+                let size = window.outer_size().ok();
+                if dock_edge() == Some("top") {
+                    let (w, h) = (long, thick);
+                    let y = ctx.as_ref().map(|c| c.wy).unwrap_or(pos.y);
+                    let x = if let Some(c) = ctx.as_ref() {
+                        let cx = size
+                            .map(|s| pos.x + s.width as i32 / 2)
+                            .unwrap_or(pos.x + w as i32 / 2);
+                        (cx - w as i32 / 2).clamp(c.fx, c.fr - w as i32)
+                    } else {
+                        pos.x
+                    };
+                    set_tray_physical_frame(&window, x, y, w, h);
+                } else {
+                    let (w, h) = (thick, long);
+                    let x = match dock_edge() {
+                        Some("right") => ctx.as_ref().map(|c| c.fr - w as i32).unwrap_or(pos.x),
+                        _ => pos.x,
+                    };
+                    set_tray_physical_frame(&window, x, pos.y, w, h);
+                }
             } else {
+                let (w, h) = if dock_edge() == Some("top") {
+                    (long, thick)
+                } else {
+                    (thick, long)
+                };
                 mark_owned_geometry();
                 let _ = window.set_size(tauri::PhysicalSize::new(w, h));
                 mark_owned_geometry();
@@ -435,9 +454,9 @@ fn emit_dock_animating(window: &tauri::WebviewWindow) {
 }
 
 /// Which snappable edge (if any) the window currently touches, with the
-/// monitor context needed to place the strip/panel. X anchors to the full
-/// monitor frame (the strip must hug the physical screen edge); Y stays
-/// inside the work area so the menu bar is never covered.
+/// monitor context needed to place the strip/panel. Left/right X anchors to
+/// the full monitor frame (the strip must hug the physical screen edge).
+/// Top Y hugs the work-area top so the menu bar is never covered.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 struct SnapCtx {
     edge: &'static str,
@@ -472,35 +491,62 @@ fn snap_context(window: &tauri::WebviewWindow) -> Option<SnapCtx> {
     let scale = monitor.scale_factor();
     let threshold = (SNAP_DISTANCE * scale).round() as i32;
 
-    let is_seam = |edge_x: i32| -> bool {
+    let is_self = |other: &tauri::Monitor| {
+        let op = other.position();
+        let os = other.size();
+        op.x == monitor.position().x
+            && op.y == monitor.position().y
+            && os.width == monitor.size().width
+            && os.height == monitor.size().height
+    };
+
+    // Vertical seams (left/right): two monitors side by side.
+    let is_x_seam = |edge_x: i32| -> bool {
         monitors.iter().any(|other| {
-            let op = other.position();
-            let os = other.size();
-            let is_self = op.x == monitor.position().x
-                && op.y == monitor.position().y
-                && os.width == monitor.size().width
-                && os.height == monitor.size().height;
-            if is_self {
+            if is_self(other) {
                 return false;
             }
+            let op = other.position();
+            let os = other.size();
             let (ox, ow, oy, oh) = (op.x, os.width as i32, op.y, os.height as i32);
             let abuts = (ox + ow - edge_x).abs() < SEAM_GAP || (ox - edge_x).abs() < SEAM_GAP;
             let overlaps = oy < wy + wh && wy < oy + oh;
             abuts && overlaps
         })
     };
+    // Horizontal seams (top): two monitors stacked. Snap to work-area top,
+    // so a stacked pair whose frames meet must not dock there.
+    let is_y_seam = |edge_y: i32| -> bool {
+        monitors.iter().any(|other| {
+            if is_self(other) {
+                return false;
+            }
+            let op = other.position();
+            let os = other.size();
+            let (ox, ow, oy, oh) = (op.x, os.width as i32, op.y, os.height as i32);
+            let abuts = (oy + oh - edge_y).abs() < SEAM_GAP || (oy - edge_y).abs() < SEAM_GAP;
+            let overlaps = ox < fr && fx < ox + ow;
+            abuts && overlaps
+        })
+    };
 
     let mut candidate: Option<(&'static str, i32)> = None;
-    if !is_seam(fx) {
+    if !is_x_seam(fx) {
         let distance = (pos.x - fx).abs();
         if distance <= threshold {
             candidate = Some(("left", distance));
         }
     }
-    if !is_seam(fr) {
+    if !is_x_seam(fr) {
         let distance = (pos.x + size.width as i32 - fr).abs();
         if distance <= threshold && candidate.is_none_or(|(_, best)| distance < best) {
             candidate = Some(("right", distance));
+        }
+    }
+    if !is_y_seam(wy) {
+        let distance = (pos.y - wy).abs();
+        if distance <= threshold && candidate.is_none_or(|(_, best)| distance < best) {
+            candidate = Some(("top", distance));
         }
     }
     candidate.map(|(edge, _)| SnapCtx {
@@ -513,31 +559,66 @@ fn snap_context(window: &tauri::WebviewWindow) -> Option<SnapCtx> {
     })
 }
 
+/// `along` is the strip's center on the free axis: Y for left/right, X for top.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-fn strip_rect(ctx: &SnapCtx, center_y: i32) -> (i32, i32, u32, u32) {
-    let strip_w = (DOCK_STRIP_WIDTH * ctx.scale).round().max(1.0) as u32;
-    let strip_h = (DOCK_STRIP_HEIGHT * ctx.scale).round().max(1.0) as u32;
-    (
-        if ctx.edge == "left" {
-            ctx.fx
-        } else {
-            ctx.fr - strip_w as i32
-        },
-        (center_y - strip_h as i32 / 2).clamp(ctx.wy, ctx.wy + ctx.wh - strip_h as i32),
-        strip_w,
-        strip_h,
-    )
+fn strip_rect(ctx: &SnapCtx, along: i32) -> (i32, i32, u32, u32) {
+    dock_strip_frame(ctx.edge, ctx.fx, ctx.fr, ctx.wy, ctx.wh, ctx.scale, along)
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+fn dock_strip_frame(
+    edge: &str,
+    fx: i32,
+    fr: i32,
+    wy: i32,
+    wh: i32,
+    scale: f64,
+    along: i32,
+) -> (i32, i32, u32, u32) {
+    if edge == "top" {
+        // Rotated strip: default 72×20 (long × thick), hugging work-area top.
+        let strip_w = (DOCK_STRIP_HEIGHT * scale).round().max(1.0) as u32;
+        let strip_h = (DOCK_STRIP_WIDTH * scale).round().max(1.0) as u32;
+        (
+            (along - strip_w as i32 / 2).clamp(fx, fr - strip_w as i32),
+            wy,
+            strip_w,
+            strip_h,
+        )
+    } else {
+        let strip_w = (DOCK_STRIP_WIDTH * scale).round().max(1.0) as u32;
+        let strip_h = (DOCK_STRIP_HEIGHT * scale).round().max(1.0) as u32;
+        (
+            if edge == "left" {
+                fx
+            } else {
+                fr - strip_w as i32
+            },
+            (along - strip_h as i32 / 2).clamp(wy, wy + wh - strip_h as i32),
+            strip_w,
+            strip_h,
+        )
+    }
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-fn panel_rect(ctx: &SnapCtx, strip_y: i32) -> (i32, i32, u32, u32) {
+fn strip_along(ctx: &SnapCtx, x: i32, y: i32, w: u32, h: u32) -> i32 {
+    if ctx.edge == "top" {
+        x + w as i32 / 2
+    } else {
+        y + h as i32 / 2
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn panel_rect(ctx: &SnapCtx, strip_x: i32, strip_y: i32, strip_w: u32) -> (i32, i32, u32, u32) {
     // The last slid-out rect wins (collapse remembers it); before the first
     // collapse, the pre-dock floating rect is the best guess. Only as a last
     // resort fall back to a default size aligned with the strip.
     // Reject strip-sized "memories" (Windows race can poison DOCK_PANEL).
-    let pick = |rect: (i32, i32, u32, u32)| -> Option<(u32, u32, i32)> {
+    let pick = |rect: (i32, i32, u32, u32)| -> Option<(i32, i32, u32, u32)> {
         if is_plausible_panel_size(rect.2, rect.3, ctx.scale) {
-            Some((rect.2, rect.3, rect.1))
+            Some(rect)
         } else {
             None
         }
@@ -554,25 +635,38 @@ fn panel_rect(ctx: &SnapCtx, strip_y: i32) -> (i32, i32, u32, u32) {
                 .and_then(|stored| *stored)
                 .and_then(pick)
         });
-    let (width, height, top) = match remembered {
+    let had_memory = remembered.is_some();
+    let (rem_x, rem_y, width, height) = match remembered {
         Some(rect) => rect,
         None => (
+            strip_x,
+            strip_y,
             (TRAY_WINDOW_WIDTH * ctx.scale).round().max(1.0) as u32,
             (320.0 * ctx.scale).round().max(1.0) as u32,
-            strip_y,
         ),
     };
     let (width, height) = clamp_panel_physical(width, height, ctx.scale);
-    (
-        if ctx.edge == "left" {
-            ctx.fx
+    if ctx.edge == "top" {
+        // Hang from the work-area top and grow downward. With a remembered
+        // panel X, return there; otherwise center on the strip.
+        let x = if had_memory {
+            rem_x.clamp(ctx.fx, ctx.fr - width as i32)
         } else {
-            ctx.fr - width as i32
-        },
-        top.clamp(ctx.wy, ctx.wy + ctx.wh - height as i32),
-        width,
-        height,
-    )
+            (strip_x + strip_w as i32 / 2 - width as i32 / 2).clamp(ctx.fx, ctx.fr - width as i32)
+        };
+        (x, ctx.wy, width, height)
+    } else {
+        (
+            if ctx.edge == "left" {
+                ctx.fx
+            } else {
+                ctx.fr - width as i32
+            },
+            rem_y.clamp(ctx.wy, ctx.wy + ctx.wh - height as i32),
+            width,
+            height,
+        )
+    }
 }
 
 /// Current cursor position in logical points (top-left origin, matching the
@@ -648,8 +742,8 @@ fn exit_dock(window: &tauri::WebviewWindow) {
     }
     if !tray_expanded() {
         if let Some(ctx) = snap_context(window) {
-            if let Ok(pos) = window.outer_position() {
-                let target = panel_rect(&ctx, pos.y);
+            if let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) {
+                let target = panel_rect(&ctx, pos.x, pos.y, size.width);
                 set_tray_physical_frame(window, target.0, target.1, target.2, target.3);
             }
         }
@@ -677,10 +771,7 @@ fn clear_dock_state(window: &tauri::WebviewWindow) {
 /// A tray-icon / sidebar open is a FRESH open: any dock or pin state is
 /// dropped, and the panel always reappears centered at loading height.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-fn reopen_usage_tray(
-    window: &tauri::WebviewWindow,
-    monitor: Option<tauri::Monitor>,
-) {
+fn reopen_usage_tray(window: &tauri::WebviewWindow, monitor: Option<tauri::Monitor>) {
     use tauri::{Emitter, LogicalSize};
 
     clear_dock_state(window);
@@ -779,12 +870,19 @@ fn try_snap_tray(window: &tauri::WebviewWindow) {
     if let Ok(mut edge) = DOCK_EDGE.lock() {
         *edge = Some(ctx.edge);
     }
-    let center_y = pos.y + size.height as i32 / 2;
-    let target = strip_rect(&ctx, center_y);
+    let target = strip_rect(
+        &ctx,
+        strip_along(&ctx, pos.x, pos.y, size.width, size.height),
+    );
     emit_dock_animating(window);
-    animate_tray_window(window, (pos.x, pos.y, size.width, size.height), target, |win| {
-        emit_dock_changed(win);
-    });
+    animate_tray_window(
+        window,
+        (pos.x, pos.y, size.width, size.height),
+        target,
+        |win| {
+            emit_dock_changed(win);
+        },
+    );
 }
 
 /// Strip → panel. Animated on hover; instant when the user grabs the strip
@@ -801,15 +899,20 @@ fn expand_dock(window: &tauri::WebviewWindow, animate: bool) {
     let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) else {
         return;
     };
-    let target = panel_rect(&ctx, pos.y);
+    let target = panel_rect(&ctx, pos.x, pos.y, size.width);
     TRAY_EXPANDED.store(true, Ordering::Relaxed);
     if animate {
         // Fade the strip out first; the panel state (and content) is only
         // published when the tween lands.
         emit_dock_animating(window);
-        animate_tray_window(window, (pos.x, pos.y, size.width, size.height), target, |win| {
-            emit_dock_changed(win);
-        });
+        animate_tray_window(
+            window,
+            (pos.x, pos.y, size.width, size.height),
+            target,
+            |win| {
+                emit_dock_changed(win);
+            },
+        );
     } else {
         set_tray_physical_frame(window, target.0, target.1, target.2, target.3);
         emit_dock_changed(window);
@@ -843,14 +946,21 @@ fn collapse_dock(window: &tauri::WebviewWindow, animate: bool) {
     // Remember where the panel was so the next hover-expand returns here.
     // Skip strip-sized / half-applied frames (Windows async set_size race).
     store_dock_panel_rect(ctx.scale, (pos.x, pos.y, size.width, size.height));
-    let center_y = pos.y + size.height as i32 / 2;
-    let target = strip_rect(&ctx, center_y);
+    let target = strip_rect(
+        &ctx,
+        strip_along(&ctx, pos.x, pos.y, size.width, size.height),
+    );
     if animate {
         emit_dock_animating(window);
-        animate_tray_window(window, (pos.x, pos.y, size.width, size.height), target, |win| {
-            TRAY_EXPANDED.store(false, Ordering::Relaxed);
-            emit_dock_changed(win);
-        });
+        animate_tray_window(
+            window,
+            (pos.x, pos.y, size.width, size.height),
+            target,
+            |win| {
+                TRAY_EXPANDED.store(false, Ordering::Relaxed);
+                emit_dock_changed(win);
+            },
+        );
     } else {
         TRAY_EXPANDED.store(false, Ordering::Relaxed);
         set_tray_physical_frame(window, target.0, target.1, target.2, target.3);
@@ -925,10 +1035,7 @@ fn animate_tray_window(
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn reject_implausible_tray_frame(window: &tauri::WebviewWindow) {
     use std::sync::atomic::Ordering;
-    if !tray_docked()
-        || TRAY_ANIMATING.load(Ordering::Relaxed)
-        || geometry_recently_owned()
-    {
+    if !tray_docked() || TRAY_ANIMATING.load(Ordering::Relaxed) || geometry_recently_owned() {
         return;
     }
     let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) else {
@@ -941,16 +1048,24 @@ fn reject_implausible_tray_frame(window: &tauri::WebviewWindow) {
         if is_plausible_panel_size(size.width, size.height, ctx.scale) {
             return;
         }
-        let target = panel_rect(&ctx, pos.y);
+        let target = panel_rect(&ctx, pos.x, pos.y, size.width);
         set_tray_physical_frame(window, target.0, target.1, target.2, target.3);
         return;
     }
-    let strip_w = (DOCK_STRIP_WIDTH * ctx.scale).round().max(1.0) as u32;
     let slack = (6.0 * ctx.scale).round() as u32;
-    if size.width <= strip_w.saturating_add(slack) {
+    let along_thick = if ctx.edge == "top" {
+        size.height
+    } else {
+        size.width
+    };
+    let strip_thick = (DOCK_STRIP_WIDTH * ctx.scale).round().max(1.0) as u32;
+    if along_thick <= strip_thick.saturating_add(slack) {
         return;
     }
-    let target = strip_rect(&ctx, pos.y + size.height as i32 / 2);
+    let target = strip_rect(
+        &ctx,
+        strip_along(&ctx, pos.x, pos.y, size.width, size.height),
+    );
     set_tray_physical_frame(window, target.0, target.1, target.2, target.3);
 }
 
@@ -1020,16 +1135,19 @@ pub fn resize_usage_tray(app: AppHandle, height: f64, width: Option<f64>) {
                     let scale = ctx.scale;
                     let w = (width * scale).round().max(1.0) as u32;
                     let h = (height * scale).round().max(1.0) as u32;
-                    let top = window
-                        .outer_position()
-                        .map(|p| p.y)
-                        .unwrap_or(ctx.wy);
-                    let x = if ctx.edge == "left" {
-                        ctx.fx
+                    let pos = window.outer_position().ok();
+                    let (x, y) = if ctx.edge == "top" {
+                        let left = pos.map(|p| p.x).unwrap_or(ctx.fx);
+                        (left.clamp(ctx.fx, ctx.fr - w as i32), ctx.wy)
                     } else {
-                        ctx.fr - w as i32
+                        let top = pos.map(|p| p.y).unwrap_or(ctx.wy);
+                        let x = if ctx.edge == "left" {
+                            ctx.fx
+                        } else {
+                            ctx.fr - w as i32
+                        };
+                        (x, top.clamp(ctx.wy, ctx.wy + ctx.wh - h as i32))
                     };
-                    let y = top.clamp(ctx.wy, ctx.wy + ctx.wh - h as i32);
                     set_tray_physical_frame(&window, x, y, w, h);
                     store_dock_panel_rect(scale, (x, y, w, h));
                     return;
@@ -1198,8 +1316,13 @@ fn setup_desktop(app: &mut App) -> tauri::Result<()> {
 
     // Right-click context menu: Check for Updates + Quit.
     // Left click remains reserved for the usage popup (show_menu_on_left_click=false).
-    let check_update =
-        MenuItem::with_id(app, MENU_CHECK_UPDATE, labels.check_update, true, None::<&str>)?;
+    let check_update = MenuItem::with_id(
+        app,
+        MENU_CHECK_UPDATE,
+        labels.check_update,
+        true,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, MENU_QUIT, labels.quit, true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&check_update, &quit])?;
     app.manage(TrayMenuHandles {
@@ -1382,7 +1505,26 @@ mod tests {
         assert!(is_plausible_panel_size(800, 560, scale2));
         assert!(!is_plausible_panel_size(40, 144, scale2));
         assert!(!is_plausible_panel_size(1_920, 2_160, scale2));
+        assert!(!is_plausible_panel_size(72, 20, scale));
         let (w, h) = clamp_panel_physical(960, 1_080, 1.0);
         assert_eq!((w, h), (400, 620));
+    }
+
+    #[test]
+    fn dock_strip_hugs_left_right_or_work_area_top() {
+        // 1440×900 @1x, work area starts 38px below the menu bar.
+        let (fx, fr, wy, wh, scale) = (0, 1440, 38, 862, 1.0);
+        assert_eq!(
+            dock_strip_frame("left", fx, fr, wy, wh, scale, 400),
+            (0, 364, 20, 72)
+        );
+        assert_eq!(
+            dock_strip_frame("right", fx, fr, wy, wh, scale, 400),
+            (1420, 364, 20, 72)
+        );
+        assert_eq!(
+            dock_strip_frame("top", fx, fr, wy, wh, scale, 720),
+            (684, 38, 72, 20)
+        );
     }
 }

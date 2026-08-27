@@ -24,10 +24,7 @@ impl<R: Runtime> MonitorService<R> {
     pub fn new(app: AppHandle<R>, config: MonitorConfig) -> Self {
         let state = Arc::new(Mutex::new(MonitorState::new(config)));
         let sys = Arc::new(Mutex::new(sysinfo::System::new_all()));
-        let hooks_dir = join_relative(
-            crate::paths::home_dir(),
-            ".agent-hub/hooks",
-        );
+        let hooks_dir = join_relative(crate::paths::home_dir(), ".agent-hub/hooks");
         let _ = std::fs::create_dir_all(&hooks_dir);
 
         let polling_enabled = Arc::new(AtomicBool::new(false));

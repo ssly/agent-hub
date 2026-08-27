@@ -25,6 +25,19 @@ const INTERRUPT: &str = "Interrupt";
 // premature Stops (see capture.rs).
 const SUBAGENT_START: &str = "SubagentStart";
 const SUBAGENT_STOP: &str = "SubagentStop";
+// Waiting-for-user-confirm (yellow light). PermissionRequest is the
+// dedicated "about to prompt the user" event; Kimi pairs it with
+// PermissionResult. Agents without Result use PostToolUse to leave waiting
+// after the user allows the tool. Grok has no PermissionRequest — its
+// Notification matcher permission_prompt is the equivalent observe signal.
+// Claude/Qwen/WorkBuddy PermissionDenied covers the deny path (no PostToolUse).
+// Grok StopCancelled fires instead of Stop on a declined permission prompt.
+const PERMISSION_REQUEST: &str = "PermissionRequest";
+const PERMISSION_RESULT: &str = "PermissionResult";
+const PERMISSION_DENIED: &str = "PermissionDenied";
+const POST_TOOL_USE: &str = "PostToolUse";
+const NOTIFICATION: &str = "Notification";
+const STOP_CANCELLED: &str = "StopCancelled";
 const CURSOR_BEFORE_SUBMIT_PROMPT: &str = "beforeSubmitPrompt";
 const CURSOR_AFTER_AGENT_RESPONSE: &str = "afterAgentResponse";
 const CURSOR_STOP: &str = "stop";
@@ -35,22 +48,36 @@ const ANTIGRAVITY_STOP: &str = "Stop";
 /// Top-level named hook entry written into ~/.gemini/config/hooks.json.
 const ANTIGRAVITY_HOOK_NAME: &str = "agent-hub";
 
-/// The managed hook events each agent gets on install. Codex stays at two:
-/// its hook system has no StopFailure/Interrupt events at all.
+/// The managed hook events each agent gets on install. Cursor / Antigravity /
+/// Kiro have no observational "waiting for user confirm" event, so they stay
+/// on turn-boundary hooks only (green/gray, no yellow).
 fn managed_events(agent: AgentKind) -> &'static [&'static str] {
     match agent {
-        AgentKind::Codex => &[USER_PROMPT_SUBMIT, STOP],
-        AgentKind::Claude => &[USER_PROMPT_SUBMIT, STOP, STOP_FAILURE],
+        AgentKind::Codex => &[USER_PROMPT_SUBMIT, STOP, PERMISSION_REQUEST, POST_TOOL_USE],
+        AgentKind::Claude => &[
+            USER_PROMPT_SUBMIT,
+            STOP,
+            STOP_FAILURE,
+            PERMISSION_REQUEST,
+            PERMISSION_DENIED,
+            POST_TOOL_USE,
+        ],
         // Grok's SubagentStart names sub-agent child sessions so capture can
         // drop their events (they would plant permanently-running phantom
         // rows). Grok sub-agents never fire plain stop, so no marker-based
-        // Stop filtering is needed here, unlike Kimi.
+        // Stop filtering is needed here, unlike Kimi. Official Grok has no
+        // PermissionRequest; Notification (matcher permission_prompt) is the
+        // wait signal. StopCancelled is Grok's "declined permission / interrupt"
+        // stand-in for Stop.
         AgentKind::Grok => &[
             USER_PROMPT_SUBMIT,
             STOP,
             STOP_FAILURE,
             SUBAGENT_START,
             SUBAGENT_STOP,
+            NOTIFICATION,
+            POST_TOOL_USE,
+            STOP_CANCELLED,
         ],
         AgentKind::Cursor => &[
             CURSOR_BEFORE_SUBMIT_PROMPT,
@@ -64,22 +91,40 @@ fn managed_events(agent: AgentKind) -> &'static [&'static str] {
             STOP_FAILURE,
             SUBAGENT_START,
             SUBAGENT_STOP,
+            PERMISSION_REQUEST,
+            PERMISSION_RESULT,
         ],
         // Qwen Code is structurally identical to Claude Code (snake_case
         // payloads, matcher groups, no trust gate). Official semantics: Stop
         // fires for the main turn only, sub-agents end via SubagentStop — no
         // marker filtering needed, so SubagentStart/SubagentStop stay
         // unregistered, exactly like Claude Code.
-        AgentKind::Qwen => &[USER_PROMPT_SUBMIT, STOP, STOP_FAILURE],
-        // ZCode snapshots hook config at session start; its two managed
-        // events take no matcher.
-        AgentKind::ZCode => &[USER_PROMPT_SUBMIT, STOP],
-        AgentKind::Workbuddy => &[USER_PROMPT_SUBMIT, STOP, STOP_FAILURE],
+        AgentKind::Qwen => &[
+            USER_PROMPT_SUBMIT,
+            STOP,
+            STOP_FAILURE,
+            PERMISSION_REQUEST,
+            PERMISSION_DENIED,
+            POST_TOOL_USE,
+        ],
+        // ZCode snapshots hook config at session start; its managed events
+        // take no matcher. Official set includes PermissionRequest + PostToolUse.
+        AgentKind::ZCode => &[USER_PROMPT_SUBMIT, STOP, PERMISSION_REQUEST, POST_TOOL_USE],
+        AgentKind::Workbuddy => &[
+            USER_PROMPT_SUBMIT,
+            STOP,
+            STOP_FAILURE,
+            PERMISSION_REQUEST,
+            PERMISSION_DENIED,
+            POST_TOOL_USE,
+        ],
         AgentKind::Antigravity => &[ANTIGRAVITY_PRE_INVOCATION, ANTIGRAVITY_STOP],
         // Kiro: UserPromptSubmit + Stop. Install writes BOTH:
         // - ~/.kiro/hooks/agent-hub.json (CLI 3.0 / IDE 1.0 KAS v2 standalone)
         // - camelCase hooks inside ~/.kiro/agents/*.json (CLI 2.x agent-embedded)
         AgentKind::Kiro => &[USER_PROMPT_SUBMIT, STOP],
+        // DSH has no command-hook file; install is a Cordis plugin (dsh_plugin.rs).
+        AgentKind::Dsh => &[],
     }
 }
 
@@ -121,6 +166,7 @@ fn hook_arg(agent: AgentKind) -> Result<&'static str, String> {
         AgentKind::Workbuddy => Ok(WORKBUDDY_HOOK_ARG),
         AgentKind::Antigravity => Ok(ANTIGRAVITY_HOOK_ARG),
         AgentKind::Kiro => Ok(KIRO_HOOK_ARG),
+        AgentKind::Dsh => Err("DeepSeek Harness uses a Cordis plugin, not a command hook".into()),
     }
 }
 
@@ -146,6 +192,11 @@ fn config_path(agent: AgentKind) -> Result<PathBuf, String> {
         // Official global scope (~/.kiro/hooks/) applies to Kiro IDE + CLI.
         // Dedicated managed file — never edit user/project hook files.
         AgentKind::Kiro => Ok(home.join(".kiro").join("hooks").join("agent-hub.json")),
+        AgentKind::Dsh => Ok(home
+            .join(".dsh")
+            .join("profiles")
+            .join("web")
+            .join("cordis.patch.yml")),
     }
 }
 
@@ -161,6 +212,7 @@ fn config_label(agent: AgentKind) -> &'static str {
         AgentKind::Workbuddy => "WorkBuddy 配置文件",
         AgentKind::Antigravity => "Antigravity Hook 配置文件",
         AgentKind::Kiro => "Kiro Hook 文件",
+        AgentKind::Dsh => "DeepSeek Harness 插件配置",
     }
 }
 
@@ -176,6 +228,7 @@ fn agent_label(agent: AgentKind) -> &'static str {
         AgentKind::Workbuddy => "WorkBuddy",
         AgentKind::Antigravity => "Antigravity",
         AgentKind::Kiro => "Kiro",
+        AgentKind::Dsh => "DeepSeek Harness",
     }
 }
 
@@ -196,6 +249,7 @@ pub fn agent_presence_path(agent: AgentKind) -> Option<PathBuf> {
         AgentKind::ZCode => home.join(".zcode"),
         AgentKind::Workbuddy => home.join(".workbuddy"),
         AgentKind::Kiro => home.join(".kiro"),
+        AgentKind::Dsh => home.join(".dsh"),
     })
 }
 
@@ -209,6 +263,9 @@ pub fn agent_available(agent: AgentKind) -> bool {
 }
 
 pub fn get_hook_status(agent: AgentKind) -> Result<HookStatus, String> {
+    if agent == AgentKind::Dsh {
+        return super::dsh_plugin::dsh_hook_status();
+    }
     if agent == AgentKind::Kimi {
         return kimi_hook_status();
     }
@@ -244,9 +301,9 @@ pub fn get_hook_status(agent: AgentKind) -> Result<HookStatus, String> {
     let events = managed_events(agent);
     let expected_timeout = managed_handler_timeout(agent);
     let installed = managed_handler_count == events.len()
-        && events.iter().all(|event| {
-            managed_handler_matches(&root, event, arg, &command, expected_timeout)
-        });
+        && events
+            .iter()
+            .all(|event| managed_handler_matches(&root, event, arg, &command, expected_timeout));
     let issue = if installed || managed_handler_count == 0 {
         // Claude Code lets users disable every hook with one switch; an
         // installed-but-disabled hook looks broken, so surface it.
@@ -287,6 +344,9 @@ pub fn preview_hook_change(
     agent: AgentKind,
     action: HookAction,
 ) -> Result<HookChangePreview, String> {
+    if agent == AgentKind::Dsh {
+        return super::dsh_plugin::dsh_preview(action);
+    }
     let path = config_path(agent)?;
     let arg = hook_arg(agent)?;
     let command = expected_command(arg)?;
@@ -316,11 +376,8 @@ pub fn preview_hook_change(
         if let Ok(files) = kiro_agent_files() {
             if !files.is_empty() {
                 let names: Vec<String> = files.iter().map(|p| kiro_agent_label(p)).collect();
-                preview.config_path = format!(
-                    "{} + agents: {}",
-                    preview.config_path,
-                    names.join(", ")
-                );
+                preview.config_path =
+                    format!("{} + agents: {}", preview.config_path, names.join(", "));
                 let note = match action {
                     HookAction::Install => format!(
                         "# Also injects agent-embedded hooks into: {}",
@@ -348,6 +405,9 @@ pub fn apply_hook_change(
     action: HookAction,
     expected_before_hash: &str,
 ) -> Result<HookStatus, String> {
+    if agent == AgentKind::Dsh {
+        return super::dsh_plugin::dsh_apply(action, expected_before_hash);
+    }
     let path = config_path(agent)?;
     let arg = hook_arg(agent)?;
     let command = expected_command(arg)?;
@@ -390,7 +450,7 @@ pub fn apply_hook_change(
     get_hook_status(agent)
 }
 
-fn build_preview(
+pub(super) fn build_preview(
     action: HookAction,
     path: &Path,
     command: &str,
@@ -520,10 +580,23 @@ fn append_managed_handler(
     if let Some(shell) = shell {
         handler["shell"] = json!(shell);
     }
-    groups.push(json!({
+    let mut group = json!({
         "hooks": [handler]
-    }));
+    });
+    // Grok Notification is a catch-all attention event; without a matcher
+    // idle_prompt would also fire and paint false yellow lights.
+    if let Some(matcher) = managed_event_matcher(event_name) {
+        group["matcher"] = json!(matcher);
+    }
+    groups.push(group);
     Ok(())
+}
+
+fn managed_event_matcher(event_name: &str) -> Option<&'static str> {
+    match event_name {
+        NOTIFICATION => Some("permission_prompt"),
+        _ => None,
+    }
 }
 
 fn remove_managed_handlers(agent: AgentKind, root: &mut Value, arg: &str) -> Result<(), String> {
@@ -656,9 +729,8 @@ fn ensure_windows_hook_runner() -> Result<PathBuf, String> {
     let runner = dir.join("agent-hub-hook.cmd");
     let exe = expected_executable()?.replace('"', "");
     // %* forwards the hook arg (--agent-hub-*-hook). CRLF for cmd.exe.
-    let content = format!(
-        "@echo off\r\nREM Auto-generated by Agent Hub — do not edit.\r\n\"{exe}\" %*\r\n"
-    );
+    let content =
+        format!("@echo off\r\nREM Auto-generated by Agent Hub — do not edit.\r\n\"{exe}\" %*\r\n");
     let needs_write = fs::read_to_string(&runner)
         .map(|existing| existing != content)
         .unwrap_or(true);
@@ -1163,7 +1235,10 @@ fn zcode_hook_status() -> Result<HookStatus, String> {
     let issue = if installed && !zcode_hooks_enabled(&root) {
         // Like Claude's disableAllHooks: an installed-but-disabled hook looks
         // broken, so surface the master switch.
-        Some("ZCode 配置中 hooks.enabled 为 false，所有 Hook 都不会执行，请开启该选项或重新安装。".to_string())
+        Some(
+            "ZCode 配置中 hooks.enabled 为 false，所有 Hook 都不会执行，请开启该选项或重新安装。"
+                .to_string(),
+        )
     } else if !installed && !managed.is_empty() {
         Some(format!(
             "{} Hook 为旧版本，请点击「重置 Hook」。",
@@ -1198,7 +1273,12 @@ fn zcode_managed_entries(root: &Value) -> Vec<(String, String)> {
         .flat_map(|events| events.iter())
         .filter_map(|(event, groups)| groups.as_array().map(|groups| (event, groups)))
         .flat_map(|(event, groups)| groups.iter().map(move |group| (event, group)))
-        .filter_map(|(event, group)| group.get("hooks").and_then(Value::as_array).map(|handlers| (event, handlers)))
+        .filter_map(|(event, group)| {
+            group
+                .get("hooks")
+                .and_then(Value::as_array)
+                .map(|handlers| (event, handlers))
+        })
         .flat_map(|(event, handlers)| handlers.iter().map(move |handler| (event, handler)))
         .filter(|(_, handler)| is_zcode_managed_handler(handler))
         .filter_map(|(event, handler)| {
@@ -1218,7 +1298,11 @@ fn is_zcode_managed_handler(handler: &Value) -> bool {
     let arg_in_command = handler
         .get("command")
         .and_then(Value::as_str)
-        .is_some_and(|command| command.split_whitespace().any(|part| part == ZCODE_HOOK_ARG));
+        .is_some_and(|command| {
+            command
+                .split_whitespace()
+                .any(|part| part == ZCODE_HOOK_ARG)
+        });
     arg_in_args || arg_in_command
 }
 
@@ -1251,7 +1335,9 @@ fn zcode_render_after(
             .entry("events".to_string())
             .or_insert_with(|| Value::Object(Map::new()))
             .as_object_mut()
-            .ok_or_else(|| "hooks.events 字段必须是 JSON 对象，已停止安装以保护原配置。".to_string())?;
+            .ok_or_else(|| {
+                "hooks.events 字段必须是 JSON 对象，已停止安装以保护原配置。".to_string()
+            })?;
         for event in managed_events(AgentKind::ZCode) {
             let groups = events
                 .entry(event.to_string())
@@ -1510,11 +1596,7 @@ fn kiro_hook_status() -> Result<HookStatus, String> {
     })
 }
 
-fn kiro_global_status(
-    path: &Path,
-    arg: &str,
-    command: &str,
-) -> Result<(bool, usize), String> {
+fn kiro_global_status(path: &Path, arg: &str, command: &str) -> Result<(bool, usize), String> {
     if !path.exists() {
         return Ok((false, 0));
     }
@@ -1606,10 +1688,7 @@ fn kiro_status_issue(
     if installed {
         // Short usage tip: global hooks cover CLI 3.0 / IDE; 2.x default needs
         // the agent-embedded half (already installed when `installed` is true).
-        return Some(
-            "支持 CLI 3.0 / IDE。CLI 3.0 请用 `kiro-cli --v3` 启动。"
-                .to_string(),
-        );
+        return Some("支持 CLI 3.0 / IDE。CLI 3.0 请用 `kiro-cli --v3` 启动。".to_string());
     }
     if !report.missing.is_empty() {
         return Some(format!(
@@ -1677,11 +1756,10 @@ fn kiro_agent_files() -> Result<Vec<PathBuf>, String> {
         return Ok(Vec::new());
     }
     let mut files = Vec::new();
-    let entries = fs::read_dir(&dir)
-        .map_err(|error| format!("unable to read {}: {error}", dir.display()))?;
+    let entries =
+        fs::read_dir(&dir).map_err(|error| format!("unable to read {}: {error}", dir.display()))?;
     for entry in entries {
-        let entry =
-            entry.map_err(|error| format!("unable to list {}: {error}", dir.display()))?;
+        let entry = entry.map_err(|error| format!("unable to list {}: {error}", dir.display()))?;
         let path = entry.path();
         if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
             continue;
@@ -1728,11 +1806,7 @@ fn kiro_agent_managed_entries(root: &Value, arg: &str) -> Vec<(String, String)> 
     out
 }
 
-fn kiro_render_after(
-    action: HookAction,
-    command: &str,
-    before: &str,
-) -> Result<String, String> {
+fn kiro_render_after(action: HookAction, command: &str, before: &str) -> Result<String, String> {
     if action == HookAction::Uninstall && before.trim().is_empty() {
         return Ok(String::new());
     }
@@ -1823,10 +1897,7 @@ fn kiro_render_agent_after(
     path: &Path,
 ) -> Result<String, String> {
     let mut root = if before.trim().is_empty() {
-        let name = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("agent");
+        let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("agent");
         json!({ "name": name, "hooks": {} })
     } else {
         parse_root(before, path)?
@@ -1907,10 +1978,7 @@ fn kiro_atomic_write_agent(path: &Path, content: &[u8]) -> Result<(), String> {
     }
     if let Err(error) = fs::rename(&temp_path, path) {
         let _ = fs::remove_file(&temp_path);
-        return Err(format!(
-            "unable to replace {}: {error}",
-            path.display()
-        ));
+        return Err(format!("unable to replace {}: {error}", path.display()));
     }
     Ok(())
 }
@@ -1931,7 +1999,7 @@ fn resolve_write_target(path: &Path) -> Result<PathBuf, String> {
     }
 }
 
-fn content_hash(content: &str) -> String {
+pub(super) fn content_hash(content: &str) -> String {
     let mut hash = 0xcbf29ce484222325_u64;
     for byte in content.as_bytes() {
         hash ^= u64::from(*byte);
@@ -2021,7 +2089,7 @@ mod tests {
     }
 
     #[test]
-    fn install_preserves_unrelated_handlers_and_adds_two_managed_handlers() {
+    fn install_preserves_unrelated_handlers_and_adds_managed_handlers() {
         let path = Path::new("/tmp/hooks.json");
         let after = render_after(
             AgentKind::Codex,
@@ -2034,7 +2102,7 @@ mod tests {
         .unwrap();
         let root: Value = serde_json::from_str(&after).unwrap();
         assert_eq!(root["custom"], "keep-me");
-        assert_eq!(managed_command_count(&root, CODEX_HOOK_ARG), 2);
+        assert_eq!(managed_command_count(&root, CODEX_HOOK_ARG), 4);
         assert!(after.contains("existing-command"));
     }
 
@@ -2094,7 +2162,7 @@ mod tests {
         let root: Value = serde_json::from_str(&after).unwrap();
         assert_eq!(root["model"], "claude-sonnet-5");
         assert!(root.get("permissions").is_some());
-        assert_eq!(managed_command_count(&root, CLAUDE_HOOK_ARG), 3);
+        assert_eq!(managed_command_count(&root, CLAUDE_HOOK_ARG), 6);
         assert!(after.contains("StopFailure"));
         // A Codex handler in the same file is not managed by the Claude
         // target and survives install/uninstall cycles.
@@ -2146,8 +2214,8 @@ mod tests {
         let root: Value = serde_json::from_str(&after).unwrap();
         assert_eq!(root["model"], "qwen3-coder-plus");
         assert!(root.get("mcpServers").is_some());
-        // Three managed events: UserPromptSubmit + Stop + StopFailure.
-        assert_eq!(managed_command_count(&root, QWEN_HOOK_ARG), 3);
+        // Six managed events: turn boundaries + permission wait/resume.
+        assert_eq!(managed_command_count(&root, QWEN_HOOK_ARG), 6);
         assert!(managed_commands_for(&root, USER_PROMPT_SUBMIT, QWEN_HOOK_ARG).len() == 1);
         assert!(managed_commands_for(&root, STOP, QWEN_HOOK_ARG).len() == 1);
         assert!(managed_commands_for(&root, STOP_FAILURE, QWEN_HOOK_ARG).len() == 1);
@@ -2177,6 +2245,29 @@ mod tests {
         assert!(after_uninstall.contains("existing-command"));
         assert_eq!(root["model"], "qwen3-coder-plus");
         assert!(root.get("mcpServers").is_some());
+    }
+
+    #[test]
+    fn grok_notification_install_matches_permission_prompt_only() {
+        let path = Path::new("/tmp/grok-hooks.json");
+        let after = render_after(
+            AgentKind::Grok,
+            HookAction::Install,
+            path,
+            "agent-hub --agent-hub-grok-hook",
+            GROK_HOOK_ARG,
+            "{}",
+        )
+        .unwrap();
+        let root: Value = serde_json::from_str(&after).unwrap();
+        assert_eq!(managed_command_count(&root, GROK_HOOK_ARG), 8);
+        let groups = root["hooks"][NOTIFICATION]
+            .as_array()
+            .expect("Notification");
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0]["matcher"], "permission_prompt");
+        assert!(managed_commands_for(&root, POST_TOOL_USE, GROK_HOOK_ARG).len() == 1);
+        assert!(managed_commands_for(&root, STOP_CANCELLED, GROK_HOOK_ARG).len() == 1);
     }
 
     #[test]
@@ -2226,7 +2317,7 @@ mod tests {
     }
 
     #[test]
-    fn kimi_install_appends_six_managed_blocks_and_preserves_config() {
+    fn kimi_install_appends_eight_managed_blocks_and_preserves_config() {
         let before = "model = \"k2\"\n\n[[hooks]]\nevent = \"Notification\"\ncommand = \"terminal-notifier -message done\"\n";
         let after = kimi_render_after(
             HookAction::Install,
@@ -2236,13 +2327,15 @@ mod tests {
         assert!(after.contains("model = \"k2\""));
         assert!(after.contains("terminal-notifier"));
         let entries = kimi_managed_entries(&after).unwrap();
-        assert_eq!(entries.len(), 6);
+        assert_eq!(entries.len(), 8);
         assert!(entries.iter().any(|(event, _)| event == USER_PROMPT_SUBMIT));
         assert!(entries.iter().any(|(event, _)| event == STOP));
         assert!(entries.iter().any(|(event, _)| event == INTERRUPT));
         assert!(entries.iter().any(|(event, _)| event == STOP_FAILURE));
         assert!(entries.iter().any(|(event, _)| event == SUBAGENT_START));
         assert!(entries.iter().any(|(event, _)| event == SUBAGENT_STOP));
+        assert!(entries.iter().any(|(event, _)| event == PERMISSION_REQUEST));
+        assert!(entries.iter().any(|(event, _)| event == PERMISSION_RESULT));
     }
 
     #[test]
@@ -2306,12 +2399,8 @@ mod tests {
 
     #[test]
     fn kiro_uninstall_clears_owned_file() {
-        let before = kiro_render_after(
-            HookAction::Install,
-            "agent-hub --agent-hub-kiro-hook",
-            "",
-        )
-        .unwrap();
+        let before =
+            kiro_render_after(HookAction::Install, "agent-hub --agent-hub-kiro-hook", "").unwrap();
         let after = kiro_render_after(
             HookAction::Uninstall,
             "agent-hub --agent-hub-kiro-hook",
@@ -2340,9 +2429,9 @@ mod tests {
         let root: Value = serde_json::from_str(&after).unwrap();
         let hooks = root.get("hooks").and_then(Value::as_array).unwrap();
         assert_eq!(hooks.len(), 3);
-        assert!(hooks.iter().any(|h| {
-            h.get("name").and_then(Value::as_str) == Some("lint-on-save")
-        }));
+        assert!(hooks
+            .iter()
+            .any(|h| { h.get("name").and_then(Value::as_str) == Some("lint-on-save") }));
         assert_eq!(kiro_managed_entries(&root, KIRO_HOOK_ARG).len(), 2);
     }
 
@@ -2371,16 +2460,18 @@ mod tests {
         let root: Value = serde_json::from_str(&after).unwrap();
         let managed = kiro_agent_managed_entries(&root, KIRO_HOOK_ARG);
         assert_eq!(managed.len(), 2);
-        assert!(managed.iter().any(|(e, c)| e == "userPromptSubmit" && c == cmd));
+        assert!(managed
+            .iter()
+            .any(|(e, c)| e == "userPromptSubmit" && c == cmd));
         assert!(managed.iter().any(|(e, c)| e == "stop" && c == cmd));
         // Foreign hooks kept.
         let stop = root
             .pointer("/hooks/stop")
             .and_then(Value::as_array)
             .unwrap();
-        assert!(stop.iter().any(|e| {
-            e.get("command").and_then(Value::as_str) == Some("/legacy/kiro-hook.sh")
-        }));
+        assert!(stop
+            .iter()
+            .any(|e| { e.get("command").and_then(Value::as_str) == Some("/legacy/kiro-hook.sh") }));
         assert!(stop.iter().any(|e| {
             e.get("command")
                 .and_then(Value::as_str)
@@ -2475,9 +2566,11 @@ mod tests {
         let root: Value = serde_json::from_str(&after).unwrap();
         assert_eq!(root["hooks"]["enabled"], json!(true));
         let managed = zcode_managed_entries(&root);
-        assert_eq!(managed.len(), 2);
+        assert_eq!(managed.len(), 4);
         assert!(managed.iter().any(|(event, _)| event == USER_PROMPT_SUBMIT));
         assert!(managed.iter().any(|(event, _)| event == STOP));
+        assert!(managed.iter().any(|(event, _)| event == PERMISSION_REQUEST));
+        assert!(managed.iter().any(|(event, _)| event == POST_TOOL_USE));
         assert!(managed
             .iter()
             .all(|(_, cmd)| cmd == "/Applications/Agent Hub.app/Contents/MacOS/agent-hub"));
@@ -2505,18 +2598,12 @@ mod tests {
 }
 "#;
         let path = Path::new("/tmp/zcode-config.json");
-        let after = zcode_render_after(
-            HookAction::Install,
-            path,
-            "agent-hub",
-            before,
-        )
-        .unwrap();
+        let after = zcode_render_after(HookAction::Install, path, "agent-hub", before).unwrap();
         let root: Value = serde_json::from_str(&after).unwrap();
         assert_eq!(root["custom"], "keep-me");
         // Installing flips the master switch on — hooks never run otherwise.
         assert_eq!(root["hooks"]["enabled"], json!(true));
-        assert_eq!(zcode_managed_entries(&root).len(), 2);
+        assert_eq!(zcode_managed_entries(&root).len(), 4);
         assert!(after.contains("other-tool"));
         assert!(after.contains("SessionStart"));
     }
@@ -2537,7 +2624,8 @@ mod tests {
 "#;
         let path = Path::new("/tmp/zcode-config.json");
         let installed = zcode_render_after(HookAction::Install, path, "agent-hub", before).unwrap();
-        let after = zcode_render_after(HookAction::Uninstall, path, "agent-hub", &installed).unwrap();
+        let after =
+            zcode_render_after(HookAction::Uninstall, path, "agent-hub", &installed).unwrap();
         let root: Value = serde_json::from_str(&after).unwrap();
         assert!(zcode_managed_entries(&root).is_empty());
         assert!(after.contains("other-tool"));
@@ -2549,10 +2637,15 @@ mod tests {
     #[test]
     fn zcode_uninstall_removes_hooks_key_when_only_the_master_switch_remains() {
         let path = Path::new("/tmp/zcode-config.json");
-        let installed =
-            zcode_render_after(HookAction::Install, path, "agent-hub", r#"{"custom": "keep-me"}"#)
-                .unwrap();
-        let after = zcode_render_after(HookAction::Uninstall, path, "agent-hub", &installed).unwrap();
+        let installed = zcode_render_after(
+            HookAction::Install,
+            path,
+            "agent-hub",
+            r#"{"custom": "keep-me"}"#,
+        )
+        .unwrap();
+        let after =
+            zcode_render_after(HookAction::Uninstall, path, "agent-hub", &installed).unwrap();
         let root: Value = serde_json::from_str(&after).unwrap();
         // Restores ZCode's default hooks-off state; unrelated keys survive.
         assert!(root.get("hooks").is_none());
@@ -2737,7 +2830,7 @@ enabled = false
     fn agent_presence_path_covers_every_agent() {
         // The mapping must stay exhaustive (compiler-enforced) and aligned
         // with platform/registry.rs presence_path values.
-        let expected: [(AgentKind, &str); 10] = [
+        let expected: [(AgentKind, &str); 11] = [
             (AgentKind::Codex, ".codex"),
             (AgentKind::Claude, ".claude"),
             (AgentKind::Cursor, ".cursor"),
@@ -2748,6 +2841,7 @@ enabled = false
             (AgentKind::ZCode, ".zcode"),
             (AgentKind::Workbuddy, ".workbuddy"),
             (AgentKind::Kiro, ".kiro"),
+            (AgentKind::Dsh, ".dsh"),
         ];
         assert_eq!(AgentKind::ALL.len(), expected.len());
         for (agent, suffix) in expected {

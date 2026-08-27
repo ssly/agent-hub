@@ -7,6 +7,7 @@ import { useSkillsStore } from '@/stores/skills'
 import { usePluginsStore } from '@/stores/plugins'
 import { useSessionsStore } from '@/stores/sessions'
 import { useSessionMonitorStore, type MonitorTab } from '@/stores/session-monitor'
+import MonitorStatusLights from '@/components/monitor/MonitorStatusLights.vue'
 import { useSwitchStore } from '@/stores/switch'
 import { useToast } from '@/composables/useToast'
 import { openUsageTray, pickPluginDirectory } from '@/lib/api'
@@ -316,6 +317,10 @@ function handleSessionSearch(e: Event) {
             <span v-if="appStore.currentTab === 'sessions' && item.session_count != null" class="ah-platform-item__count">
               {{ item.session_count }}
             </span>
+            <MonitorStatusLights
+              v-else-if="appStore.currentTab === 'monitor' && item.id !== 'all'"
+              :agent="item.id as MonitorTab"
+            />
           </div>
         </button>
         <p v-if="getSidebarItems().length === 0" class="text-sm p-3" style="color: var(--ink-3)">

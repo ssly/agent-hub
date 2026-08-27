@@ -205,7 +205,10 @@ pub fn decode_dsh_log(path: &Path) -> Result<DshLog, String> {
         }
         log.events.push(DshEvent {
             event_type: record_type.to_string(),
-            time: parsed.get("time").and_then(|v| v.as_i64()).unwrap_or_default(),
+            time: parsed
+                .get("time")
+                .and_then(|v| v.as_i64())
+                .unwrap_or_default(),
             data: parsed.get("data").cloned().unwrap_or(Value::Null),
         });
     }
@@ -222,7 +225,9 @@ fn zstd_decompress_frames(raw: &[u8]) -> Result<Vec<u8>, String> {
     let mut out = Vec::with_capacity(raw.len().saturating_mul(8).min(128 << 20));
     let mut pos = 0usize;
     while pos < raw.len() {
-        if pos + ZSTD_FRAME_MAGIC.len() > raw.len() || raw[pos..pos + ZSTD_FRAME_MAGIC.len()] != ZSTD_FRAME_MAGIC {
+        if pos + ZSTD_FRAME_MAGIC.len() > raw.len()
+            || raw[pos..pos + ZSTD_FRAME_MAGIC.len()] != ZSTD_FRAME_MAGIC
+        {
             break;
         }
         let mut cursor = std::io::Cursor::new(&raw[pos..]);
@@ -256,10 +261,7 @@ pub fn load_dsh_projcache() -> Value {
 }
 
 fn projcache_session<'a>(cache: &'a Value, session_id: &str) -> Option<&'a Value> {
-    cache
-        .get("tables")?
-        .get("sessions")?
-        .get(session_id)
+    cache.get("tables")?.get("sessions")?.get(session_id)
 }
 
 fn projcache_row<'a>(session: &'a Value, row: &str) -> Option<&'a Value> {
@@ -427,11 +429,7 @@ pub fn last_dsh_messages(
     session_id: &str,
 ) -> Result<(Option<SessionMessage>, Option<SessionMessage>), String> {
     let messages = get_dsh_messages(session_id, 0, usize::MAX)?;
-    let last_user = messages
-        .iter()
-        .rev()
-        .find(|m| m.role == "user")
-        .cloned();
+    let last_user = messages.iter().rev().find(|m| m.role == "user").cloned();
     let last_assistant = messages
         .iter()
         .rev()
@@ -440,7 +438,9 @@ pub fn last_dsh_messages(
     Ok((last_user, last_assistant))
 }
 
-pub fn search_dsh_messages(query_lower: &str) -> Result<Vec<crate::session::models::SessionSearchResult>, String> {
+pub fn search_dsh_messages(
+    query_lower: &str,
+) -> Result<Vec<crate::session::models::SessionSearchResult>, String> {
     let cache = load_dsh_projcache();
     let mut results = Vec::new();
     for file in list_dsh_session_files() {
@@ -501,7 +501,10 @@ fn remove_id_from_workspace_index(session_id: &str) -> Result<(), String> {
     if let Some(workspaces) = doc.get_mut("tables").and_then(|t| t.get_mut("workspaces")) {
         if let Some(map) = workspaces.as_object_mut() {
             for (_id, workspace) in map.iter_mut() {
-                if let Some(ids) = workspace.get_mut("sessionIds").and_then(|v| v.as_array_mut()) {
+                if let Some(ids) = workspace
+                    .get_mut("sessionIds")
+                    .and_then(|v| v.as_array_mut())
+                {
                     let before = ids.len();
                     ids.retain(|v| v.as_str() != Some(session_id));
                     changed |= ids.len() != before;
@@ -688,7 +691,10 @@ mod tests {
             }
             log.events.push(DshEvent {
                 event_type: record_type.into(),
-                time: parsed.get("time").and_then(|v| v.as_i64()).unwrap_or_default(),
+                time: parsed
+                    .get("time")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or_default(),
                 data: parsed.get("data").cloned().unwrap_or(Value::Null),
             });
         }

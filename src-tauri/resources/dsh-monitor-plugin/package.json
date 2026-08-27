@@ -1,0 +1,16 @@
+{
+  "name": "agent-hub-dsh-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "description": "Observe-only DeepSeek Harness plugin that reports session lifecycle to Agent Hub.",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

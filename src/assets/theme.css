@@ -41,6 +41,11 @@
   --warning-soft:  rgba(176, 122, 62, 0.10);
   --danger:        #B0524A;
   --danger-soft:   rgba(176, 82, 74, 0.10);
+  /* Traffic-light dots (monitor capability + live status). Not the muted
+     ink-wash success/warning used by buttons and notices. */
+  --signal-red:    #E03131;
+  --signal-yellow: #F5C400;
+  --signal-green:  #2BB24A;
 
   /* Lines */
   --hairline:      rgba(42, 42, 46, 0.07);
@@ -123,6 +128,9 @@
   --warning-soft:  rgba(214, 153, 99, 0.12);
   --danger:        #D88078;
   --danger-soft:   rgba(216, 128, 120, 0.12);
+  --signal-red:    #FF4D4D;
+  --signal-yellow: #FFD60A;
+  --signal-green:  #32D74B;
 
   --hairline:      rgba(231, 233, 240, 0.06);
   --border:        rgba(231, 233, 240, 0.10);
@@ -157,6 +165,7 @@
     --success: #8FB89A; --success-soft: rgba(143,184,154,.12);
     --warning: #D69963; --warning-soft: rgba(214,153,99,.12);
     --danger: #D88078; --danger-soft: rgba(216,128,120,.12);
+    --signal-red: #FF4D4D; --signal-yellow: #FFD60A; --signal-green: #32D74B;
     --hairline: rgba(231,233,240,.06); --border: rgba(231,233,240,.10); --border-strong: rgba(231,233,240,.20);
     --shadow-mist: 0 1px 3px rgba(0,0,0,.25); --shadow-soft: 0 4px 14px rgba(0,0,0,.35),0 1px 3px rgba(0,0,0,.25);
     --shadow-modal: 0 24px 56px rgba(0,0,0,.55),0 4px 12px rgba(0,0,0,.35);

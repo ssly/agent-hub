@@ -227,13 +227,23 @@ fn apply_event(snapshot: &mut MonitorSnapshot, event: HookEvent) {
         .sessions
         .iter()
         .position(|session| session.session_id == event.session_id);
-    // Only the turn boundaries decide status: UserPromptSubmit → Running,
-    // Stop → Ended. Cursor's AssistantResponse (afterAgentResponse) may fire
-    // multiple times within one generation, so it must only attach the reply
-    // text, never flip the state; the generation's stop event marks the end.
+    // Turn boundaries decide running/ended. PermissionRequest (and Grok's
+    // Notification permission_prompt, already remapped in capture) paints
+    // waiting; PermissionResult / PermissionDenied / PostToolUse resume the
+    // turn without ending it. Cursor's AssistantResponse may fire multiple
+    // times within one generation and must never flip the state.
     let status = match event.hook_event_name.as_str() {
         "UserPromptSubmit" => RuntimeStatus::Running,
         "Stop" => RuntimeStatus::Ended,
+        "StopFailure" => RuntimeStatus::Failed,
+        "PermissionRequest" => RuntimeStatus::Waiting,
+        "PermissionResult" | "PermissionDenied" | "PostToolUse" => match index {
+            Some(index) if snapshot.sessions[index].status == RuntimeStatus::Waiting => {
+                RuntimeStatus::Running
+            }
+            Some(index) => snapshot.sessions[index].status,
+            None => RuntimeStatus::Ended,
+        },
         _ => match index {
             Some(index) => snapshot.sessions[index].status,
             // A reply event without a preceding prompt (hook installed
@@ -428,11 +438,66 @@ mod tests {
     }
 
     #[test]
+    fn stop_failure_marks_failed() {
+        let mut snapshot = MonitorSnapshot::default();
+        apply_event(
+            &mut snapshot,
+            event("UserPromptSubmit", Some("question"), None),
+        );
+        apply_event(&mut snapshot, event("StopFailure", None, None));
+        assert_eq!(snapshot.sessions[0].status, RuntimeStatus::Failed);
+    }
+
+    #[test]
+    fn permission_request_marks_waiting_and_result_resumes() {
+        let mut snapshot = MonitorSnapshot::default();
+        apply_event(
+            &mut snapshot,
+            event("UserPromptSubmit", Some("question"), None),
+        );
+        apply_event(&mut snapshot, event("PermissionRequest", None, None));
+        assert_eq!(snapshot.sessions[0].status, RuntimeStatus::Waiting);
+        assert_eq!(
+            snapshot.sessions[0].user_prompt.as_deref(),
+            Some("question")
+        );
+        apply_event(&mut snapshot, event("PermissionResult", None, None));
+        assert_eq!(snapshot.sessions[0].status, RuntimeStatus::Running);
+        apply_event(&mut snapshot, event("Stop", None, Some("answer")));
+        assert_eq!(snapshot.sessions[0].status, RuntimeStatus::Ended);
+    }
+
+    #[test]
+    fn post_tool_use_only_resumes_waiting_rows() {
+        let mut snapshot = MonitorSnapshot::default();
+        apply_event(
+            &mut snapshot,
+            event("UserPromptSubmit", Some("question"), None),
+        );
+        apply_event(&mut snapshot, event("PostToolUse", None, None));
+        assert_eq!(snapshot.sessions[0].status, RuntimeStatus::Running);
+        apply_event(&mut snapshot, event("PermissionRequest", None, None));
+        assert_eq!(snapshot.sessions[0].status, RuntimeStatus::Waiting);
+        apply_event(&mut snapshot, event("PostToolUse", None, None));
+        assert_eq!(snapshot.sessions[0].status, RuntimeStatus::Running);
+    }
+
+    #[test]
+    fn orphan_post_tool_use_does_not_plant_a_running_row() {
+        let mut snapshot = MonitorSnapshot::default();
+        apply_event(&mut snapshot, event("PostToolUse", None, None));
+        assert_eq!(snapshot.sessions[0].status, RuntimeStatus::Ended);
+    }
+
+    #[test]
     fn assistant_response_without_prompt_defaults_to_ended() {
         // Hook installed mid-session: the reply event arrives first. The row
         // defaults to Ended instead of a stuck "running".
         let mut snapshot = MonitorSnapshot::default();
-        apply_event(&mut snapshot, event("AssistantResponse", None, Some("reply")));
+        apply_event(
+            &mut snapshot,
+            event("AssistantResponse", None, Some("reply")),
+        );
         assert_eq!(snapshot.sessions.len(), 1);
         assert_eq!(snapshot.sessions[0].status, RuntimeStatus::Ended);
     }

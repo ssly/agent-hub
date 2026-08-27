@@ -152,8 +152,8 @@ fn capture_stdin_event(agent: AgentKind) -> Result<(), String> {
     // and is dropped. Interrupt/StopFailure always pass through: they concern
     // the whole turn, and dropping them could strand the row as "running".
     if agent == AgentKind::Kimi {
-        let raw_name = string_field_any(&input, &["hook_event_name", "hookEventName"])
-            .unwrap_or_default();
+        let raw_name =
+            string_field_any(&input, &["hook_event_name", "hookEventName"]).unwrap_or_default();
         match raw_name.as_str() {
             "SubagentStart" => return mark_kimi_subagent(&session_id),
             "SubagentStop" => return clear_kimi_subagent(&session_id),
@@ -169,8 +169,8 @@ fn capture_stdin_event(agent: AgentKind) -> Result<(), String> {
     // prompt. SubagentStart names the child session in subagentId; every
     // event from an ignored session is dropped.
     if agent == AgentKind::Grok {
-        let raw_name = string_field_any(&input, &["hook_event_name", "hookEventName"])
-            .unwrap_or_default();
+        let raw_name =
+            string_field_any(&input, &["hook_event_name", "hookEventName"]).unwrap_or_default();
         match raw_name.as_str() {
             "subagent_start" | "SubagentStart" => {
                 if let Some(child_id) = string_field_any(&input, &["subagent_id", "subagentId"]) {
@@ -200,14 +200,32 @@ fn capture_stdin_event(agent: AgentKind) -> Result<(), String> {
     let Some(event_name) = canonical_event_name(&event_name) else {
         return Ok(());
     };
-
-    let mut user_prompt = prompt_field(&input).map(|prompt| {
-        if agent == AgentKind::Grok {
-            unwrap_grok_user_query(&prompt)
-        } else {
-            prompt
+    // Grok (and Claude-style Notification hooks) fire for several attention
+    // types. Only permission_prompt is "waiting for the user to confirm";
+    // idle_prompt is post-Stop idle and must not paint a yellow light.
+    let event_name = if event_name == "Notification" {
+        if !is_permission_prompt_notification(&input) {
+            return Ok(());
         }
-    });
+        "PermissionRequest"
+    } else if event_name == "Stop" && is_cursor_error_stop(agent, &input) {
+        "StopFailure"
+    } else {
+        event_name
+    };
+    let wait_lifecycle = is_wait_lifecycle_event(event_name);
+
+    let mut user_prompt = if wait_lifecycle {
+        None
+    } else {
+        prompt_field(&input).map(|prompt| {
+            if agent == AgentKind::Grok {
+                unwrap_grok_user_query(&prompt)
+            } else {
+                prompt
+            }
+        })
+    };
     // Antigravity PreInvocation/Stop never carry the user text; pull the last
     // USER_INPUT from the conversation transcript when available.
     if agent == AgentKind::Antigravity && user_prompt.is_none() {
@@ -239,7 +257,7 @@ fn capture_stdin_event(agent: AgentKind) -> Result<(), String> {
     let turn_id = resolve_turn_id(&input, &event_id);
     let source = match agent {
         AgentKind::Codex => detect_source(),
-        AgentKind::Cursor => SessionSource::Cursor,
+        AgentKind::Cursor => detect_cursor_source(&input),
         // Shared hooks.json; product is encoded in transcriptPath /
         // artifactDirectoryPath (antigravity-cli | antigravity | antigravity-ide).
         AgentKind::Antigravity => detect_antigravity_source(&input),
@@ -249,7 +267,11 @@ fn capture_stdin_event(agent: AgentKind) -> Result<(), String> {
         // discriminator.
         _ => SessionSource::Terminal,
     };
-    let mut assistant_reply = assistant_reply_field(agent, &input);
+    let mut assistant_reply = if wait_lifecycle {
+        None
+    } else {
+        assistant_reply_field(agent, &input)
+    };
     if agent == AgentKind::Antigravity && event_name == "Stop" && assistant_reply.is_none() {
         if let Some(path) = string_field_any(&input, &["transcriptPath", "transcript_path"]) {
             assistant_reply = last_transcript_assistant_reply(&path);
@@ -292,28 +314,55 @@ fn capture_stdin_event(agent: AgentKind) -> Result<(), String> {
 /// Normalize the hook event value across agents: Codex/Claude/Kimi use
 /// PascalCase, Grok uses snake_case, and Cursor uses camelCase lifecycle
 /// names. Returns None for events we ignore.
-/// Kimi Code fires Interrupt (never Stop) when the user aborts a turn, and
-/// Claude/Grok/Kimi fire StopFailure when a turn dies on an API error — both
-/// are normalized to Stop because the turn is over either way.
+/// Kimi Code fires Interrupt (never Stop) when the user aborts a turn —
+/// that still ends the turn (gray). StopFailure is kept distinct (red).
 fn canonical_event_name(name: &str) -> Option<&'static str> {
     match name {
-        "UserPromptSubmit"
-        | "user_prompt_submit"
-        | "userPromptSubmit"
-        | "PreInvocation"
+        "UserPromptSubmit" | "user_prompt_submit" | "userPromptSubmit" | "PreInvocation"
         | "pre_invocation" => Some("UserPromptSubmit"),
         "beforeSubmitPrompt" => Some("UserPromptSubmit"),
         "afterAgentResponse" => Some("AssistantResponse"),
         // Kiro docs also call this "Agent Stop"; CLI payloads may use camelCase.
-        "Stop"
-        | "stop"
-        | "agentStop"
-        | "AgentStop"
-        | "Interrupt"
-        | "interrupt"
-        | "StopFailure"
-        | "stop_failure" => Some("Stop"),
+        "Stop" | "stop" | "agentStop" | "AgentStop" | "Interrupt" | "interrupt"
+        | "StopCancelled" | "stop_cancelled" | "stopCancelled" => Some("Stop"),
+        // API/tool error — red light. Interrupt stays Stop (user abort is ended,
+        // not a failure).
+        "StopFailure" | "stop_failure" => Some("StopFailure"),
+        "PermissionRequest" | "permission_request" | "permissionRequest" => {
+            Some("PermissionRequest")
+        }
+        "PermissionResult" | "permission_result" | "permissionResult" => Some("PermissionResult"),
+        "PermissionDenied" | "permission_denied" | "permissionDenied" => Some("PermissionDenied"),
+        "PostToolUse"
+        | "post_tool_use"
+        | "postToolUse"
+        | "PostToolUseFailure"
+        | "post_tool_use_failure"
+        | "postToolUseFailure" => Some("PostToolUse"),
+        "Notification" | "notification" => Some("Notification"),
         _ => None,
+    }
+}
+
+fn is_cursor_error_stop(agent: AgentKind, input: &serde_json::Value) -> bool {
+    agent == AgentKind::Cursor
+        && string_field_any(input, &["status"])
+            .is_some_and(|status| status.eq_ignore_ascii_case("error"))
+}
+
+fn is_wait_lifecycle_event(name: &str) -> bool {
+    matches!(
+        name,
+        "PermissionRequest" | "PermissionResult" | "PermissionDenied" | "PostToolUse"
+    )
+}
+
+/// Grok Notification matcher already restricts to permission_prompt; still
+/// drop idle_prompt / task_complete if a payload carries a type field.
+fn is_permission_prompt_notification(input: &serde_json::Value) -> bool {
+    match string_field_any(input, &["notification_type", "notificationType"]).as_deref() {
+        None => true,
+        Some(value) => value.eq_ignore_ascii_case("permission_prompt"),
     }
 }
 
@@ -346,11 +395,14 @@ fn merge_kiro_env_fields(input: &mut serde_json::Value) {
         }
     }
     if !object.contains_key("hook_event_name") && !object.contains_key("hookEventName") {
-        if let Ok(event) = std::env::var("HOOK_EVENT_NAME")
-            .or_else(|_| std::env::var("KIRO_HOOK_EVENT"))
+        if let Ok(event) =
+            std::env::var("HOOK_EVENT_NAME").or_else(|_| std::env::var("KIRO_HOOK_EVENT"))
         {
             if !event.trim().is_empty() {
-                object.insert("hook_event_name".to_string(), serde_json::Value::String(event));
+                object.insert(
+                    "hook_event_name".to_string(),
+                    serde_json::Value::String(event),
+                );
             }
         } else if object.get("prompt").is_some() {
             // Prompt Submit with env-only text and no event name.
@@ -502,9 +554,8 @@ fn cwd_field(input: &serde_json::Value) -> Option<String> {
 }
 
 fn last_transcript_user_prompt(path: &str) -> Option<String> {
-    last_transcript_role(path, "USER_INPUT").map(|text| {
-        crate::session::antigravity::unwrap_user_request(&text)
-    })
+    last_transcript_role(path, "USER_INPUT")
+        .map(|text| crate::session::antigravity::unwrap_user_request(&text))
 }
 
 fn last_transcript_assistant_reply(path: &str) -> Option<String> {
@@ -569,6 +620,43 @@ fn detect_source() -> SessionSource {
         .unwrap_or_default()
         .to_ascii_lowercase();
     source_from_originator(&originator)
+}
+
+/// Cursor CLI versions look like `2026.08.25-3e8eec8`. The IDE app uses
+/// semver (`2.1.36`). Shared hooks.json fires for both; this is the field
+/// that actually differs in captured payloads.
+fn is_cursor_cli_version(version: &str) -> bool {
+    let Some((date, rev)) = version.split_once('-') else {
+        return false;
+    };
+    if rev.is_empty() {
+        return false;
+    }
+    let mut parts = date.split('.');
+    matches!(
+        (parts.next(), parts.next(), parts.next(), parts.next()),
+        (Some(year), Some(month), Some(day), None)
+            if year.len() == 4
+                && month.len() == 2
+                && day.len() == 2
+                && year.bytes().all(|b| b.is_ascii_digit())
+                && month.bytes().all(|b| b.is_ascii_digit())
+                && day.bytes().all(|b| b.is_ascii_digit())
+    )
+}
+
+fn detect_cursor_source(input: &serde_json::Value) -> SessionSource {
+    if let Some(version) = string_field(input, "cursor_version") {
+        if is_cursor_cli_version(&version) {
+            return SessionSource::Terminal;
+        }
+    }
+    if string_field_any(input, &["transcript_path", "transcriptPath"])
+        .is_some_and(|path| path.replace('\\', "/").contains("/.cursor/chats/"))
+    {
+        return SessionSource::Terminal;
+    }
+    SessionSource::Cursor
 }
 
 fn source_from_originator(originator: &str) -> SessionSource {
@@ -646,7 +734,8 @@ fn mark_kimi_subagent_in(root: &std::path::Path, session_id: &str) -> Result<(),
     fs::create_dir_all(&dir)
         .map_err(|error| format!("unable to create sub-agent marker directory: {error}"))?;
     let marker = dir.join(format!("{}-{}", now_millis(), Uuid::new_v4()));
-    fs::write(&marker, []).map_err(|error| format!("unable to create sub-agent marker: {error}"))?;
+    fs::write(&marker, [])
+        .map_err(|error| format!("unable to create sub-agent marker: {error}"))?;
     Ok(())
 }
 
@@ -891,9 +980,31 @@ mod tests {
 
     #[test]
     fn grok_session_close_detection() {
-        assert!(is_grok_session_close(&serde_json::json!({"reason": "shutdown"})));
+        assert!(is_grok_session_close(
+            &serde_json::json!({"reason": "shutdown"})
+        ));
         assert!(!is_grok_session_close(&serde_json::json!({})));
-        assert!(!is_grok_session_close(&serde_json::json!({"reason": "complete"})));
+        assert!(!is_grok_session_close(
+            &serde_json::json!({"reason": "complete"})
+        ));
+    }
+
+    #[test]
+    fn cursor_cli_version_is_date_sha() {
+        assert!(is_cursor_cli_version("2026.08.25-3e8eec8"));
+        assert!(!is_cursor_cli_version("2.1.36"));
+        assert!(!is_cursor_cli_version("1.7.39"));
+        assert!(!is_cursor_cli_version("2026.08.25"));
+    }
+
+    #[test]
+    fn cursor_source_uses_cli_version() {
+        let cli = serde_json::json!({"cursor_version": "2026.08.25-3e8eec8"});
+        assert_eq!(detect_cursor_source(&cli), SessionSource::Terminal);
+        let ide = serde_json::json!({"cursor_version": "2.1.36"});
+        assert_eq!(detect_cursor_source(&ide), SessionSource::Cursor);
+        let unknown = serde_json::json!({});
+        assert_eq!(detect_cursor_source(&unknown), SessionSource::Cursor);
     }
 
     #[test]
@@ -953,16 +1064,63 @@ mod tests {
         );
         assert_eq!(canonical_event_name("Stop"), Some("Stop"));
         assert_eq!(canonical_event_name("stop"), Some("Stop"));
-        // Kimi Code fires Interrupt instead of Stop on user abort (Esc/Ctrl+C);
-        // Claude/Grok/Kimi fire StopFailure when a turn dies on an API error.
+        // Kimi Code fires Interrupt instead of Stop on user abort (Esc/Ctrl+C).
         assert_eq!(canonical_event_name("Interrupt"), Some("Stop"));
         assert_eq!(canonical_event_name("interrupt"), Some("Stop"));
-        assert_eq!(canonical_event_name("StopFailure"), Some("Stop"));
-        assert_eq!(canonical_event_name("stop_failure"), Some("Stop"));
+        assert_eq!(canonical_event_name("StopFailure"), Some("StopFailure"));
+        assert_eq!(canonical_event_name("stop_failure"), Some("StopFailure"));
         assert_eq!(canonical_event_name("SessionStart"), None);
         assert_eq!(canonical_event_name("session_start"), None);
-        assert_eq!(canonical_event_name("Notification"), None);
+        assert_eq!(canonical_event_name("Notification"), Some("Notification"));
+        assert_eq!(
+            canonical_event_name("PermissionRequest"),
+            Some("PermissionRequest")
+        );
+        assert_eq!(
+            canonical_event_name("permission_request"),
+            Some("PermissionRequest")
+        );
+        assert_eq!(
+            canonical_event_name("PermissionResult"),
+            Some("PermissionResult")
+        );
+        assert_eq!(canonical_event_name("PostToolUse"), Some("PostToolUse"));
+        assert_eq!(
+            canonical_event_name("post_tool_use_failure"),
+            Some("PostToolUse")
+        );
+        assert_eq!(canonical_event_name("stop_cancelled"), Some("Stop"));
         assert_eq!(canonical_event_name("SubagentStop"), None);
+    }
+
+    #[test]
+    fn cursor_error_stop_is_failure() {
+        assert!(is_cursor_error_stop(
+            AgentKind::Cursor,
+            &serde_json::json!({"status": "error"})
+        ));
+        assert!(!is_cursor_error_stop(
+            AgentKind::Cursor,
+            &serde_json::json!({"status": "completed"})
+        ));
+        assert!(!is_cursor_error_stop(
+            AgentKind::Claude,
+            &serde_json::json!({"status": "error"})
+        ));
+    }
+
+    #[test]
+    fn permission_prompt_notification_is_detected() {
+        assert!(is_permission_prompt_notification(&serde_json::json!({
+            "notification_type": "permission_prompt"
+        })));
+        assert!(is_permission_prompt_notification(&serde_json::json!({
+            "notificationType": "permission_prompt"
+        })));
+        assert!(is_permission_prompt_notification(&serde_json::json!({})));
+        assert!(!is_permission_prompt_notification(&serde_json::json!({
+            "notification_type": "idle_prompt"
+        })));
     }
 
     #[test]
@@ -1044,12 +1202,21 @@ mod tests {
             "prompt": "把设置页改成暗色主题"
         });
         assert_eq!(
-            string_field_any(&prompt_input, &["session_id", "sessionId", "conversation_id"])
-                .as_deref(),
+            string_field_any(
+                &prompt_input,
+                &["session_id", "sessionId", "conversation_id"]
+            )
+            .as_deref(),
             Some("9f2c1a")
         );
-        assert_eq!(prompt_field(&prompt_input).as_deref(), Some("把设置页改成暗色主题"));
-        assert_eq!(cwd_field(&prompt_input).as_deref(), Some("/Users/demo/projects/qwen-app"));
+        assert_eq!(
+            prompt_field(&prompt_input).as_deref(),
+            Some("把设置页改成暗色主题")
+        );
+        assert_eq!(
+            cwd_field(&prompt_input).as_deref(),
+            Some("/Users/demo/projects/qwen-app")
+        );
         assert_eq!(resolve_turn_id(&prompt_input, "event-1"), "event-1");
 
         let stop_input = serde_json::json!({
@@ -1063,9 +1230,8 @@ mod tests {
             Some("已切换为暗色主题。")
         );
 
-        // StopFailure normalizes to Stop so an API-error turn never stays
-        // "running" (same decision as Claude Code).
-        assert_eq!(canonical_event_name("StopFailure"), Some("Stop"));
+        // StopFailure is the red-light failure status (same as Claude Code).
+        assert_eq!(canonical_event_name("StopFailure"), Some("StopFailure"));
         // SubagentStart/SubagentStop are not registered and would be ignored.
         assert_eq!(canonical_event_name("SubagentStart"), None);
     }
@@ -1095,12 +1261,21 @@ mod tests {
             "prompt": "把设置页改成暗色主题"
         });
         assert_eq!(
-            string_field_any(&prompt_input, &["session_id", "sessionId", "conversation_id"])
-                .as_deref(),
+            string_field_any(
+                &prompt_input,
+                &["session_id", "sessionId", "conversation_id"]
+            )
+            .as_deref(),
             Some("sess-9f2c")
         );
-        assert_eq!(prompt_field(&prompt_input).as_deref(), Some("把设置页改成暗色主题"));
-        assert_eq!(cwd_field(&prompt_input).as_deref(), Some("/Users/demo/projects/zcode-app"));
+        assert_eq!(
+            prompt_field(&prompt_input).as_deref(),
+            Some("把设置页改成暗色主题")
+        );
+        assert_eq!(
+            cwd_field(&prompt_input).as_deref(),
+            Some("/Users/demo/projects/zcode-app")
+        );
         assert_eq!(resolve_turn_id(&prompt_input, "event-1"), "event-1");
 
         let stop_input = serde_json::json!({
@@ -1121,8 +1296,7 @@ mod tests {
             "lastAssistantMessage": "done"
         });
         assert_eq!(
-            string_field_any(&aliased, &["session_id", "sessionId", "conversation_id"])
-                .as_deref(),
+            string_field_any(&aliased, &["session_id", "sessionId", "conversation_id"]).as_deref(),
             Some("sess-7a1b")
         );
         assert_eq!(
@@ -1207,7 +1381,11 @@ mod tests {
         // longer suppresses the main turn's Stop.
         let dir = kimi_subagent_dir(&root, "session_stale");
         fs::create_dir_all(&dir).unwrap();
-        let stale = dir.join(format!("{}-{}", now_millis() - 2 * KIMI_SUBAGENT_MARKER_TTL_MILLIS, Uuid::new_v4()));
+        let stale = dir.join(format!(
+            "{}-{}",
+            now_millis() - 2 * KIMI_SUBAGENT_MARKER_TTL_MILLIS,
+            Uuid::new_v4()
+        ));
         fs::write(&stale, []).unwrap();
         assert!(!kimi_subagent_active_in(&root, "session_stale"));
         assert!(!stale.exists());

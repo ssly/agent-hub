@@ -123,7 +123,11 @@ fn yaml_to_json(value: serde_yaml::Value) -> Value {
         serde_yaml::Value::Number(n) => n
             .as_i64()
             .map(|i| Value::Number(i.into()))
-            .or_else(|| n.as_f64().and_then(serde_json::Number::from_f64).map(Value::Number))
+            .or_else(|| {
+                n.as_f64()
+                    .and_then(serde_json::Number::from_f64)
+                    .map(Value::Number)
+            })
             .unwrap_or(Value::String(n.to_string())),
         serde_yaml::Value::String(s) => Value::String(s),
         serde_yaml::Value::Sequence(seq) => {
@@ -469,9 +473,8 @@ pub(crate) fn remove_json_server(
     let key_path: Vec<&str> = mcp_key.split('.').collect();
     let mut parent_open = root_open;
     for key in &key_path[..key_path.len() - 1] {
-        let field = find_json_object_field(before, parent_open, key)?.ok_or_else(|| {
-            format!("'{}' section not found, cannot delete '{}'", mcp_key, name)
-        })?;
+        let field = find_json_object_field(before, parent_open, key)?
+            .ok_or_else(|| format!("'{}' section not found, cannot delete '{}'", mcp_key, name))?;
         let value_open = skip_json_ws(before, field.value_start);
         if before.as_bytes().get(value_open) != Some(&b'{') {
             return Err(format!("'{}' is not an object", key));

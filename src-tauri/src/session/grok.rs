@@ -92,9 +92,12 @@ pub fn search_grok_messages(
         let Ok(dir) = find_grok_session_dir_in(&root, &session.id) else {
             continue;
         };
-        if let Ok(messages) =
-            read_grok_messages_from_jsonl(&dir.join("chat_history.jsonl"), session.started_at, 0, 999999)
-        {
+        if let Ok(messages) = read_grok_messages_from_jsonl(
+            &dir.join("chat_history.jsonl"),
+            session.started_at,
+            0,
+            999999,
+        ) {
             for msg in messages {
                 if msg.matches_query(query_lower) {
                     results.push(crate::session::SessionSearchResult {
@@ -313,13 +316,8 @@ fn find_grok_session_dir_in(root: &Path, session_id: &str) -> Result<PathBuf, St
 
 fn delete_grok_session_in_dir(root: &Path, session_id: &str) -> Result<(), String> {
     let dir = find_grok_session_dir_in(root, session_id)?;
-    fs::remove_dir_all(&dir).map_err(|err| {
-        format!(
-            "Failed to delete Grok session {}: {}",
-            dir.display(),
-            err
-        )
-    })
+    fs::remove_dir_all(&dir)
+        .map_err(|err| format!("Failed to delete Grok session {}: {}", dir.display(), err))
 }
 
 fn read_grok_messages_from_jsonl(
@@ -567,7 +565,8 @@ mod tests {
         assert_eq!(user_msg.content, "你好");
         assert_eq!(user_msg.timestamp, 42);
 
-        let assistant_msg = parse_grok_message_line(&assistant, 42).expect("assistant should parse");
+        let assistant_msg =
+            parse_grok_message_line(&assistant, 42).expect("assistant should parse");
         assert_eq!(assistant_msg.role, "assistant");
         assert_eq!(assistant_msg.content, "你好！");
         assert_eq!(assistant_msg.timestamp, 42);
@@ -623,7 +622,10 @@ mod tests {
         let _ = fs::remove_file(&path);
         assert_eq!(page.len(), 2);
         assert_eq!(page[1].content, "hello");
-        assert_eq!(page[1].thinking.as_deref(), Some("The user asked about Ghostty."));
+        assert_eq!(
+            page[1].thinking.as_deref(),
+            Some("The user asked about Ghostty.")
+        );
     }
 
     #[test]
@@ -687,9 +689,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("temp dir should create");
         // Directory name differs from the id inside summary.json.
         write_session(temp.path(), "%2Ftmp%2Fwork", "dir-name");
-        let summary_path = temp
-            .path()
-            .join("%2Ftmp%2Fwork/dir-name/summary.json");
+        let summary_path = temp.path().join("%2Ftmp%2Fwork/dir-name/summary.json");
         fs::write(
             &summary_path,
             json!({"info": {"id": "real-id", "cwd": "/tmp/work"}}).to_string(),

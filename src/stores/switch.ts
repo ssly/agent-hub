@@ -197,6 +197,7 @@ export const useSwitchStore = defineStore('switch', () => {
 
   async function refreshDeepseekUsage(force = false) {
     if (selectedAgent.value !== 'deepseek' || deepseekUsageLoading.value) return
+    if (!deepseekSettings.value) await loadDeepseekSettings()
     if (!deepseekSettings.value?.has_key) return
     deepseekUsageLoading.value = true
     deepseekUsageError.value = null

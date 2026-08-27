@@ -448,7 +448,10 @@ mod tests {
         let err = restore_item(&id, false).unwrap_err();
         assert_eq!(err, "restore_conflict");
         assert_eq!(list_trash().len(), 1);
-        assert_eq!(fs::read_to_string(orig.join("SKILL.md")).unwrap(), "new version");
+        assert_eq!(
+            fs::read_to_string(orig.join("SKILL.md")).unwrap(),
+            "new version"
+        );
 
         // Overwrite: the trashed version replaces the re-created one.
         restore_item(&id, true).unwrap();

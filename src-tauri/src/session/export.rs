@@ -123,6 +123,7 @@ fn build_html(platform_id: &str, locale: &str, conversations: &[ExportConversati
     let platform_name = match platform_id {
         "claude-code" => "Claude Code",
         "codex" => "Codex",
+        "cursor" => "Cursor",
         "antigravity" => "Antigravity",
         "kiro" => "Kiro",
         "grok" => "Grok Build",
@@ -677,12 +678,15 @@ mod tests {
             render_message_content("hello <script>alert(1)</script>\n```rust\nlet x = 1 < 2;\n```");
         assert!(!rendered.contains("<script>"));
         assert!(rendered.contains("&lt;script&gt;"));
-        assert!(rendered.contains("<pre><code class=\"language-rust\">let x = 1 &lt; 2;\n</code></pre>"));
+        assert!(rendered
+            .contains("<pre><code class=\"language-rust\">let x = 1 &lt; 2;\n</code></pre>"));
     }
 
     #[test]
     fn message_content_formats_markdown_elements() {
-        let rendered = render_message_content("# Title\n\n**bold** and *italic*\n\n- item 1\n- item 2\n\n> quote");
+        let rendered = render_message_content(
+            "# Title\n\n**bold** and *italic*\n\n- item 1\n- item 2\n\n> quote",
+        );
         assert!(rendered.contains("<h1>Title</h1>"));
         assert!(rendered.contains("<strong>bold</strong>"));
         assert!(rendered.contains("<em>italic</em>"));

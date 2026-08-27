@@ -194,9 +194,7 @@ fn read_qwen_session(path: &Path) -> Option<SessionSummary> {
                 .filter(|name| !name.trim().is_empty())
                 .map(|name| name.to_string());
         }
-        if first_user_text.is_none()
-            && value.get("type").and_then(|v| v.as_str()) == Some("user")
-        {
+        if first_user_text.is_none() && value.get("type").and_then(|v| v.as_str()) == Some("user") {
             first_user_text = value.get("message").and_then(extract_message_text);
         }
     }
@@ -211,8 +209,16 @@ fn read_qwen_session(path: &Path) -> Option<SessionSummary> {
         title,
         project_path: project_path.unwrap_or_default(),
         model,
-        started_at: if started_at > 0 { started_at } else { fallback_ts },
-        updated_at: if updated_at > 0 { updated_at } else { fallback_ts },
+        started_at: if started_at > 0 {
+            started_at
+        } else {
+            fallback_ts
+        },
+        updated_at: if updated_at > 0 {
+            updated_at
+        } else {
+            fallback_ts
+        },
         message_count: None,
         tokens_used: None,
         platform_id: PLATFORM_ID.to_string(),
@@ -229,7 +235,10 @@ fn find_qwen_session_file_in(root: &Path, session_id: &str) -> Result<PathBuf, S
 
     let project_entries = fs::read_dir(root).map_err(|err| err.to_string())?;
     for entry in project_entries.flatten() {
-        let direct = entry.path().join("chats").join(format!("{}.jsonl", session_id));
+        let direct = entry
+            .path()
+            .join("chats")
+            .join(format!("{}.jsonl", session_id));
         if direct.is_file() {
             return Ok(direct);
         }
@@ -439,12 +448,8 @@ mod tests {
         fs::create_dir_all(&chats_dir).expect("chats dir should create");
         let path = chats_dir.join(format!("{}.jsonl", session_id));
         let mut file = fs::File::create(&path).expect("chat file should create");
-        writeln!(
-            file,
-            "{}",
-            user_record("你好", "2026-07-17T15:03:19.201Z")
-        )
-        .expect("line should write");
+        writeln!(file, "{}", user_record("你好", "2026-07-17T15:03:19.201Z"))
+            .expect("line should write");
         writeln!(
             file,
             "{}",
@@ -612,8 +617,7 @@ mod tests {
         write_session(temp.path(), "-tmp-one", "sess-1");
         write_session(temp.path(), "-tmp-two", "sess-2");
 
-        let found =
-            find_qwen_session_file_in(temp.path(), "sess-2").expect("file should be found");
+        let found = find_qwen_session_file_in(temp.path(), "sess-2").expect("file should be found");
         assert!(found.ends_with("-tmp-two/chats/sess-2.jsonl"));
     }
 }

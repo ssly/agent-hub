@@ -71,7 +71,11 @@ fn scan_plugins_root(root: &Path) -> Vec<ZCodePluginView> {
     plugins
 }
 
-fn scan_marketplace(root: &Path, marketplace_dir: &Path, marketplace_id: &str) -> Vec<ZCodePluginView> {
+fn scan_marketplace(
+    root: &Path,
+    marketplace_dir: &Path,
+    marketplace_id: &str,
+) -> Vec<ZCodePluginView> {
     // 损坏或缺失的 marketplace.json 只跳过这一个市场，不影响其他市场。
     let Ok(text) = fs::read_to_string(marketplace_dir.join("marketplace.json")) else {
         return Vec::new();
@@ -299,7 +303,11 @@ mod tests {
             "2.0.0",
             Some(".claude-plugin/plugin.json"),
             r#"{"name":"beta","description":"only claude manifest"}"#,
-            &["skills/review/SKILL.md", "skills/debug/SKILL.md", "commands/go.md"],
+            &[
+                "skills/review/SKILL.md",
+                "skills/debug/SKILL.md",
+                "commands/go.md",
+            ],
         );
         fixture.write_marketplace(
             "official",
