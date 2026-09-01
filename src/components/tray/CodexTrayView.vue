@@ -13,10 +13,12 @@ import {
   getCodexTrayUsage,
   getCursorSessionMonitorSnapshot,
   getGrokSessionMonitorSnapshot,
+  getOmpSessionMonitorSnapshot,
   getGrokUsage,
   getKimiSessionMonitorSnapshot,
   getKimiUsage,
   getKiroSessionMonitorSnapshot,
+  markSessionMonitorSessionRead,
   getQwenSessionMonitorSnapshot,
   getWorkbuddySessionMonitorSnapshot,
   getDshSessionMonitorSnapshot,
@@ -107,7 +109,7 @@ let resizeSequence = 0
 // Same data the Monitor tab shows (backend snapshots + change events), but
 // reduced to one line per session: status dot + agent + user question.
 // Same order as MONITOR_AGENTS / platform registry (monitor subset).
-const MONITOR_AGENTS_LIST: MonitorAgent[] = ['codex', 'claude', 'cursor', 'antigravity', 'grok', 'kimi', 'qwen', 'zcode', 'workbuddy', 'kiro', 'dsh']
+const MONITOR_AGENTS_LIST: MonitorAgent[] = ['codex', 'claude', 'cursor', 'antigravity', 'grok', 'kimi', 'qwen', 'zcode', 'workbuddy', 'kiro', 'dsh', 'omp']
 const MONITOR_CHANGED_EVENTS: Record<MonitorAgent, string> = {
   codex: 'session-monitor:codex-changed',
   claude: 'session-monitor:claude-changed',
@@ -120,6 +122,7 @@ const MONITOR_CHANGED_EVENTS: Record<MonitorAgent, string> = {
   workbuddy: 'session-monitor:workbuddy-changed',
   kiro: 'session-monitor:kiro-changed',
   dsh: 'session-monitor:dsh-changed',
+  omp: 'session-monitor:omp-changed',
 }
 const MONITOR_SNAPSHOT_API: Record<MonitorAgent, () => Promise<MonitorSnapshot>> = {
   codex: getCodexSessionMonitorSnapshot,
@@ -133,6 +136,7 @@ const MONITOR_SNAPSHOT_API: Record<MonitorAgent, () => Promise<MonitorSnapshot>>
   workbuddy: getWorkbuddySessionMonitorSnapshot,
   kiro: getKiroSessionMonitorSnapshot,
   dsh: getDshSessionMonitorSnapshot,
+  omp: getOmpSessionMonitorSnapshot,
 }
 const monitorSnapshots = ref<Record<MonitorAgent, MonitorSnapshot>>({
   codex: { revision: 0, sessions: [] },
@@ -146,7 +150,16 @@ const monitorSnapshots = ref<Record<MonitorAgent, MonitorSnapshot>>({
   workbuddy: { revision: 0, sessions: [] },
   kiro: { revision: 0, sessions: [] },
   dsh: { revision: 0, sessions: [] },
+  omp: { revision: 0, sessions: [] },
 })
+
+// A snapshot request may finish after a newer monitor event. Revisions are
+// persisted by the backend, so never let that older response undo unread
+// state already received by this tray window.
+function applyMonitorSnapshot(agent: MonitorAgent, next: MonitorSnapshot) {
+  if (next.revision < monitorSnapshots.value[agent].revision) return
+  monitorSnapshots.value[agent] = next
+}
 
 // Agents whose platform presence directory exists (backend probe). null =
 // not loaded yet / probe failed → show every agent, matching the Monitor tab.
@@ -176,6 +189,7 @@ const monitorRows = computed<AgentSessionState[]>(() =>
   visibleMonitorAgents.value
     .flatMap(agent => monitorSnapshots.value[agent].sessions.map(session => ({ ...session, agent })))
     .sort((a, b) => {
+      if (a.unread !== b.unread) return a.unread ? -1 : 1
       const rank = monitorStatusRank(a.status) - monitorStatusRank(b.status)
       if (rank !== 0) return rank
       return b.updatedAt - a.updatedAt
@@ -196,6 +210,43 @@ const { docked, dockExpanded, dockAnimating, expand: expandDock, collapse: colla
       void applyContentHeight()
     },
   })
+
+const trayVisible = ref(import.meta.env.MODE === 'web')
+const relativeNow = ref(Date.now())
+let relativeClock: ReturnType<typeof window.setInterval> | undefined
+
+function stopRelativeClock() {
+  if (relativeClock != null) {
+    window.clearInterval(relativeClock)
+    relativeClock = undefined
+  }
+}
+
+function syncRelativeClock(recalibrate = false) {
+  const shouldRun = trayVisible.value
+    && document.visibilityState === 'visible'
+    && (!docked.value || dockExpanded.value)
+  if (!shouldRun) {
+    stopRelativeClock()
+    return
+  }
+  if (recalibrate) relativeNow.value = Date.now()
+  if (relativeClock == null) {
+    relativeClock = window.setInterval(() => {
+      relativeNow.value = Date.now()
+    }, 60_000)
+  }
+}
+
+function handleTrayClosed() {
+  trayVisible.value = false
+  stopRelativeClock()
+  clearNativeMonitorHover()
+}
+
+function handleDocumentVisibilityChange() {
+  syncRelativeClock(true)
+}
 
 // Collapse on hover-leave with a small grace delay (cancelled on re-enter),
 // and never while a popover slider is open.
@@ -243,6 +294,7 @@ const STRIP_GAP_PX = 4
 const STRIP_PAD_PX = 8
 const STRIP_BAR_HEIGHT = 48
 const STRIP_THICK_PX = 20
+const STRIP_UNREAD_PILL_LONG_PX = 16
 
 /** Top 3 rows: tip below; bottom 3: tip above — keeps long prompts inside the panel. */
 function monitorTipPlacement(index: number): 'top' | 'bottom' {
@@ -270,14 +322,29 @@ function monitorIsChatgpt(row: AgentSessionState) {
   return row.agent === 'codex' && row.source === 'chatgpt'
 }
 
-/** Compact clock for each monitor row (mm:ss only). */
-function formatMonitorClock(timestamp: number): string {
+function formatMonitorRelative(timestamp: number): string {
+  if (!timestamp) return ''
+  const elapsed = Math.max(0, relativeNow.value - timestamp)
+  const minutes = Math.max(1, Math.floor(elapsed / 60_000))
+  if (minutes < 60) return t('session_monitor.relative_minutes', { count: minutes })
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return t('session_monitor.relative_hours', { count: hours })
+  return t('session_monitor.relative_days', { count: Math.floor(hours / 24) })
+}
+
+function formatMonitorExactTime(timestamp: number): string {
   if (!timestamp) return ''
   const date = new Date(timestamp)
   if (Number.isNaN(date.getTime())) return ''
-  const mm = String(date.getMinutes()).padStart(2, '0')
-  const ss = String(date.getSeconds()).padStart(2, '0')
-  return `${mm}:${ss}`
+  return new Intl.DateTimeFormat(locale.value, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(date)
 }
 
 async function loadMonitorSnapshots() {
@@ -288,7 +355,7 @@ async function loadMonitorSnapshots() {
   agents.forEach((agent, index) => {
     const result = results[index]
     if (result.status === 'fulfilled' && result.value) {
-      monitorSnapshots.value[agent] = result.value
+      applyMonitorSnapshot(agent, result.value)
     }
   })
 }
@@ -313,6 +380,105 @@ let pulseSeq = 0
 // like a brand-new row and the pulse would never fire.
 function monitorRowKey(row: AgentSessionState) {
   return `${row.agent}:${row.sessionId}`
+}
+
+const hoveredMonitorRowKey = ref<string | null>(null)
+
+interface NativeTrayHoverPayload {
+  x: number | null
+  y: number | null
+}
+
+// macOS supplies this only while the docked tray is expanded but unfocused.
+// A brief dwell keeps an expanding panel from acknowledging a row that merely
+// appeared beneath a stationary cursor.
+const NATIVE_HOVER_READ_DELAY_MS = 260
+let nativeHoverReadTimer: ReturnType<typeof window.setTimeout> | undefined
+let nativeHoveredMonitorRowKey: string | null = null
+let nativeHoverPoint: NativeTrayHoverPayload | null = null
+
+function clearNativeMonitorHover() {
+  if (nativeHoverReadTimer != null) {
+    window.clearTimeout(nativeHoverReadTimer)
+    nativeHoverReadTimer = undefined
+  }
+  const key = nativeHoveredMonitorRowKey
+  nativeHoveredMonitorRowKey = null
+  nativeHoverPoint = null
+  if (key && hoveredMonitorRowKey.value === key) {
+    hoveredMonitorRowKey.value = null
+  }
+}
+
+function nativeHoveredMonitorRow() {
+  const point = nativeHoverPoint
+  if (!point || point.x == null || point.y == null) return null
+  const key = document
+    .elementFromPoint(point.x, point.y)
+    ?.closest<HTMLElement>('[data-monitor-row-key]')
+    ?.dataset.monitorRowKey
+  return monitorRows.value.find(row => monitorRowKey(row) === key) ?? null
+}
+
+function syncNativeMonitorHover() {
+  if (!docked.value || !dockExpanded.value || dockAnimating.value) {
+    clearNativeMonitorHover()
+    return
+  }
+  const row = nativeHoveredMonitorRow()
+  const key = row ? monitorRowKey(row) : null
+  if (key === nativeHoveredMonitorRowKey) return
+
+  clearNativeMonitorHover()
+  if (!row || !key) return
+
+  nativeHoveredMonitorRowKey = key
+  nativeHoverReadTimer = window.setTimeout(() => {
+    nativeHoverReadTimer = undefined
+    if (nativeHoveredMonitorRowKey !== key) return
+    const latest = monitorRows.value.find(item => monitorRowKey(item) === key)
+    if (!latest) {
+      clearNativeMonitorHover()
+      return
+    }
+    hoveredMonitorRowKey.value = key
+    if (latest.unread) markMonitorRowRead(latest)
+  }, NATIVE_HOVER_READ_DELAY_MS)
+}
+
+function handleNativeTrayHover(payload: NativeTrayHoverPayload) {
+  nativeHoverPoint = payload.x == null || payload.y == null ? null : payload
+  void nextTick(syncNativeMonitorHover)
+}
+
+function markMonitorRowRead(row: AgentSessionState) {
+  hoveredMonitorRowKey.value = monitorRowKey(row)
+  if (!row.unread) return
+  const observedUpdatedAt = row.updatedAt
+  void markSessionMonitorSessionRead(row.agent, row.sessionId, observedUpdatedAt)
+    .then(() => {
+      const current = monitorSnapshots.value[row.agent]
+      const latest = current.sessions.find(session => session.sessionId === row.sessionId)
+      if (!latest?.unread || latest.updatedAt !== observedUpdatedAt) return
+      monitorSnapshots.value[row.agent] = {
+        ...current,
+        sessions: current.sessions.map(session =>
+          session.sessionId === row.sessionId && session.updatedAt === observedUpdatedAt
+            ? { ...session, unread: false }
+            : session,
+        ),
+      }
+    })
+    .catch(() => {
+      // A later monitor snapshot remains authoritative; a failed hover write
+      // should not disturb the tray or turn into a usage-query error.
+    })
+}
+
+function clearHoveredMonitorRow(row: AgentSessionState) {
+  if (hoveredMonitorRowKey.value === monitorRowKey(row)) {
+    hoveredMonitorRowKey.value = null
+  }
 }
 
 watch(monitorRows, rows => {
@@ -340,6 +506,8 @@ watch(monitorRows, rows => {
   for (const key of [...knownMonitorStatus.keys()]) {
     if (!visible.has(key)) knownMonitorStatus.delete(key)
   }
+  const hovered = rows.find(row => monitorRowKey(row) === hoveredMonitorRowKey.value)
+  if (hovered?.unread) markMonitorRowRead(hovered)
 })
 
 async function spawnPulse(key: string, status: MonitorPulse['status']) {
@@ -573,6 +741,7 @@ watch(refreshMinutes, minutes => {
 }, { immediate: true })
 
 async function closeTray() {
+  handleTrayClosed()
   try {
     await closeUsageTray()
   } catch {
@@ -735,7 +904,7 @@ const grokWindows = computed<TrayUsageWindow[]>(() => {
 /** Docked strip usage bars: up to two smallest quota windows of the visible
  *  provider (5h first, then 7d), drawn as slim vertical bars side by side —
  *  first bar tank-green like the orb's water, second accent-blue like the
- *  ring. Empty when the provider has no usable data. */
+ *  ring. Bar height is the quota remaining. */
 const stripUsageBars = computed<{ percent: number }[]>(() => {
   const windows = selectedProvider.value === 'codex'
     ? usageWindows.value
@@ -745,21 +914,33 @@ const stripUsageBars = computed<{ percent: number }[]>(() => {
         ? claudeWindows.value
         : grokWindows.value
   return windows.slice(0, 2).map(entry => ({
-    percent: Math.min(100, Math.max(0, entry.window.used_percent)),
+    percent: Math.min(100, Math.max(0, entry.window.remaining_percent)),
   }))
 })
+
+const totalMonitorUnread = computed(() =>
+  visibleMonitorAgents.value.reduce(
+    (total, agent) => total + monitorSnapshots.value[agent].sessions.filter(session => session.unread).length,
+    0,
+  ),
+)
+const monitorUnreadBadge = computed(() => totalMonitorUnread.value > 9 ? '…' : String(totalMonitorUnread.value))
+const dockUnreadCount = computed(() => monitorHidden.value ? 0 : totalMonitorUnread.value)
+const dockUnreadBadge = computed(() => dockUnreadCount.value > 9 ? '…' : String(dockUnreadCount.value))
 
 // Strip long axis follows its content (bar segment + dots). Registered
 // here, after every referenced binding exists: watch getters run once eagerly.
 const stripLongPx = computed(() => {
   const showBar = !usageHidden.value && stripUsageBars.value.length > 0
   const dots = monitorHidden.value ? 0 : monitorRows.value.length
-  const items = (showBar ? 1 : 0) + dots
+  const unread = dockUnreadCount.value > 0
+  const items = (showBar ? 1 : 0) + dots + (unread ? 1 : 0)
   return items === 0
     ? 24
     : STRIP_PAD_PX * 2
       + (showBar ? STRIP_BAR_HEIGHT : 0)
       + dots * STRIP_DOT_PX
+      + (unread ? STRIP_UNREAD_PILL_LONG_PX : 0)
       + STRIP_GAP_PX * (items - 1)
 })
 
@@ -852,6 +1033,12 @@ watch(
 watch(
   [docked, dockExpanded, dockAnimating],
   () => {
+    syncRelativeClock(true)
+    if (!docked.value || !dockExpanded.value || dockAnimating.value) {
+      clearNativeMonitorHover()
+    } else if (nativeHoverPoint) {
+      void nextTick(syncNativeMonitorHover)
+    }
     if (dockAnimating.value || compactLoading.value) return
     if (docked.value && dockExpanded.value) void applyContentHeight()
   },
@@ -969,6 +1156,8 @@ async function refresh(compact = false, syncWithAccounts = false, force = false)
 async function handleTrayOpened() {
   opacityOpen.value = false
   intervalOpen.value = false
+  trayVisible.value = true
+  syncRelativeClock(true)
   void loadMonitorSnapshots()
   // Fresh shared settings first: the Accounts view may have changed the
   // selected agent or paused listening while this popup was hidden.
@@ -1019,9 +1208,11 @@ async function selectProvider(provider: UsageProvider) {
 }
 
 onMounted(async () => {
+  document.addEventListener('visibilitychange', handleDocumentVisibilityChange)
   // Browser-only mock route should be immediately previewable. The real hidden
   // tray window waits for a tray click so startup never consumes a query.
   if (import.meta.env.MODE === 'web') {
+    syncRelativeClock(true)
     applySharedSettings(await getUsageMonitorSettings())
     await loadMonitorAvailability()
     await Promise.all([refresh(true, true), loadMonitorSnapshots()])
@@ -1030,6 +1221,10 @@ onMounted(async () => {
 
   const listeners = await Promise.all([
     listen('usage-tray-opened', () => handleTrayOpened()),
+    listen('usage-tray-closed', () => handleTrayClosed()),
+    listen<NativeTrayHoverPayload>('usage-tray-native-hover', event => {
+      handleNativeTrayHover(event.payload)
+    }),
     // Theme toggle in the main window repaints this popup live.
     listen<string>('theme-changed', event => {
       document.documentElement.setAttribute('data-theme', event.payload)
@@ -1048,7 +1243,7 @@ onMounted(async () => {
     // Live monitor rows: same backend events the Monitor tab consumes.
     ...MONITOR_AGENTS_LIST.map(agent =>
       listen<MonitorSnapshot>(MONITOR_CHANGED_EVENTS[agent], event => {
-        monitorSnapshots.value[agent] = event.payload
+        applyMonitorSnapshot(agent, event.payload)
       }),
     ),
   ])
@@ -1062,6 +1257,9 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   unlisteners.forEach(unlisten => unlisten())
   window.clearInterval(quotaTimer)
+  stopRelativeClock()
+  clearNativeMonitorHover()
+  document.removeEventListener('visibilitychange', handleDocumentVisibilityChange)
   disposeDock()
 })
 </script>
@@ -1083,7 +1281,10 @@ onBeforeUnmount(() => {
     <section
       v-if="docked && !dockExpanded"
       class="tray-dock-strip"
-      :class="{ 'tray-dock-strip--top': docked === 'top' }"
+      :class="{
+        'tray-dock-strip--top': docked === 'top',
+        'tray-dock-strip--has-unread': dockUnreadCount > 0,
+      }"
       data-tauri-drag-region="deep"
       :style="{
         opacity: panelOpacity / 100,
@@ -1093,31 +1294,34 @@ onBeforeUnmount(() => {
       @mouseenter="expandDock"
     >
       <div class="tray-dock-strip__inner">
-        <span
-          v-if="!usageHidden && stripUsageBars.length"
-          class="tray-dock-bars"
-        >
+        <div class="tray-dock-strip__content">
           <span
-            v-for="(bar, index) in stripUsageBars"
-            :key="index"
-            class="tray-dock-bar"
-            :class="index === 0 ? 'tray-dock-bar--tank' : 'tray-dock-bar--ring'"
+            v-if="!usageHidden && stripUsageBars.length"
+            class="tray-dock-bars"
           >
-            <span class="tray-dock-bar__fill" :style="{ height: `${bar.percent}%` }" />
+            <span
+              v-for="(bar, index) in stripUsageBars"
+              :key="index"
+              class="tray-dock-bar"
+              :class="index === 0 ? 'tray-dock-bar--tank' : 'tray-dock-bar--ring'"
+            >
+              <span class="tray-dock-bar__fill" :style="{ height: `${bar.percent}%` }" />
+            </span>
           </span>
-        </span>
-        <template v-if="!monitorHidden">
-          <span
-            v-for="row in monitorRows"
-            :key="monitorRowKey(row)"
-            class="tray-dock-dot"
-            :class="{
-              'tray-dock-dot--running': row.status === 'running',
-              'tray-dock-dot--waiting': row.status === 'waiting',
-              'tray-dock-dot--failed': row.status === 'failed',
-            }"
-          />
-        </template>
+          <template v-if="!monitorHidden">
+            <span
+              v-for="row in monitorRows"
+              :key="monitorRowKey(row)"
+              class="tray-dock-dot"
+              :class="{
+                'tray-dock-dot--running': row.status === 'running',
+                'tray-dock-dot--waiting': row.status === 'waiting',
+                'tray-dock-dot--failed': row.status === 'failed',
+              }"
+            />
+          </template>
+        </div>
+        <span v-if="dockUnreadCount > 0" class="tray-dock-unread">{{ dockUnreadBadge }}</span>
       </div>
     </section>
     <section
@@ -1383,7 +1587,15 @@ onBeforeUnmount(() => {
 
         <!-- Monitor strip: whole block gone when hidden. Mini drops tooltips. -->
         <div v-if="!monitorHidden" class="monitor-strip" :class="{ 'is-mini': miniMode }">
-          <div v-if="!miniMode" class="monitor-strip__title">{{ t('ui.monitor_tab') }}</div>
+          <div v-if="!miniMode" class="monitor-strip__title">
+            <span>{{ t('ui.monitor_tab') }}</span>
+            <span
+              v-if="totalMonitorUnread > 0"
+              v-tooltip="t('session_monitor.unread_count', { count: totalMonitorUnread })"
+              class="monitor-strip__unread-total"
+              :aria-label="t('session_monitor.unread_count', { count: totalMonitorUnread })"
+            >{{ monitorUnreadBadge }}</span>
+          </div>
           <div v-if="!monitorRows.length" class="monitor-empty" role="status">
             <span class="monitor-empty__icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 12h4l2.5-6 3 12 2.5-6h6"/></svg>
@@ -1394,6 +1606,9 @@ onBeforeUnmount(() => {
             v-for="(row, index) in monitorRows"
             :key="`${row.agent}-${row.sessionId}-${row.turnId}`"
             class="monitor-row"
+            :data-monitor-row-key="monitorRowKey(row)"
+            @mouseenter="markMonitorRowRead(row)"
+            @mouseleave="clearHoveredMonitorRow(row)"
           >
             <span
               v-tooltip:[monitorTipPlacement(index)]="miniMode ? '' : t(`session_monitor.status_${row.status}`)"
@@ -1433,9 +1648,16 @@ onBeforeUnmount(() => {
             </span>
             <span
               v-if="!miniMode && row.updatedAt"
+              v-tooltip="t('session_monitor.relative_time_exact', { time: formatMonitorExactTime(row.updatedAt) })"
               class="monitor-time"
-              :title="formatMonitorClock(row.updatedAt)"
-            >{{ formatMonitorClock(row.updatedAt) }}</span>
+            >{{ formatMonitorRelative(row.updatedAt) }}</span>
+            <span
+              v-if="row.unread"
+              v-tooltip="t('session_monitor.unread')"
+              class="monitor-row__unread"
+              role="img"
+              :aria-label="t('session_monitor.unread')"
+            />
           </div>
         </div>
       </template>
@@ -1568,11 +1790,52 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
 }
+.tray-dock-strip__content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
 .tray-dock-strip--top .tray-dock-strip__inner {
-  flex: 0 0 auto;
-  width: var(--strip-thick, 20px);
-  height: var(--strip-long, 72px);
-  transform: rotate(-90deg);
+  position: relative;
+  display: block;
+}
+.tray-dock-strip--top .tray-dock-strip__content {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%) rotate(-90deg);
+}
+.tray-dock-strip--top.tray-dock-strip--has-unread .tray-dock-strip__content {
+  left: calc(50% - 10px);
+}
+.tray-dock-unread {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--tray-signal-red);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 750;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.tray-dock-strip:not(.tray-dock-strip--top) .tray-dock-unread {
+  flex-basis: 16px;
+}
+.tray-dock-strip--top .tray-dock-unread {
+  position: absolute;
+  right: 1px;
+  top: 50%;
+  transform: translateY(-50%);
 }
 .tray-dock-dot {
   width: 5px;
@@ -2036,10 +2299,38 @@ onBeforeUnmount(() => {
   padding-top: 6px;
 }
 .monitor-strip__title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   color: var(--tray-ink-2);
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
+}
+.monitor-strip__unread-total {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 17px;
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--tray-signal-red);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
+  white-space: nowrap;
+}
+.monitor-row__unread {
+  flex: 0 0 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--tray-signal-red);
 }
 .monitor-row {
   display: flex;

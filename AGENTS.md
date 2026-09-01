@@ -4,7 +4,7 @@ Agent Hub 的项目上下文文档，供 AI Agent 和开发者快速了解项目
 
 ## 项目概述
 
-Agent Hub 是一个基于 Tauri 2.x 的桌面应用，用于统一管理本地多个 AI Agent 平台的插件（Skill、MCP Server、Claude Code 原生插件）、会话和账号。当前版本 **0.25.2**。
+Agent Hub 是一个基于 Tauri 2.x 的桌面应用，用于统一管理本地多个 AI Agent 平台的插件（Skill、MCP Server、Claude Code 原生插件）、会话和账号。当前版本 **0.26.0**。
 
 ## 架构
 
@@ -93,7 +93,7 @@ src-tauri/src/
     workbuddy.rs          # WorkBuddy 会话适配（~/.workbuddy/ 或 ~/.codebuddy/ 下 sessions/projects 的 jsonl 会话；恢复 `codebuddy -r <id>`）
     dsh.rs                # DeepSeek Harness 会话适配（~/.dsh/sessions/<项目>/<sessionId>/session.jsonl.zstd：zstd 拼接帧容器，首行 session 头 + 事件信封行；标题/统计读 storages/session_projcache.json；删除同步清理 workspace.json 与 projcache；无终端恢复命令）
   session_monitor/        # 实时会话监听（Monitor 标签页）
-    capture.rs            # Hook 事件捕获：--agent-hub-{codex,claude,cursor,grok,kimi,qwen,zcode,workbuddy,antigravity,kiro}-hook stdin → inbox 文件
+    capture.rs            # Hook 事件捕获：--agent-hub-{codex,claude,cursor,grok,kimi,qwen,zcode,workbuddy,antigravity,kiro,omp}-hook stdin → inbox 文件
     hooks.rs              # 各平台 Hook 配置安装与卸载（预览 diff + hash 校验；Dsh 转发 dsh_plugin）
     dsh_plugin.rs         # DeepSeek Harness 观察型 Cordis 插件：拷贝到各 profile node_modules + 外科式写入 cordis.patch.yml
     service.rs            # 多 Agent 事件聚合服务（inbox watcher）
@@ -137,7 +137,7 @@ npm run version [-- <ver>] # 从 git tag 同步版本号
 
 插件工作区按 Agent 聚合 Skill、MCP Server 与 Claude Code 原生插件，支持全局用户目录和项目目录两种范围。项目范围用于查看仓库内配置，当前保持只读；Claude Code 用户范围原生插件支持启用/停用。
 
-平台顺序（`platform/registry.rs` 定义顺序即侧边栏顺序，会话/监听/账号子集保持同一相对顺序）：Shared → Codex → Claude Code → Cursor → Antigravity → Grok Build → Kimi Code → Qwen Code → ZCode → WorkBuddy → Kiro → DeepSeek Harness。关键约定：
+平台顺序（`platform/registry.rs` 定义顺序即侧边栏顺序，会话/监听/账号子集保持同一相对顺序）：Shared → Codex → Claude Code → Cursor → Antigravity → Grok Build → Kimi Code → Qwen Code → ZCode → WorkBuddy → Kiro → DeepSeek Harness → Oh My Pi。关键约定：
 
 - **Shared（id `shared`，`~/.agents/skills`）**：Codex、Cursor、OpenCode、Kimi Code、Grok Build、ZCode 官方默认读取；Claude Code 与 Antigravity 全局层不读。显示名中英文均为 Shared（侧边栏无中文 Agent 名）。
 - **Codex**：官方用户级 skills 仅 Shared（`~/.codex/skills` 是社区误传），前端显示 Skills 在 Shared 目录下并提供跳转，不渲染自己的 Skills 区块。
@@ -148,6 +148,8 @@ npm run version [-- <ver>] # 从 git tag 同步版本号
 - 各平台的小字标注（notes）全部在前端 i18n（`plugin.notes.<platform-id>`），后端不透传。
 - **Qwen Code**（阿里通义千问编程工具，id `qwen`）：skills 为 `~/.qwen/skills`（项目级 `.qwen/skills`，走默认镜像无特判）；MCP 在 `~/.qwen/settings.json` 顶层 `mcpServers`（JSON，Gemini 风格；settings.json 还承载 hooks/auth 等其他配置，读写走 parser.rs 的外科式 JSON 路径保留未知字段）。扩展为**只读列表**（`get_qwen_plugins`，`qwen_plugin.rs`）：扫 `~/.qwen/extensions/<name>/qwen-extension.json`，统计 mcpServers 键数与 commands/skills/agents 数组长度；启停状态持久化位置未确认，不做启停。会话浏览与会话监听（hooks）已接入，见下文对应章节；账号切换不接入（无多账号概念、无远端用量接口，CLI `/stats` 仅为本地聚合）。
 - **DeepSeek Harness**（dsh CLI / 浏览器界面，id `dsh`）：skills 为 `~/.dsh/skills`（项目级 `.dsh/skills`；同时读 Shared `~/.agents/skills`）。Skill 布局除 SKILL.md 目录外还支持**扁平单文件 Markdown**（`*.md` 直接放 skills 根，frontmatter name 缺省用文件名），扫描器对 dsh 平台启用 `scan_skills_ext(allow_flat_md=true)`。MCP 是 profile 的 cordis 插件实例（`~/.dsh/profiles/<profile>/cordis.patch.yml` 中 `name: '@deepseek-ai/dsh-mcp-client'` 条目，`serverName` 即服务器名，配置含 transport/command/args/url/env），**只读列表**（`McpFormat::DshCordisPatch`），增删改后端一律拒绝，UI 小字引导用 `dsh plugin`。插件体系即 profile 本身（`dsh plugin add`，基于 Koishi/Cordis），Plugins 页不管理；会话监听是例外——Monitor 页一键安装观察型插件 `agent-hub-dsh-monitor`（见 session_monitor）。
+
+- **Oh My Pi**（omp，Can Bölük 对 Mario Zechner 的 Pi 的编码向分叉，id `omp`）：skills 为 `~/.omp/agent/skills`（项目级 `.omp/skills`，`workspace_skill_dir` 特判去掉 agent 段）；omp 还会自行发现 Claude/Cursor 等目录的 skills，Agent Hub 只管理 `~/.omp` 自己的文件。MCP 在 `~/.omp/agent/mcp.json`（标准 `mcpServers` map，`McpFormat::Json` 读写）。会话为 JSONL 树（256 字节 title 槽 + `type:"session"` 头 + 带 `id`/`parentId` 的 entry 树；leaf 由文件末 entry 派生，列表/消息只取 active branch，标题优先 title 槽）；扫描 `~/.omp/agent/sessions/<encoded-cwd>/<ts>_<id>.jsonl`，兼容 17.2.5–17.2.8 的 hashed bucket 目录名；恢复 `omp -r <id>`。账号切换/用量不接入（无配额接口）。
 
 ### Skill 系统
 
@@ -163,7 +165,7 @@ Skill 是包含 `SKILL.md` 的目录，SKILL.md 使用 YAML frontmatter（`name`
 
 ### 会话浏览器
 
-每个平台有独立的会话适配器（`claude.rs`、`codex.rs`、`kiro.rs`、`grok.rs`、`kimi.rs`、`qwen.rs`、`zcode.rs`、`workbuddy.rs`、`dsh.rs`），读取各自的会话存储格式。支持分页浏览、消息查看、终端恢复（ZCode 是 Electron 桌面应用，无终端恢复命令，`build_resume_command` 对其返回明确错误，由恢复弹窗展示），以及将批量选中的会话导出为可搜索、自包含的 HTML 文件。DeepSeek Harness 会话（`dsh.rs`）：列表扫描 `~/.dsh/sessions/<项目>/<sessionId>/session.jsonl.zstd`（zstd 拼接帧容器：每批追加一个 frame，用 `ruzstd`（纯 Rust，无 C 依赖）流式解码；首行 `{"type":"session",…}` 头含 id/createdAt/cwd/origin，后续行为事件信封 `{type,seq,time,data}` 或打包 chunk 行 text-chunks/reasoning-chunks/tool-call-chunks——chunk 行只存增量可跳过）；标题/轮数/Token 统计读 `~/.dsh/storages/session_projcache.json`（rows.title/sessionStats/tokenUsage/sessionListMetadata）；消息取 `user/message`（仅 `source.kind=="user"`，过滤 plugin 注入与 goal 轮）与 `assistant/message`（text 块为正文、reasoning 块为思维链；compaction 的 `surfaceOp:{op:"replace"}` 拷贝跳过，避免重复）；子 agent 会话（`origin:"subagent"`）跳过；删除会移除会话目录并同步清理 `workspace.json` 的 sessionIds 与 projcache 表；恢复命令：无终端恢复（`dsh --resume` 只对 headless/tui profile 生效，web 界面在 GUI 内继续），恢复弹窗展示引导错误信息。平台显示名用产品名（如 "Kiro"），具体客户端在会话卡片 badge 上按 `SessionSummary.source` 区分（Kiro 会话全部来自 `~/.kiro/sessions/cli`，只有 kiro-cli 写这里，故 source 固定 `terminal`、badge 标 "Kiro CLI"；Codex 按 `threads.source` 列映射，`vscode`→ChatGPT 客户端）。
+每个平台有独立的会话适配器（`claude.rs`、`codex.rs`、`kiro.rs`、`grok.rs`、`kimi.rs`、`qwen.rs`、`zcode.rs`、`workbuddy.rs`、`dsh.rs`、`omp.rs`），读取各自的会话存储格式。支持分页浏览、消息查看、终端恢复（ZCode 是 Electron 桌面应用，无终端恢复命令，`build_resume_command` 对其返回明确错误，由恢复弹窗展示），以及将批量选中的会话导出为可搜索、自包含的 HTML 文件。DeepSeek Harness 会话（`dsh.rs`）：列表扫描 `~/.dsh/sessions/<项目>/<sessionId>/session.jsonl.zstd`（zstd 拼接帧容器：每批追加一个 frame，用 `ruzstd`（纯 Rust，无 C 依赖）流式解码；首行 `{"type":"session",…}` 头含 id/createdAt/cwd/origin，后续行为事件信封 `{type,seq,time,data}` 或打包 chunk 行 text-chunks/reasoning-chunks/tool-call-chunks——chunk 行只存增量可跳过）；标题/轮数/Token 统计读 `~/.dsh/storages/session_projcache.json`（rows.title/sessionStats/tokenUsage/sessionListMetadata）；消息取 `user/message`（仅 `source.kind=="user"`，过滤 plugin 注入与 goal 轮）与 `assistant/message`（text 块为正文、reasoning 块为思维链；compaction 的 `surfaceOp:{op:"replace"}` 拷贝跳过，避免重复）；子 agent 会话（`origin:"subagent"`）跳过；删除会移除会话目录并同步清理 `workspace.json` 的 sessionIds 与 projcache 表；恢复命令：无终端恢复（`dsh --resume` 只对 headless/tui profile 生效，web 界面在 GUI 内继续），恢复弹窗展示引导错误信息。平台显示名用产品名（如 "Kiro"），具体客户端在会话卡片 badge 上按 `SessionSummary.source` 区分（Kiro 会话全部来自 `~/.kiro/sessions/cli`，只有 kiro-cli 写这里，故 source 固定 `terminal`、badge 标 "Kiro CLI"；Codex 按 `threads.source` 列映射，`vscode`→ChatGPT 客户端）。
 
 ### 会话监听（session_monitor）
 
@@ -177,6 +179,8 @@ Monitor 标签页实时展示各 Agent 的进行中/等待确认/已结束会话
 - **Qwen Code**：官方 hooks（`~/.qwen/settings.json` 顶层 `hooks` 键，结构与 Claude Code 同构：`hooks.<EventName>[{matcher, hooks:[{type: "command", command, timeout}]}]`，无信任门，新会话生效），Hook 参数 `--agent-hub-qwen-hook`。注册 `UserPromptSubmit` + `Stop` + `StopFailure` + `PermissionRequest` + `PermissionDenied` + `PostToolUse`（对齐 Claude：官方语义 Stop 仅主轮、子 agent 走 SubagentStop，故不注册 SubagentStart/SubagentStop、也不做 Kimi 式标记过滤；后三个事件驱动黄灯）。stdin 载荷 snake_case 与 Claude 同形（`session_id`/`hook_event_name`/`prompt`/`last_assistant_message`），capture 来源校验要求同时含 `hook_event_name` + `session_id`（防 camelCase 载荷交叉执行产生幻影事件）。settings.json 承载全部用户配置，安装/卸载走 Claude 同款通用 JSON 外科路径（serde_json::Value 保留未知字段）。**timeout 单位是毫秒**（Qwen `hookRunner` 默认 60000、官方文档写 "Timeout in milliseconds"；Claude/Codex 是秒）——受管 handler 写 `10000`（10s）；旧版误写 `10`（=10ms）会在 Windows 上几乎必定超时（`.cmd` + GUI 子系统启动更慢），状态检测会识别为旧版本并提示重置。**Windows**：Qwen `hookRunner` 用 `spawn(cmd.exe, ['/d','/s','/c', command], {shell:false})`。Node 会再 QuoteCmdArg 包一层，cmd `/s` 剥掉外层引号后剩下 `\"path\"`，裸引号路径和 `cmd /c "path" --arg` 都会报「不是内部或外部命令」（已在真实 Windows 上用 node spawn 核实）。能活下来的写法是**不带引号的路径**（用户名无空格时）：`C:\Users\you\.agent-hub\hook-runner\agent-hub-hook.cmd --agent-hub-qwen-hook`；路径有空格则写 `shell: powershell` + `& 'path' --arg`。升级/重装后需在监听页重置 Qwen Hook。Qwen 也认顶层 `disableAllHooks`，状态检测会提示。**已知风险（未实测）**：Qwen Code 源自 Gemini CLI 分支，若实测发现子 agent 轮次也发普通 `Stop`（Kimi 同款缺陷），需用 hook-debug.jsonl 验证后再注册 SubagentStart/SubagentStop 并加过滤。
 - **Kiro**：官方 hooks（全局 `~/.kiro/hooks/` + 项目 `.kiro/hooks/`，IDE 与 CLI 共用；Web/Mobile 无 hooks）。Agent Hub 写独立受管文件 `~/.kiro/hooks/agent-hub.json`（v1 schema：`hooks[]` + `trigger` + `action.command`），Hook 参数 `--agent-hub-kiro-hook`。注册 `UserPromptSubmit` + `Stop`；command 成功时 **stdout 必须为空**（Kiro 会把 stdout 注入上下文）。覆盖 Kiro IDE + Kiro CLI，不覆盖 Web/Mobile。
 - **ZCode**：官方支持 hooks（用户级 `~/.zcode/cli/config.json`，session 启动时快照、只对新 session 生效，无信任门），Hook 参数 `--agent-hub-zcode-hook`。结构与 Claude Code 神似但带总闸：受管 handler 写在 `hooks.events.<事件>` 下，执行器为 `type: "process"`（command=二进制路径 + args 数组，不走 shell），且必须 `hooks.enabled: true` 才生效（安装时自动置 true；卸载只移除受管 handler，事件数组/ `events` 变空则连带移除，若 `hooks` 只剩 `enabled` 则整个移除恢复默认关闭；用户有其他 handler 时 `enabled` 保持原样）。config.json 还承载其他用户配置，读写走 serde_json::Value 外科式操作保留未知字段。stdin 载荷为 snake_case（附 camelCase alias）：`session_id`（sess_<uuid>）、`hook_event_name`、`cwd`，UserPromptSubmit 带 `prompt`，Stop 带 `last_assistant_message`。**已知风险（未实测）**：ZCode 官方事件集只有 7 个（SessionStart/UserPromptSubmit/PreToolUse/PermissionRequest/PostToolUse/PostToolUseFailure/Stop），**没有子 agent 专属事件**，但有 Agent/Task 工具；官方文档称 Stop 是"主模型准备结束"时触发，暗示子 agent 不发 Stop，但若实测发现子 agent 轮次也发普通 Stop（Kimi 同款缺陷），hook 层没有事件可用于过滤，需要 service 侧启发式（如 Stop 后检查会话 DB 是否有新消息）。ZCode 是桌面应用无法自动化测试，需在客户端里手动触发 Task 工具后用 hook-debug.jsonl 验证。
+
+- **Oh My Pi**：官方无 hooks.json。监听走观察型扩展 `agent-hub-omp-monitor`（`src-tauri/resources/omp-monitor-plugin/`，纯 observe-only：handler 全部 try/catch、写 inbox 原子替换、失败不进 omp 会话），拷入 `~/.omp/agent/extensions/`（auto-discovered，无信任门、无 settings 登记；`PI_CODING_AGENT_DIR` 可覆盖 agent 目录），安装/卸载即拷目录/删目录（omp_plugin.rs，对齐 dsh_plugin 行为：预览 diff + before-hash + 一键装）。事件映射：`input` → UserPromptSubmit、`message_end`（仅 assistant 消息）→ AssistantResponse、`turn_end` → Stop、`tool_approval_requested`/`tool_approval_resolved` → PermissionRequest/PermissionResult（黄灯）；无错误事件，红灯不支持。capture 对 omp 载荷要求 `hook_event_name` + `session_id` 同现（载荷由自家扩展生成，防交叉执行）。`PI_CODING_AGENT_DIR` 环境变量同时影响会话扫描与扩展安装路径。
 
 - **Antigravity**：官方 hooks（`~/.gemini/config/hooks.json`，CLI/IDE/2.0 共用，无信任门），Hook 参数 `--agent-hub-antigravity-hook`。受管命名条目 `agent-hub`，注册 `PreInvocation` + `Stop`（官方无 UserPromptSubmit；用户文案从 `transcriptPath` 的 transcript.jsonl 读最后一条 `USER_INPUT`）。stdin 为 camelCase（`conversationId`/`workspacePaths`/`transcriptPath`），载荷不带 hookEventName，capture 按字段形状推断事件。新会话生效。
 

@@ -8,6 +8,7 @@ mod grok;
 mod kimi;
 mod kiro;
 mod models;
+mod omp;
 mod qwen;
 mod workbuddy;
 mod zcode;
@@ -140,6 +141,15 @@ pub fn list_session_platforms(path_filter: Option<&str>) -> Result<Vec<SessionPl
             });
         }
 
+        let omp_count = omp::count_omp_sessions()?;
+        if omp_count > 0 {
+            platforms.push(SessionPlatform {
+                id: "omp".to_string(),
+                display_name: "Oh My Pi".to_string(),
+                session_count: omp_count,
+            });
+        }
+
         return Ok(platforms);
     }
 
@@ -204,6 +214,9 @@ pub fn list_session_platforms(path_filter: Option<&str>) -> Result<Vec<SessionPl
     if let Some(p) = check_platform("dsh", "DeepSeek Harness", dsh::count_dsh_sessions)? {
         platforms.push(p);
     }
+    if let Some(p) = check_platform("omp", "Oh My Pi", omp::count_omp_sessions)? {
+        platforms.push(p);
+    }
 
     Ok(platforms)
 }
@@ -248,6 +261,7 @@ fn list_sessions_all(platform_id: &str) -> Result<Vec<models::SessionSummary>, S
         "zcode" => zcode::list_zcode_sessions_all(),
         "workbuddy" => workbuddy::list_workbuddy_sessions_all(),
         "dsh" => dsh::list_dsh_sessions_all(),
+        "omp" => omp::list_omp_sessions_all(),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }?;
     // Normalize once for path filters, cards, and resume `cd` so every agent
@@ -468,6 +482,7 @@ fn last_session_messages(
         "qwen" => qwen::last_qwen_messages(session_id),
         "workbuddy" => workbuddy::last_workbuddy_messages(session_id),
         "dsh" => dsh::last_dsh_messages(session_id),
+        "omp" => omp::last_omp_messages(session_id),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
 }
@@ -757,6 +772,7 @@ pub fn get_session_messages(
         "zcode" => zcode::get_zcode_messages(session_id, offset, limit),
         "workbuddy" => workbuddy::get_workbuddy_messages(session_id, offset, limit),
         "dsh" => dsh::get_dsh_messages(session_id, offset, limit),
+        "omp" => omp::get_omp_messages(session_id, offset, limit),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
 }
@@ -778,6 +794,7 @@ pub fn search_session_messages(
         "zcode" => zcode::search_zcode_messages(&query_lower),
         "workbuddy" => workbuddy::search_workbuddy_messages(&query_lower),
         "dsh" => dsh::search_dsh_messages(&query_lower),
+        "omp" => omp::search_omp_messages(&query_lower),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
 }
@@ -795,6 +812,7 @@ pub fn delete_session(platform_id: &str, session_id: &str) -> Result<(), String>
         "zcode" => zcode::delete_zcode_session(session_id),
         "workbuddy" => workbuddy::delete_workbuddy_session(session_id),
         "dsh" => dsh::delete_dsh_session(session_id),
+        "omp" => omp::delete_omp_session(session_id),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
 }
@@ -898,6 +916,7 @@ fn build_resume_command(platform_id: &str, session_id: &str) -> Result<String, S
             "DeepSeek Harness 会话由 dsh 界面管理，没有终端恢复命令。运行 `dsh web` 后在会话列表里点击继续该会话。"
                 .to_string(),
         ),
+        "omp" => Ok(format!("omp -r {}", shell_quote(session_id))),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
 }

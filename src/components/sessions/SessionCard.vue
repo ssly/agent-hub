@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Monitor, Play, Terminal, Trash2 } from 'lucide-vue-next'
+import { Check, Monitor, Play, Terminal, Trash2 } from 'lucide-vue-next'
 import { useHoverResetBool } from '@/composables/useHoverReset'
 import { formatInt, formatSessionTime } from '@/lib/utils'
 import AgentIcon from '@/components/agents/AgentIcon.vue'
@@ -12,12 +12,14 @@ import SessionClientIcon from '@/components/sessions/SessionClientIcon.vue'
 // keep their own stores — no session data crosses between the two views.
 //
 // Layout contract:
-//   head:  [agent/client badge + icon] [model] [tokens] [source?] [status]  [time] [actions]
+//   head:  [agent/client icon + short label] [model?] [tokens?] [source?] [status] [time] [actions]
+//   unread: top-right corner marker with a subtle red card border
 //   body:  title / subtitle / default slot (e.g. monitor Q&A lines)
 // Source is only shown when it adds info the badge does not already carry
 // (e.g. "终端" under Grok). ChatGPT-as-badge never doubles with a source chip.
-// Whole card is clickable: normal mode emits `open` (view messages), selection
-// mode emits `toggleSelect` instead.
+// Whole card is clickable and emits `open` (view messages). When `selectable`,
+// a checkbox sits at the bottom-right; clicking it (or ⌘/Ctrl / Shift on the
+// card) emits `select` with the original mouse event instead of opening.
 const props = withDefaults(defineProps<{
   badge?: string
   /** Platform/agent id for AgentIcon (codex, claude, grok, …). */
@@ -31,6 +33,8 @@ const props = withDefaults(defineProps<{
   /** Unix seconds or ms; formatted here so the parent list does not
    *  toLocaleString every row on each selection toggle. Ignored when `time` is set. */
   updatedAt?: number | string | null
+  /** Exact timestamp used as the hover tooltip when `time` is a relative label. */
+  timeTooltip?: string
   /** Hint shown left of the time while the delete confirm is armed
    *  (Monitor only: its delete removes the row, not the real session). */
   deleteNote?: string
@@ -38,7 +42,8 @@ const props = withDefaults(defineProps<{
   subtitle?: string
   model?: string | null
   tokens?: number | null
-  selecting?: boolean
+  unread?: boolean
+  selectable?: boolean
   selected?: boolean
   resumable?: boolean
   deletable?: boolean
@@ -50,6 +55,8 @@ const props = withDefaults(defineProps<{
   updatedAt: null,
   model: null,
   tokens: null,
+  unread: false,
+  selectable: false,
   resumable: true,
   deletable: true,
 })
@@ -58,7 +65,8 @@ const emit = defineEmits<{
   open: []
   resume: []
   delete: []
-  toggleSelect: []
+  select: [event: MouseEvent]
+  read: []
 }>()
 
 const { t, locale } = useI18n()
@@ -86,9 +94,31 @@ const displayTime = computed(() => {
   return formatSessionTime(props.updatedAt, locale.value)
 })
 
-function handleClick() {
-  if (props.selecting) emit('toggleSelect')
-  else emit('open')
+function isToggleModifier(event: MouseEvent) {
+  const mac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
+  return mac ? event.metaKey : event.ctrlKey
+}
+
+function isSelectModifier(event: MouseEvent) {
+  return event.shiftKey || isToggleModifier(event)
+}
+
+function handleClick(event: MouseEvent) {
+  if (props.selectable && isSelectModifier(event)) {
+    event.preventDefault()
+    emit('select', event)
+    return
+  }
+  emit('open')
+}
+
+function handleSelectClick(event: MouseEvent) {
+  event.stopPropagation()
+  emit('select', event)
+}
+
+function handleCardMouseDown(event: MouseEvent) {
+  if (props.selectable && isSelectModifier(event)) event.preventDefault()
 }
 
 function handleDelete() {
@@ -103,27 +133,19 @@ function handleDelete() {
 
 <template>
   <div
-    class="ah-session-card session-card"
+    class="ah-session-card session-card session-card--clickable"
     :class="{
-      'session-card--clickable': !selecting,
-      'session-card--selecting': selecting,
-      'session-card--selected': selecting && selected,
+      'session-card--selectable': selectable,
+      'session-card--selected': selectable && selected,
+      'session-card--unread': unread,
       'session-card--running': status === 'running',
       'session-card--waiting': status === 'waiting',
       'session-card--failed': status === 'failed',
     }"
     @click="handleClick"
+    @mousedown="handleCardMouseDown"
+    @mouseenter="emit('read')"
   >
-    <!-- Selected marker: accent triangle ribbon in the top-left corner -->
-    <div v-if="selecting && selected" class="session-card__corner">
-      <svg
-        width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-        stroke-width="4" stroke-linecap="round" stroke-linejoin="round"
-      >
-        <polyline points="20 6 9 17 4 12" />
-      </svg>
-    </div>
-
     <div class="session-card__head">
       <div class="session-card__badges">
         <span v-if="badge" class="session-card__badge">
@@ -142,20 +164,25 @@ function handleDelete() {
           <Terminal v-else :size="13" />
           <span>{{ sourceLabel }}</span>
         </span>
-        <span v-if="status" class="session-status" :class="`session-status--${status}`">
+        <span
+          v-if="status"
+          v-tooltip="statusLabel"
+          class="session-status"
+          :class="`session-status--${status}`"
+          :aria-label="statusLabel"
+        >
           <span class="session-status__dot" />
-          {{ statusLabel }}
         </span>
       </div>
       <div class="session-card__right">
         <!-- Delete semantics hint (Monitor passes it): shown only while the
              delete confirm is armed, i.e. after the first click. -->
         <span v-if="deleteNote && confirmDelete" class="session-card__delete-note">{{ deleteNote }}</span>
-        <span v-if="displayTime" class="session-card__time">{{ displayTime }}</span>
+        <span v-if="displayTime" v-tooltip="timeTooltip || ''" class="session-card__time">{{ displayTime }}</span>
         <!-- Inline actions revealed on card hover: [note] [time] [resume] [delete].
              Icon-only; labels show via v-tooltip. -->
         <div
-          v-if="!selecting && (resumable || deletable)"
+          v-if="resumable || deletable"
           class="session-card__actions"
           :class="{ 'session-card__actions--armed': confirmDelete }"
           @click.stop
@@ -183,37 +210,87 @@ function handleDelete() {
       </div>
     </div>
 
-    <h3 v-if="title" class="ah-session-card__title session-card__title truncate">{{ title }}</h3>
-    <div v-if="subtitle" class="ah-session-card__path">{{ subtitle }}</div>
+    <span
+      v-if="unread"
+      v-tooltip="t('session_monitor.unread')"
+      class="session-card__unread"
+      role="img"
+      :aria-label="t('session_monitor.unread')"
+    />
+
+    <h3 v-if="title" v-tooltip="title" class="ah-session-card__title session-card__title truncate">{{ title }}</h3>
+    <div v-if="subtitle" v-tooltip="subtitle" class="ah-session-card__path">{{ subtitle }}</div>
 
     <slot />
+
+    <button
+      v-if="selectable"
+      type="button"
+      class="session-card__check"
+      :aria-label="t('session.select_session')"
+      :aria-pressed="selected"
+      @click="handleSelectClick"
+      @mousedown.stop
+    >
+      <span class="ah-select-check" :class="{ 'is-checked': selected }">
+        <Check v-if="selected" :size="11" :stroke-width="2.75" />
+      </span>
+    </button>
   </div>
 </template>
 
 <style scoped>
 .session-card {
   position: relative;
+  padding: 9px 12px;
+}
+.session-card--selectable {
+  user-select: none;
+}
+.session-card--selectable .ah-session-card__path {
+  padding-right: 36px;
+}
+.session-card__check {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  appearance: none;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.session-card__check:hover .ah-select-check {
+  border-color: var(--accent);
 }
 .session-card__head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 6px;
+  gap: 8px;
+  margin-bottom: 3px;
 }
 .session-card__badges {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
   min-width: 0;
   flex-wrap: wrap;
 }
 .session-card__badge {
   display: inline-flex;
   align-items: center;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--sunken);
+  padding: 0;
   color: var(--ink-2);
   font-size: 11px;
   font-weight: 600;
@@ -236,6 +313,9 @@ function handleDelete() {
   gap: 0;
   flex: none;
 }
+.session-card--unread .session-card__right {
+  padding-right: 16px;
+}
 .session-card:hover .session-card__right:has(.session-card__actions),
 .session-card__right:has(.session-card__actions:focus-within),
 .session-card__right:has(.session-card__actions--armed) {
@@ -247,6 +327,16 @@ function handleDelete() {
   color: var(--danger);
   opacity: 0.75;
   white-space: nowrap;
+}
+.session-card__unread {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 1;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--signal-red);
 }
 .session-card__time {
   flex: none;
@@ -281,12 +371,18 @@ function handleDelete() {
 }
 .session-card__title {
   margin: 0;
+  line-height: 1.45;
+}
+.session-card .ah-session-card__path {
+  margin-top: 3px;
+  line-height: 1.45;
 }
 .session-status {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  font-size: 12px;
+  justify-content: center;
+  width: 14px;
+  height: 18px;
   white-space: nowrap;
 }
 .session-status__dot {
@@ -299,18 +395,6 @@ function handleDelete() {
 .session-status--waiting { color: var(--signal-yellow); }
 .session-status--failed { color: var(--signal-red); }
 .session-status--ended { color: var(--ink-4); }
-.session-card--running {
-  border-color: color-mix(in srgb, var(--signal-green) 45%, var(--hairline));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--signal-green) 7%, transparent);
-}
-.session-card--waiting {
-  border-color: color-mix(in srgb, var(--signal-yellow) 45%, var(--hairline));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--signal-yellow) 7%, transparent);
-}
-.session-card--failed {
-  border-color: color-mix(in srgb, var(--signal-red) 45%, var(--hairline));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--signal-red) 7%, transparent);
-}
 .session-card__icon-btn {
   display: inline-flex;
   align-items: center;
@@ -347,39 +431,14 @@ function handleDelete() {
   background: var(--danger);
   border-color: var(--danger);
 }
-/* Normal mode: the whole card opens the messages view. */
 .session-card--clickable {
   cursor: pointer;
 }
-/* Selection mode: the whole card is the toggle, so it gets pointer cursor and
-   relative+hidden to host the corner ribbon without leaking past the radius. */
-.session-card--selecting {
-  position: relative;
-  overflow: hidden;
-  cursor: pointer;
-  user-select: none;
+.session-card--unread {
+  border-color: color-mix(in srgb, var(--signal-red) 35%, var(--hairline));
 }
 .session-card--selected {
   background: var(--accent-soft);
   border-color: var(--accent-mid);
-}
-/* Top-left accent triangle marking a selected card, with a small check glyph.
-   Drawn with clip-path on a real box (not border triangles) so the glyph's
-   containing block is the corner square itself. */
-.session-card__corner {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 26px;
-  height: 26px;
-  background: var(--accent);
-  clip-path: polygon(0 0, 100% 0, 0 100%);
-  pointer-events: none;
-}
-.session-card__corner svg {
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  color: var(--on-accent);
 }
 </style>

@@ -73,6 +73,12 @@ const PLATFORMS = [
     skill_dir: '~/.dsh/skills',
     skill_count: 4,
   },
+  {
+    id: 'omp',
+    display_name: 'Oh My Pi',
+    skill_dir: '~/.omp/agent/skills',
+    skill_count: 2,
+  },
 ]
 
 function makeSkills(platformId: string) {
@@ -113,7 +119,7 @@ const MCP_PLATFORMS = [
   { id: 'qwen', display_name: 'Qwen Code', server_count: 1, config_path: '~/.qwen/settings.json', format: 'json' },
   { id: 'zcode', display_name: 'ZCode', server_count: 1, config_path: '~/.zcode/cli/config.json', format: 'json' },
   { id: 'workbuddy', display_name: 'WorkBuddy', server_count: 2, config_path: '~/.workbuddy/mcp.json', format: 'json' },
-  { id: 'dsh', display_name: 'DeepSeek Harness', server_count: 1, config_path: '~/.dsh/profiles/web/cordis.patch.yml', format: 'cordis-patch' },
+  { id: 'omp', display_name: 'Oh My Pi', server_count: 1, config_path: '~/.omp/agent/mcp.json', format: 'json' },
 ]
 
 const CLAUDE_PLUGINS = [
@@ -162,6 +168,7 @@ const SESSION_PLATFORMS = [
   { id: 'workbuddy', display_name: 'WorkBuddy', session_count: 2 },
   { id: 'kiro', display_name: 'Kiro', session_count: 3 },
   { id: 'dsh', display_name: 'DeepSeek Harness', session_count: 2 },
+  { id: 'omp', display_name: 'Oh My Pi', session_count: 1 },
 ]
 
 function makeSessions(offset: number, limit: number) {
@@ -691,6 +698,7 @@ let codexMonitorSessions = [
     userPrompt: '实现 Codex 会话监听，并确保 Hook 安装过程不会影响已有配置。',
     assistantReply: null,
     updatedAt: Date.now() - 12_000,
+    unread: true,
   },
   {
     sessionId: '019f84-terminal',
@@ -701,6 +709,7 @@ let codexMonitorSessions = [
     userPrompt: '检查登录接口偶发 401 的原因，并给出修复建议。',
     assistantReply: '问题来自刷新令牌并发更新，已增加单飞锁并补充回归测试。',
     updatedAt: Date.now() - 180_000,
+    unread: false,
   },
 ]
 
@@ -714,6 +723,7 @@ let claudeMonitorSessions = [
     userPrompt: '帮我把登录页改成暗色主题。',
     assistantReply: null,
     updatedAt: Date.now() - 30_000,
+    unread: true,
   },
   {
     sessionId: 'c4f2a1-waiting',
@@ -724,6 +734,7 @@ let claudeMonitorSessions = [
     userPrompt: '运行测试并提交这次改动。',
     assistantReply: null,
     updatedAt: Date.now() - 8_000,
+    unread: true,
   },
 ]
 
@@ -737,6 +748,7 @@ let cursorMonitorSessions = [
     userPrompt: '检查设置页的键盘导航并修复焦点顺序。',
     assistantReply: '已调整焦点顺序，并补充了键盘导航回归测试。',
     updatedAt: Date.now() - 90_000,
+    unread: false,
   },
 ]
 
@@ -750,6 +762,7 @@ let grokMonitorSessions = [
     userPrompt: '把推荐接口的分页改成游标式，注意兼容旧参数。',
     assistantReply: null,
     updatedAt: Date.now() - 45_000,
+    unread: true,
   },
 ]
 
@@ -763,6 +776,7 @@ let kimiMonitorSessions = [
     userPrompt: '给设置页加上导出全部笔记的入口。',
     assistantReply: '已在设置页新增导出按钮，支持 Markdown 打包下载。',
     updatedAt: Date.now() - 900_000,
+    unread: false,
   },
 ]
 
@@ -776,6 +790,7 @@ let qwenMonitorSessions = [
     userPrompt: '把侧边栏的平台顺序调整一下，并补上图标。',
     assistantReply: null,
     updatedAt: Date.now() - 40_000,
+    unread: true,
   },
 ]
 
@@ -789,6 +804,7 @@ let zcodeMonitorSessions = [
     userPrompt: '把设置页的主题切换改成跟随系统。',
     assistantReply: null,
     updatedAt: Date.now() - 60_000,
+    unread: false,
   },
 ]
 
@@ -1087,6 +1103,7 @@ let antigravityMonitorSessions = [
     userPrompt: '给 Antigravity 加上会话监听与会话浏览。',
     assistantReply: null,
     updatedAt: Date.now() - 20_000,
+    unread: true,
   },
 ]
 
@@ -1137,6 +1154,7 @@ let kiroMonitorSessions = [
     userPrompt: '给 Kiro 加上会话监听。',
     assistantReply: null,
     updatedAt: Date.now() - 15_000,
+    unread: false,
   },
 ]
 
@@ -1181,6 +1199,7 @@ let workbuddyMonitorSessions = [
     userPrompt: '为 WorkBuddy 编写自动化脚本。',
     assistantReply: null,
     updatedAt: Date.now() - 12_000,
+    unread: true,
   },
 ]
 
@@ -1225,6 +1244,7 @@ let dshMonitorSessions = [
     userPrompt: '给 DeepSeek Harness 加上会话监听插件。',
     assistantReply: null,
     updatedAt: Date.now() - 8_000,
+    unread: true,
   },
 ]
 
@@ -1281,6 +1301,104 @@ export async function applyDshHookChange(action: 'install' | 'uninstall', _expec
   return getDshHookStatus()
 }
 
+const OMP_PLUGIN_COMMAND = 'agent-hub-omp-monitor'
+const OMP_EXTENSION_DIR = '~/.omp/agent/extensions/agent-hub-omp-monitor'
+let ompHookInstalled = false
+let ompMonitorSessions = [
+  {
+    sessionId: 'omp-mock-1',
+    turnId: 'turn-1',
+    source: 'terminal',
+    status: 'running',
+    cwd: '/Users/demo/projects/agent-hub',
+    userPrompt: '把 Oh My Pi 的会话监听接进来。',
+    assistantReply: null,
+    updatedAt: Date.now() - 12_000,
+    unread: false,
+  },
+]
+
+export async function getOmpSessionMonitorSnapshot() {
+  await delay()
+  return {
+    revision: 1,
+    sessions: ompMonitorSessions,
+  }
+}
+
+export async function deleteOmpSessionMonitorSession(sessionId: string) {
+  await delay()
+  ompMonitorSessions = ompMonitorSessions.filter(session => session.sessionId !== sessionId)
+}
+
+type MockMonitorSession = { sessionId: string; updatedAt: number; unread: boolean }
+
+function mockMonitorSessionList(agent: string): MockMonitorSession[] {
+  switch (agent) {
+    case 'codex': return codexMonitorSessions
+    case 'claude': return claudeMonitorSessions
+    case 'cursor': return cursorMonitorSessions
+    case 'antigravity': return antigravityMonitorSessions
+    case 'grok': return grokMonitorSessions
+    case 'kimi': return kimiMonitorSessions
+    case 'qwen': return qwenMonitorSessions
+    case 'zcode': return zcodeMonitorSessions
+    case 'workbuddy': return workbuddyMonitorSessions
+    case 'kiro': return kiroMonitorSessions
+    case 'dsh': return dshMonitorSessions
+    case 'omp': return ompMonitorSessions
+    default: return []
+  }
+}
+
+export async function markSessionMonitorSessionRead(
+  agent: string,
+  sessionId: string,
+  observedUpdatedAt: number,
+) {
+  await delay()
+  const session = mockMonitorSessionList(agent).find(item => item.sessionId === sessionId)
+  if (session?.unread && session.updatedAt === observedUpdatedAt) {
+    session.unread = false
+  }
+}
+
+export async function getOmpHookStatus() {
+  await delay()
+  return makeHookStatus(ompHookInstalled, OMP_EXTENSION_DIR, OMP_PLUGIN_COMMAND, 1)
+}
+
+export async function previewOmpHookChange(action: 'install' | 'uninstall') {
+  await delay()
+  const adding = action === 'install'
+  return {
+    action,
+    configPath: OMP_EXTENSION_DIR,
+    command: OMP_PLUGIN_COMMAND,
+    beforeHash: 'mock-before-hash',
+    added: adding ? 2 : 1,
+    removed: adding ? 1 : 2,
+    changed: true,
+    diffLines: adding
+      ? [
+          { tag: 'removed', content: 'missing' },
+          { tag: 'added', content: 'current' },
+          { tag: 'context', content: `# Also writes ${OMP_PLUGIN_COMMAND}/ (index.js + package.json) into ~/.omp/agent/extensions` },
+        ]
+      : [
+          { tag: 'removed', content: 'current' },
+          { tag: 'added', content: 'missing' },
+          { tag: 'context', content: `# Also removes ${OMP_PLUGIN_COMMAND}/ from ~/.omp/agent/extensions` },
+        ],
+  }
+}
+
+export async function applyOmpHookChange(action: 'install' | 'uninstall', _expectedBeforeHash: string) {
+  await delay(300)
+  ompHookInstalled = action === 'install'
+  return getOmpHookStatus()
+}
+
 let dshWebState: 'stopped' | 'starting' | 'running' = 'stopped'
 
 export async function getDshWebStatus() {
@@ -1307,7 +1425,7 @@ export async function stopDshWeb() {
 // Browser preview shows every monitor agent (no real home directory to probe).
 export async function listAvailableMonitorAgents() {
   await delay()
-  return ['codex', 'claude', 'cursor', 'antigravity', 'grok', 'kimi', 'qwen', 'zcode', 'workbuddy', 'kiro', 'dsh']
+  return ['codex', 'claude', 'cursor', 'antigravity', 'grok', 'kimi', 'qwen', 'zcode', 'workbuddy', 'kiro', 'dsh', 'omp']
 }
 
 // App

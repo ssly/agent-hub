@@ -92,7 +92,8 @@
       "qwen": "Also reads Shared (~/.agents/skills); MCP servers are configured in ~/.qwen/settings.json. Extensions (~/.qwen/extensions) are listed read-only below; manage them with the `qwen extensions` CLI.",
       "zcode": "Also reads Shared (~/.agents/skills); MCP servers are configured in ~/.zcode/cli/config.json. Marketplace plugins (~/.zcode/cli/plugins) are listed read-only below; toggle them in ZCode settings.",
       "workbuddy": "Skills live in ~/.workbuddy/skills; MCP configured in ~/.workbuddy/mcp.json; manage native skills in WorkBuddy UI.",
-      "dsh": "Also reads Shared (~/.agents/skills). Skills live in ~/.dsh/skills (including single-file Markdown skills). MCP servers are cordis plugin instances of the profile (cordis.patch.yml, read-only below); the plugin system is the profile itself (dsh plugin add — not managed here)."
+      "dsh": "Also reads Shared (~/.agents/skills). Skills live in ~/.dsh/skills (including single-file Markdown skills). DeepSeek Harness has no standalone MCP configuration; tools connected through the official @deepseek-ai/dsh-mcp-client are Cordis profile plugins, managed with dsh plugin or cordis.patch.yml and not shown in this MCP area.",
+      "omp": "Skills live in ~/.omp/agent/skills (project level .omp/skills); omp also discovers skills from Claude/Cursor directories on its own — Agent Hub only manages ~/.omp's own files. MCP config is ~/.omp/agent/mcp.json (standard mcpServers map, read/write supported)."
     },
     "no_agents": "No agents with manageable plugins were found."
   },
@@ -133,6 +134,9 @@
     "path_filter_unknown": "Unknown Path",
     "path_filter_empty": "No sessions match the selected path filter.",
     "path_filter_current": "Current Path: {path}",
+    "path_filter_search": "Search paths…",
+    "path_filter_search_empty": "No matching paths",
+    "path_filter_search_clear": "Clear search",
     "resume_terminal": "Resume Terminal",
     "resume_field_title": "Session Title",
     "resume_last_question": "Last Question",
@@ -171,8 +175,12 @@
     "clear_search": "Clear",
     "search_match_in": "Matched in session: ",
     "view_full_session": "View Full Session",
+    "select_session": "Select this session",
+    "select_all_loaded": "Select all loaded sessions",
+    "selected_count": "{n} selected",
     "batch_select": "Select",
     "batch_select_all": "Select All",
+    "batch_deselect": "Deselect",
     "batch_clear_selection": "Clear",
     "batch_cancel": "Cancel",
     "batch_delete": "Delete Selected",
@@ -279,8 +287,7 @@
     "preview_conflict": "Server already exists and will be updated.",
     "preview_stats": "+{added} added  -{removed} removed",
     "only_toml": "Codex only supports TOML format. Please paste TOML config.",
-    "only_json": "This platform only supports JSON format.",
-    "dsh_readonly_note": "DeepSeek Harness MCP servers are cordis plugin instances of the profile (~/.dsh/profiles/*/cordis.patch.yml), so this list is read-only. Use `dsh plugin` or edit cordis.patch.yml directly."
+    "only_json": "This platform only supports JSON format."
   },
   "trash": {
     "title": "Recycle Bin",
@@ -534,6 +541,7 @@
     "agent_workbuddy": "WorkBuddy",
     "agent_kiro": "Kiro",
     "agent_dsh": "DeepSeek Harness",
+    "agent_omp": "Oh My Pi",
     "agent_all": "All",
     "empty_all_hint": "New sessions from any agent appear here in real time, with running ones on top.",
     "hook_installed": "{agent} Hooks are fully installed",
@@ -564,6 +572,12 @@
     "status_waiting": "Waiting for confirmation",
     "status_failed": "Failed",
     "status_ended": "Ended",
+    "unread": "Unread",
+    "unread_count": "{count} unread",
+    "relative_minutes": "{count}m",
+    "relative_hours": "{count}h",
+    "relative_days": "{count}d",
+    "relative_time_exact": "Updated: {time}",
     "light_failed": "Red · failed",
     "light_waiting": "Yellow · waiting for confirmation",
     "light_running": "Green · running",

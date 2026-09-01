@@ -131,6 +131,7 @@ fn build_html(platform_id: &str, locale: &str, conversations: &[ExportConversati
         "qwen" => "Qwen Code",
         "zcode" => "ZCode",
         "dsh" => "DeepSeek Harness",
+        "omp" => "Oh My Pi",
         _ => platform_id,
     };
     let locale_tag = if locale.to_ascii_lowercase().starts_with("zh") {

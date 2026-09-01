@@ -779,18 +779,57 @@
    § 13. Filter Bar
    ============================================================ */
 .ah-filter-bar {
+  flex: none;
+  z-index: 20;
   background: var(--surface);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-md);
-  padding: 10px 14px;
-  margin-bottom: 14px;
+  border: 0;
+  border-bottom: 1px solid var(--hairline);
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  padding: 8px 24px;
+  margin-bottom: 0;
+  flex-wrap: nowrap;
   transition: background var(--dur-base) var(--ease-soft), border-color var(--dur-base) var(--ease-soft);
 }
+.ah-filter-bar__inner {
+  max-width: 52rem;
+  margin: 0 auto;
+  min-width: 0;
+}
 .ah-filter-bar .text-xs { white-space: nowrap; flex-shrink: 0; }
-/* Selection mode: the same bar becomes the batch-action toolbar */
 .ah-filter-bar--selecting {
-  background: var(--accent-soft);
-  border-color: var(--accent-mid);
+  background: color-mix(in srgb, var(--surface) 86%, var(--accent) 14%);
+  border-bottom-color: var(--accent-mid);
+}
+.ah-select-check {
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--on-accent);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  line-height: 0;
+}
+.ah-select-check svg {
+  display: block;
+  flex: none;
+}
+.ah-select-check.is-checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.ah-select-check:disabled {
+  cursor: default;
+}
+.ah-select-check:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 .ah-filter-bar__stats {
   font-size: 12px;
@@ -815,6 +854,11 @@
   background: var(--border);
   margin: 0 2px;
   flex-shrink: 0;
+}
+.ah-path-select {
+  flex: 0 1 14rem;
+  min-width: 8rem;
+  max-width: 16rem;
 }
 .ah-select {
   background: var(--sunken);

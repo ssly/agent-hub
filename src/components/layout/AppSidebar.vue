@@ -6,8 +6,7 @@ import { useAppStore } from '@/stores/app'
 import { useSkillsStore } from '@/stores/skills'
 import { usePluginsStore } from '@/stores/plugins'
 import { useSessionsStore } from '@/stores/sessions'
-import { useSessionMonitorStore, type MonitorTab } from '@/stores/session-monitor'
-import MonitorStatusLights from '@/components/monitor/MonitorStatusLights.vue'
+import { useSessionMonitorStore, type MonitorAgent, type MonitorTab } from '@/stores/session-monitor'
 import { useSwitchStore } from '@/stores/switch'
 import { useToast } from '@/composables/useToast'
 import { openUsageTray, pickPluginDirectory } from '@/lib/api'
@@ -176,6 +175,17 @@ function getSelectedId() {
   return pluginsStore.selectedPlatformId
 }
 
+function monitorUnreadCount(agent: string) {
+  return agent === 'all'
+    ? sessionMonitorStore.totalUnread
+    : sessionMonitorStore.unreadForAgent(agent as MonitorAgent)
+}
+
+function monitorUnreadLabel(agent: string) {
+  const count = monitorUnreadCount(agent)
+  return count > 9 ? '…' : String(count)
+}
+
 async function handleItemClick(id: string) {
   if (appStore.currentTab === 'sessions') sessionsStore.selectPlatform(id)
   else if (appStore.currentTab === 'monitor') sessionMonitorStore.activeAgent = id as MonitorTab
@@ -317,10 +327,11 @@ function handleSessionSearch(e: Event) {
             <span v-if="appStore.currentTab === 'sessions' && item.session_count != null" class="ah-platform-item__count">
               {{ item.session_count }}
             </span>
-            <MonitorStatusLights
-              v-else-if="appStore.currentTab === 'monitor' && item.id !== 'all'"
-              :agent="item.id as MonitorTab"
-            />
+            <span
+              v-else-if="appStore.currentTab === 'monitor' && monitorUnreadCount(item.id) > 0"
+              class="ah-platform-item__unread"
+              :aria-label="t('session_monitor.unread_count', { count: monitorUnreadCount(item.id) })"
+            >{{ monitorUnreadLabel(item.id) }}</span>
           </div>
         </button>
         <p v-if="getSidebarItems().length === 0" class="text-sm p-3" style="color: var(--ink-3)">
@@ -629,7 +640,7 @@ function handleSessionSearch(e: Event) {
   margin-top: -4.5px;
   border: 0;
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--signal-red);
   cursor: grab;
 }
 .usage-settings-slider::-moz-range-track {
@@ -651,6 +662,22 @@ function handleSessionSearch(e: Event) {
   text-align: right;
   font-size: 12px;
   color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+.ah-platform-item__unread {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
   font-variant-numeric: tabular-nums;
 }
 </style>

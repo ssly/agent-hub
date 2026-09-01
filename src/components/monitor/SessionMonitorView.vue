@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Activity, CheckCircle2, CircleStop } from 'lucide-vue-next'
 import AppModal from '@/components/ui/AppModal.vue'
@@ -49,6 +49,7 @@ const HOOK_CONFIG_PATHS: Record<string, string> = {
   workbuddy: '~/.workbuddy/settings.json',
   kiro: '~/.kiro/hooks/agent-hub.json',
   dsh: '~/.dsh/profiles/web/cordis.patch.yml',
+  omp: '~/.omp/agent/extensions/agent-hub-omp-monitor',
 }
 const defaultConfigPath = computed(() => HOOK_CONFIG_PATHS[store.activeAgent] ?? '')
 const runningCount = computed(
@@ -96,24 +97,14 @@ const primaryNotice = computed<{ kind: 'info' | 'warning' | 'error'; text: strin
   return null
 })
 
-// One-line enablement tags for the merged view: green when the agent's hook
-// is installed, gray otherwise — a quiet reminder that agents only report
-// after a proper install. Clicking a tag jumps to that agent's tab for
-// install/repair.
-const agentTags = computed(() =>
-  store.visibleAgents.map(agent => ({
-    agent,
-    enabled: !!store.hookStatuses[agent as HookAgent]?.installed,
-  })),
-)
-
 function agentLabel(agent: MonitorAgent): string {
   return t(`session_monitor.agent_${agent}`)
 }
 
-/** DSH has no command hooks; install writes an observe-only Cordis plugin. */
+/** DSH installs an observe-only Cordis plugin; omp an auto-discovered
+ *  extension. Neither has command hooks. */
 function usesPlugin(agent: string): boolean {
-  return agent === 'dsh'
+  return agent === 'dsh' || agent === 'omp'
 }
 
 function tMech(hookKey: string, pluginKey: string, agent?: string, params?: Record<string, unknown>) {
@@ -246,7 +237,24 @@ function sessionsTitle(): string {
     : t('session_monitor.sessions_title', { agent: agentLabel(store.activeAgent as MonitorAgent) })
 }
 
+const relativeNow = ref(Date.now())
+let relativeClock: ReturnType<typeof window.setInterval> | null = null
+
+function refreshRelativeNow() {
+  relativeNow.value = Date.now()
+}
+
 function formatTime(timestamp: number): string {
+  if (!timestamp) return ''
+  const elapsed = Math.max(0, relativeNow.value - timestamp)
+  const minutes = Math.max(1, Math.floor(elapsed / 60_000))
+  if (minutes < 60) return t('session_monitor.relative_minutes', { count: minutes })
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return t('session_monitor.relative_hours', { count: hours })
+  return t('session_monitor.relative_days', { count: Math.floor(hours / 24) })
+}
+
+function formatExactTime(timestamp: number): string {
   if (!timestamp) return ''
   return new Intl.DateTimeFormat(locale.value === 'en' ? 'en-US' : 'zh-CN', {
     month: '2-digit',
@@ -257,6 +265,28 @@ function formatTime(timestamp: number): string {
     hour12: false,
   }).format(new Date(timestamp))
 }
+
+function monitorSessionKey(session: AgentSessionState) {
+  return `${session.agent}-${session.sessionId}`
+}
+
+const hoveredSessionKey = ref<string | null>(null)
+
+function markSessionRead(session: AgentSessionState) {
+  hoveredSessionKey.value = monitorSessionKey(session)
+  void store.markSessionRead(session)
+}
+
+function clearHoveredSession(session: AgentSessionState) {
+  if (hoveredSessionKey.value === monitorSessionKey(session)) {
+    hoveredSessionKey.value = null
+  }
+}
+
+watch(() => store.displaySessions, sessions => {
+  const hovered = sessions.find(session => monitorSessionKey(session) === hoveredSessionKey.value)
+  if (hovered?.unread) void store.markSessionRead(hovered)
+})
 
 function sourceLabel(session: SessionState): string {
   if (session.source === 'chatgpt') return t('session_monitor.source_chatgpt')
@@ -335,6 +365,8 @@ async function handleApplyHook() {
 // work in the same turn as mount can stall the webview before the loader
 // appears — which is exactly the "click Monitor, freeze for seconds" feel.
 onMounted(() => {
+  refreshRelativeNow()
+  relativeClock = window.setInterval(refreshRelativeNow, 60_000)
   if (!store.hydrated) {
     store.beginEnter()
   }
@@ -350,6 +382,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopDshPoll()
+  if (relativeClock != null) window.clearInterval(relativeClock)
 })
 </script>
 
@@ -402,20 +435,6 @@ onUnmounted(() => {
     </div>
 
     <template v-else>
-      <div v-if="isAll" class="monitor-tag-row">
-        <button
-          v-for="tag in agentTags"
-          :key="tag.agent"
-          class="monitor-tag"
-          :class="tag.enabled ? 'is-on' : 'is-off'"
-          v-tooltip="t(tag.enabled ? 'session_monitor.tag_on' : 'session_monitor.tag_off')"
-          @click="store.activeAgent = tag.agent"
-        >
-          <span class="monitor-tag__dot" />
-          {{ agentLabel(tag.agent) }}
-        </button>
-      </div>
-
       <section v-if="supportsHooks" class="hook-card ah-card">
         <div class="hook-card__status">
           <CheckCircle2 v-if="store.hookStatus?.installed" :size="18" class="hook-card__ok" />
@@ -440,7 +459,7 @@ onUnmounted(() => {
 
       <p
         v-if="primaryNotice"
-        class="ah-notice"
+        class="monitor-notice ah-notice"
         :class="{
           'ah-notice--warning': primaryNotice.kind === 'warning',
           'ah-notice--error': primaryNotice.kind === 'error',
@@ -464,7 +483,7 @@ onUnmounted(() => {
       <div v-else class="session-monitor-list">
         <SessionCard
           v-for="session in store.displaySessions"
-          :key="`${session.agent}-${session.sessionId}`"
+          :key="monitorSessionKey(session)"
           :badge="agentBadgeLabel(session)"
           :badge-agent-id="agentBadgeAgentId(session)"
           :badge-icon="agentBadgeIcon(session)"
@@ -472,17 +491,21 @@ onUnmounted(() => {
           :source-label="agentSource(session) ? sourceLabel(session) : undefined"
           :status="session.status"
           :time="formatTime(session.updatedAt)"
+          :time-tooltip="formatExactTime(session.updatedAt)"
           :delete-note="t('session_monitor.delete_note')"
           :title="session.userPrompt || t('session_monitor.no_prompt')"
-          :subtitle="session.cwd || undefined"
+          :unread="session.unread"
           :resumable="sessionPlatform(session) !== null"
           @open="sessionPlatform(session) !== null && store.openMessages(session)"
           @resume="store.openResume(session)"
           @delete="store.deleteSession(session.sessionId, session.agent)"
+          @read="markSessionRead(session)"
+          @mouseleave="clearHoveredSession(session)"
         >
           <div class="session-row__line">
-            <span>{{ t('session_monitor.assistant_reply') }}</span>
-            <p>{{ session.assistantReply || (session.status === 'waiting' ? t('session_monitor.waiting_confirm') : session.status === 'running' ? t('session_monitor.waiting_reply', { agent: agentLabel(session.agent) }) : session.status === 'failed' ? t('session_monitor.status_failed') : t('session_monitor.no_reply')) }}</p>
+            <p v-tooltip="session.assistantReply || (session.status === 'waiting' ? t('session_monitor.waiting_confirm') : session.status === 'running' ? t('session_monitor.waiting_reply', { agent: agentLabel(session.agent) }) : session.status === 'failed' ? t('session_monitor.status_failed') : t('session_monitor.no_reply'))">
+              {{ session.assistantReply || (session.status === 'waiting' ? t('session_monitor.waiting_confirm') : session.status === 'running' ? t('session_monitor.waiting_reply', { agent: agentLabel(session.agent) }) : session.status === 'failed' ? t('session_monitor.status_failed') : t('session_monitor.no_reply')) }}
+            </p>
           </div>
         </SessionCard>
       </div>
@@ -581,38 +604,18 @@ onUnmounted(() => {
 .hook-card__path { margin-top: 2px; color: var(--ink-4); font: 11px/1.4 var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hook-card__meta { display: flex; gap: 14px; flex: none; color: var(--ink-3); font-size: 12px; }
 
-/* Enablement tags under the merged view header: one quiet line showing which
-   agents are live (green dot) and which still need a hook install (gray). */
-.monitor-tag-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 2px 0 12px;
+.monitor-notice {
+  margin: 8px 0 16px;
+  padding: 7px 10px;
+  border-left: 2px solid currentColor;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: transparent;
 }
-.monitor-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 2px 9px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface);
-  color: var(--ink-3);
-  font-size: 11px;
-  cursor: pointer;
-  transition: border-color var(--dur-fast) var(--ease-soft), color var(--dur-fast) var(--ease-soft);
-}
-.monitor-tag:hover { border-color: var(--border-strong); color: var(--ink-2); }
-.monitor-tag.is-on { color: var(--ink-2); }
-.monitor-tag__dot { width: 6px; height: 6px; border-radius: 999px; }
-.monitor-tag.is-on .monitor-tag__dot { background: var(--success); }
-.monitor-tag.is-off .monitor-tag__dot { background: var(--ink-4); }
-.session-list-header { display: flex; align-items: center; justify-content: space-between; margin: 24px 0 10px; }
+.session-list-header { display: flex; align-items: center; justify-content: space-between; margin: 14px 0 8px; }
 .session-list-header h2 { color: var(--ink); font: 600 15px/1.2 var(--font-serif); }
-.session-monitor-list { display: flex; flex-direction: column; gap: 9px; }
+.session-monitor-list { display: flex; flex-direction: column; gap: 8px; }
 /* Q&A line inside the shared card's default slot (monitor-specific body). */
-.session-row__line { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px; min-width: 0; margin-top: 4px; font-size: 12.5px; line-height: 1.8; }
-.session-row__line > span { color: var(--ink-4); }
+.session-row__line { min-width: 0; margin-top: 3px; font-size: 12.5px; line-height: 1.45; }
 .session-row__line > p { min-width: 0; overflow: hidden; color: var(--ink-2); text-overflow: ellipsis; white-space: nowrap; }
 .monitor-empty { min-height: 230px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--ink-4); text-align: center; }
 .monitor-empty--boot { min-height: min(52vh, 420px); }

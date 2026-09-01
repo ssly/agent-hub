@@ -176,6 +176,11 @@ export const removeHooks = (agentType: string) => invoke<void>('remove_hooks', {
 export const getHooksStatus = () => invoke<Record<string, boolean>>('get_hooks_status')
 
 // Session monitor
+export const markSessionMonitorSessionRead = (
+  agent: string,
+  sessionId: string,
+  observedUpdatedAt: number,
+) => invoke<void>('mark_session_monitor_session_read', { agent, sessionId, observedUpdatedAt })
 export const getCodexSessionMonitorSnapshot = () =>
   invoke<any>('get_codex_session_monitor_snapshot')
 export const deleteCodexSessionMonitorSession = (sessionId: string) =>
@@ -285,6 +290,16 @@ export const previewDshHookChange = (action: 'install' | 'uninstall') =>
   invoke<any>('preview_dsh_hook_change', { action })
 export const applyDshHookChange = (action: 'install' | 'uninstall', expectedBeforeHash: string) =>
   invoke<any>('apply_dsh_hook_change', { action, expectedBeforeHash })
+
+export const getOmpSessionMonitorSnapshot = () =>
+  invoke<any>('get_omp_session_monitor_snapshot')
+export const deleteOmpSessionMonitorSession = (sessionId: string) =>
+  invoke<void>('delete_omp_session_monitor_session', { sessionId })
+export const getOmpHookStatus = () => invoke<any>('get_omp_hook_status')
+export const previewOmpHookChange = (action: 'install' | 'uninstall') =>
+  invoke<any>('preview_omp_hook_change', { action })
+export const applyOmpHookChange = (action: 'install' | 'uninstall', expectedBeforeHash: string) =>
+  invoke<any>('apply_omp_hook_change', { action, expectedBeforeHash })
 
 export interface DshWebStatus {
   state: 'stopped' | 'starting' | 'running'

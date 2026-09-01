@@ -69,12 +69,7 @@ const selectedFormat = computed(() => {
   return p?.format || 'json'
 })
 
-// DeepSeek Harness MCP servers are cordis plugin instances in the profile's
-// cordis.patch.yml — the list is read-only in Agent Hub (the backend rejects
-// writes with the same message).
-const isReadOnlyPlatform = computed(
-  () => props.readonly || selectedFormat.value === 'cordis-patch',
-)
+const isReadOnlyPlatform = computed(() => props.readonly)
 
 // Default config template based on platform format
 function defaultConfigTemplate(format: string): string {
@@ -247,14 +242,6 @@ function stripTomlHeader(text: string, name: string): string {
         <div v-if="!props.embedded && !isReadOnlyPlatform" class="flex justify-end mb-4">
           <button class="btn btn-primary btn-sm" @click="store.addModalOpen = true">+ {{ t('mcp.add') }}</button>
         </div>
-        <p
-          v-if="!props.embedded && isReadOnlyPlatform"
-          class="text-xs mb-3"
-          style="color: var(--ink-4)"
-        >
-          {{ t('mcp.dsh_readonly_note') }}
-        </p>
-
         <div v-if="store.servers.length === 0" class="flex flex-col items-center justify-center py-12 text-center">
           <p style="color: var(--ink-3)">{{ t('mcp.no_servers') }}</p>
         </div>

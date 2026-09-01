@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 const MAX_SESSIONS: usize = 100;
 /// Sessions older than this are pruned on every snapshot query.
-const SESSION_TTL_MILLIS: i64 = 24 * 60 * 60 * 1000;
+const SESSION_TTL_MILLIS: i64 = 30 * 24 * 60 * 60 * 1000;
 
 struct AgentSlot {
     snapshot: Mutex<MonitorSnapshot>,
@@ -71,16 +71,43 @@ impl<R: Runtime> SessionMonitorService<R> {
         let Some(slot) = self.slots.get(&agent) else {
             return Ok(());
         };
-        let next_snapshot = {
-            let Ok(mut current) = slot.snapshot.lock() else {
-                return Err("session monitor state is unavailable".to_string());
-            };
-            if !remove_session_from(&mut current, session_id) {
-                return Ok(());
-            }
-            current.revision = current.revision.saturating_add(1);
-            current.clone()
+        let Ok(mut current) = slot.snapshot.lock() else {
+            return Err("session monitor state is unavailable".to_string());
         };
+        if !remove_session_from(&mut current, session_id) {
+            return Ok(());
+        }
+        current.revision = current.revision.saturating_add(1);
+        let next_snapshot = current.clone();
+        persist_snapshot(&slot.state_path, &next_snapshot)?;
+        let _ = self._app.emit(agent.changed_event(), &next_snapshot);
+        Ok(())
+    }
+
+    /// Clear a row's unread marker only if it is still the version the caller
+    /// observed. This prevents a late hover from acknowledging an update that
+    /// arrived after the pointer entered the row.
+    pub fn mark_session_read(
+        &self,
+        agent: AgentKind,
+        session_id: &str,
+        observed_updated_at: i64,
+    ) -> Result<(), String> {
+        let Some(slot) = self.slots.get(&agent) else {
+            return Ok(());
+        };
+        // Keep the mutation, disk write and event in one critical section.
+        // A hook event that arrives immediately after this acknowledgement
+        // must be persisted and broadcast after it, so a stale hover can
+        // never overwrite that newer unread version.
+        let Ok(mut current) = slot.snapshot.lock() else {
+            return Err("session monitor state is unavailable".to_string());
+        };
+        if !mark_session_read_in(&mut current, session_id, observed_updated_at) {
+            return Ok(());
+        }
+        current.revision = current.revision.saturating_add(1);
+        let next_snapshot = current.clone();
         persist_snapshot(&slot.state_path, &next_snapshot)?;
         let _ = self._app.emit(agent.changed_event(), &next_snapshot);
         Ok(())
@@ -93,16 +120,14 @@ impl<R: Runtime> SessionMonitorService<R> {
         let Some(slot) = self.slots.get(&agent) else {
             return;
         };
-        let next_snapshot = {
-            let Ok(mut current) = slot.snapshot.lock() else {
-                return;
-            };
-            if !prune_sessions_older_than(&mut current, cutoff) {
-                return;
-            }
-            current.revision = current.revision.saturating_add(1);
-            current.clone()
+        let Ok(mut current) = slot.snapshot.lock() else {
+            return;
         };
+        if !prune_sessions_older_than(&mut current, cutoff) {
+            return;
+        }
+        current.revision = current.revision.saturating_add(1);
+        let next_snapshot = current.clone();
         if persist_snapshot(&slot.state_path, &next_snapshot).is_ok() {
             let _ = self._app.emit(agent.changed_event(), &next_snapshot);
         }
@@ -193,19 +218,40 @@ fn apply_and_emit<R: Runtime>(slots: &Slots, app: &AppHandle<R>, event: HookEven
     let Some(slot) = slots.get(&agent) else {
         return;
     };
-    let next_snapshot = {
-        let Ok(mut current) = slot.snapshot.lock() else {
-            return;
-        };
-        apply_event(&mut current, event);
-        current.revision = current.revision.saturating_add(1);
-        current.clone()
+    // Serialize persistence and emission with all other snapshot mutations.
+    // In particular, an incoming hook update cannot be followed by an older
+    // mark-read snapshot escaping after it.
+    let Ok(mut current) = slot.snapshot.lock() else {
+        return;
     };
+    apply_event(&mut current, event);
+    current.revision = current.revision.saturating_add(1);
+    let next_snapshot = current.clone();
     if let Err(error) = persist_snapshot(&slot.state_path, &next_snapshot) {
         log::warn!("Unable to persist session monitor state: {error}");
         return;
     }
     let _ = app.emit(agent.changed_event(), &next_snapshot);
+}
+
+/// Only a normally completed agent turn is a new item for the user to read.
+/// Start, progress, approval, failure, and interruption events still update
+/// the monitor state, but must not light the unread badge before a reply ends.
+fn marks_unread_on_completion(event_name: &str) -> bool {
+    event_name == "Stop"
+}
+
+/// Clear an earlier unread marker as soon as a fresh turn is known to be in
+/// progress. This also repairs rows that were marked by the old policy before
+/// the user upgrades, without clearing a completed reply on a stray event.
+fn clears_unread_while_active(event_name: &str, status: RuntimeStatus) -> bool {
+    match event_name {
+        "UserPromptSubmit" | "PermissionRequest" | "StopFailure" | "Interrupted" => true,
+        "PermissionResult" | "PermissionDenied" | "PostToolUse" | "AssistantResponse" => {
+            matches!(status, RuntimeStatus::Running | RuntimeStatus::Waiting)
+        }
+        _ => false,
+    }
 }
 
 fn apply_event(snapshot: &mut MonitorSnapshot, event: HookEvent) {
@@ -236,6 +282,7 @@ fn apply_event(snapshot: &mut MonitorSnapshot, event: HookEvent) {
         "UserPromptSubmit" => RuntimeStatus::Running,
         "Stop" => RuntimeStatus::Ended,
         "StopFailure" => RuntimeStatus::Failed,
+        "Interrupted" => RuntimeStatus::Ended,
         "PermissionRequest" => RuntimeStatus::Waiting,
         "PermissionResult" | "PermissionDenied" | "PostToolUse" => match index {
             Some(index) if snapshot.sessions[index].status == RuntimeStatus::Waiting => {
@@ -268,6 +315,11 @@ fn apply_event(snapshot: &mut MonitorSnapshot, event: HookEvent) {
         if event.assistant_reply.is_some() {
             session.assistant_reply = event.assistant_reply;
         }
+        if marks_unread_on_completion(&event.hook_event_name) {
+            session.unread = true;
+        } else if clears_unread_while_active(&event.hook_event_name, session.status) {
+            session.unread = false;
+        }
     } else {
         snapshot.sessions.push(SessionState {
             session_id: event.session_id,
@@ -278,6 +330,7 @@ fn apply_event(snapshot: &mut MonitorSnapshot, event: HookEvent) {
             user_prompt: event.user_prompt,
             assistant_reply: event.assistant_reply,
             updated_at: event.occurred_at,
+            unread: marks_unread_on_completion(&event.hook_event_name),
         });
     }
 
@@ -294,6 +347,27 @@ fn remove_session_from(snapshot: &mut MonitorSnapshot, session_id: &str) -> bool
         .sessions
         .retain(|session| session.session_id != session_id);
     snapshot.sessions.len() != before
+}
+
+/// Compare-and-set the unread marker against the version that was visible to
+/// the caller. Returns true only when a row was actually acknowledged.
+fn mark_session_read_in(
+    snapshot: &mut MonitorSnapshot,
+    session_id: &str,
+    observed_updated_at: i64,
+) -> bool {
+    let Some(session) = snapshot
+        .sessions
+        .iter_mut()
+        .find(|session| session.session_id == session_id)
+    else {
+        return false;
+    };
+    if !session.unread || session.updated_at != observed_updated_at {
+        return false;
+    }
+    session.unread = false;
+    true
 }
 
 /// Drop sessions last updated before `cutoff`. Returns true when anything was pruned.
@@ -326,6 +400,14 @@ fn load_snapshot(path: &Path) -> MonitorSnapshot {
             .map(|prompt| !super::capture::is_internal_system_prompt(prompt))
             .unwrap_or(true)
     });
+    // Before this policy change, every running-state update could persist an
+    // unread marker. Those rows are not completed replies, so never resurrect
+    // their stale badge after an app restart.
+    for session in &mut snapshot.sessions {
+        if session.status != RuntimeStatus::Ended {
+            session.unread = false;
+        }
+    }
     snapshot
 }
 
@@ -384,6 +466,7 @@ mod tests {
             event("UserPromptSubmit", Some("question"), None),
         );
         assert_eq!(snapshot.sessions[0].status, RuntimeStatus::Running);
+        assert!(!snapshot.sessions[0].unread);
         apply_event(&mut snapshot, event("Stop", None, Some("answer")));
         assert_eq!(snapshot.sessions.len(), 1);
         assert_eq!(snapshot.sessions[0].status, RuntimeStatus::Ended);
@@ -395,6 +478,7 @@ mod tests {
             snapshot.sessions[0].assistant_reply.as_deref(),
             Some("answer")
         );
+        assert!(snapshot.sessions[0].unread);
     }
 
     #[test]
@@ -422,6 +506,7 @@ mod tests {
             snapshot.sessions[0].assistant_reply.as_deref(),
             Some("Cursor answer")
         );
+        assert!(!snapshot.sessions[0].unread);
 
         let mut stop = event("Stop", None, None);
         stop.agent = AgentKind::Cursor;
@@ -431,6 +516,7 @@ mod tests {
         apply_event(&mut snapshot, stop);
         assert_eq!(snapshot.sessions.len(), 1);
         assert_eq!(snapshot.sessions[0].status, RuntimeStatus::Ended);
+        assert!(snapshot.sessions[0].unread);
         assert_eq!(
             snapshot.sessions[0].user_prompt.as_deref(),
             Some("Cursor question")
@@ -446,6 +532,7 @@ mod tests {
         );
         apply_event(&mut snapshot, event("StopFailure", None, None));
         assert_eq!(snapshot.sessions[0].status, RuntimeStatus::Failed);
+        assert!(!snapshot.sessions[0].unread);
     }
 
     #[test]
@@ -457,6 +544,7 @@ mod tests {
         );
         apply_event(&mut snapshot, event("PermissionRequest", None, None));
         assert_eq!(snapshot.sessions[0].status, RuntimeStatus::Waiting);
+        assert!(!snapshot.sessions[0].unread);
         assert_eq!(
             snapshot.sessions[0].user_prompt.as_deref(),
             Some("question")
@@ -465,6 +553,7 @@ mod tests {
         assert_eq!(snapshot.sessions[0].status, RuntimeStatus::Running);
         apply_event(&mut snapshot, event("Stop", None, Some("answer")));
         assert_eq!(snapshot.sessions[0].status, RuntimeStatus::Ended);
+        assert!(snapshot.sessions[0].unread);
     }
 
     #[test]
@@ -500,6 +589,7 @@ mod tests {
         );
         assert_eq!(snapshot.sessions.len(), 1);
         assert_eq!(snapshot.sessions[0].status, RuntimeStatus::Ended);
+        assert!(!snapshot.sessions[0].unread);
     }
 
     #[test]
@@ -561,5 +651,181 @@ mod tests {
         assert!(snapshot.sessions.is_empty());
         // Unknown id is a no-op and reports no change.
         assert!(!remove_session_from(&mut snapshot, "session-1"));
+    }
+
+    #[test]
+    fn unread_waits_for_normal_turn_completion() {
+        let mut snapshot = MonitorSnapshot::default();
+        apply_event(
+            &mut snapshot,
+            event("UserPromptSubmit", Some("question"), None),
+        );
+        assert!(!snapshot.sessions[0].unread);
+
+        let mut waiting = event("PermissionRequest", None, None);
+        waiting.occurred_at = 43;
+        apply_event(&mut snapshot, waiting);
+        assert!(!snapshot.sessions[0].unread);
+
+        let mut reply = event("AssistantResponse", None, Some("answer"));
+        reply.occurred_at = 44;
+        apply_event(&mut snapshot, reply);
+        assert!(!snapshot.sessions[0].unread);
+
+        let mut completion = event("Stop", None, Some("answer"));
+        completion.occurred_at = 45;
+        apply_event(&mut snapshot, completion);
+        assert!(snapshot.sessions[0].unread);
+    }
+
+    #[test]
+    fn every_agent_marks_unread_only_after_normal_completion() {
+        for agent in AgentKind::ALL {
+            let mut snapshot = MonitorSnapshot::default();
+            let mut start = event("UserPromptSubmit", Some("question"), None);
+            start.agent = agent;
+            apply_event(&mut snapshot, start);
+            assert!(
+                !snapshot.sessions[0].unread,
+                "{} marked unread before replying",
+                agent.as_str()
+            );
+
+            let mut progress = event("AssistantResponse", None, Some("partial reply"));
+            progress.agent = agent;
+            progress.occurred_at = 43;
+            apply_event(&mut snapshot, progress);
+            assert!(
+                !snapshot.sessions[0].unread,
+                "{} marked unread before the turn ended",
+                agent.as_str()
+            );
+
+            let mut completion = event("Stop", None, Some("final reply"));
+            completion.agent = agent;
+            completion.occurred_at = 44;
+            apply_event(&mut snapshot, completion);
+            assert!(
+                snapshot.sessions[0].unread,
+                "{} did not mark the completed reply unread",
+                agent.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn failure_and_interruption_do_not_mark_unread() {
+        for event_name in ["StopFailure", "Interrupted"] {
+            let mut snapshot = MonitorSnapshot::default();
+            apply_event(
+                &mut snapshot,
+                event("UserPromptSubmit", Some("question"), None),
+            );
+            apply_event(&mut snapshot, event(event_name, None, None));
+            assert!(!snapshot.sessions[0].unread, "{event_name} marked unread");
+        }
+    }
+
+    #[test]
+    fn new_turn_clears_prior_completed_unread() {
+        let mut snapshot = MonitorSnapshot::default();
+        apply_event(
+            &mut snapshot,
+            event("UserPromptSubmit", Some("question"), None),
+        );
+        let mut completion = event("Stop", None, Some("answer"));
+        completion.occurred_at = 43;
+        apply_event(&mut snapshot, completion);
+        assert!(snapshot.sessions[0].unread);
+
+        let mut new_turn = event("UserPromptSubmit", Some("next question"), None);
+        new_turn.occurred_at = 44;
+        apply_event(&mut snapshot, new_turn);
+        assert!(!snapshot.sessions[0].unread);
+    }
+
+    #[test]
+    fn read_acknowledgement_requires_the_observed_version() {
+        let mut snapshot = MonitorSnapshot::default();
+        apply_event(
+            &mut snapshot,
+            event("UserPromptSubmit", Some("question"), None),
+        );
+        let mut completion = event("Stop", None, Some("answer"));
+        completion.occurred_at = 43;
+        apply_event(&mut snapshot, completion);
+
+        assert!(mark_session_read_in(&mut snapshot, "session-1", 43));
+        assert!(!snapshot.sessions[0].unread);
+
+        let mut next_prompt = event("UserPromptSubmit", Some("next question"), None);
+        next_prompt.occurred_at = 44;
+        apply_event(&mut snapshot, next_prompt);
+        let mut next_completion = event("Stop", None, Some("new answer"));
+        next_completion.occurred_at = 45;
+        apply_event(&mut snapshot, next_completion);
+        assert!(snapshot.sessions[0].unread);
+        assert!(!mark_session_read_in(&mut snapshot, "session-1", 43));
+        assert!(snapshot.sessions[0].unread);
+    }
+
+    #[test]
+    fn historical_state_without_unread_defaults_to_read() {
+        let snapshot: MonitorSnapshot = serde_json::from_str(
+            r#"{"sessions":[{"sessionId":"old","turnId":"turn","source":"terminal","status":"ended","updatedAt":1}]}"#,
+        )
+        .expect("old monitor state should deserialize");
+        assert!(!snapshot.sessions[0].unread);
+    }
+
+    #[test]
+    fn legacy_active_or_failed_unread_rows_are_read_on_load() {
+        let path = std::env::temp_dir().join(format!("agent-hub-monitor-{}.json", Uuid::new_v4()));
+        let snapshot = MonitorSnapshot {
+            revision: 0,
+            sessions: vec![
+                SessionState {
+                    session_id: "running".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    source: SessionSource::Terminal,
+                    status: RuntimeStatus::Running,
+                    cwd: None,
+                    user_prompt: None,
+                    assistant_reply: None,
+                    updated_at: 1,
+                    unread: true,
+                },
+                SessionState {
+                    session_id: "failed".to_string(),
+                    turn_id: "turn-2".to_string(),
+                    source: SessionSource::Terminal,
+                    status: RuntimeStatus::Failed,
+                    cwd: None,
+                    user_prompt: None,
+                    assistant_reply: None,
+                    updated_at: 2,
+                    unread: true,
+                },
+                SessionState {
+                    session_id: "completed".to_string(),
+                    turn_id: "turn-3".to_string(),
+                    source: SessionSource::Terminal,
+                    status: RuntimeStatus::Ended,
+                    cwd: None,
+                    user_prompt: None,
+                    assistant_reply: Some("answer".to_string()),
+                    updated_at: 3,
+                    unread: true,
+                },
+            ],
+        };
+        fs::write(&path, serde_json::to_vec(&snapshot).unwrap()).unwrap();
+
+        let loaded = load_snapshot(&path);
+        assert!(!loaded.sessions[0].unread);
+        assert!(!loaded.sessions[1].unread);
+        assert!(loaded.sessions[2].unread);
+
+        let _ = fs::remove_file(path);
     }
 }

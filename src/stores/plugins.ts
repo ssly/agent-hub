@@ -38,6 +38,7 @@ export const usePluginsStore = defineStore('plugins', () => {
       workbuddy: '.workbuddy/skills',
       kiro: '.kiro/skills',
       dsh: '.dsh/skills',
+      omp: '.omp/agent/skills',
       shared: '.agents/skills',
     }
     const relative = relativeByPlatform[platformId]

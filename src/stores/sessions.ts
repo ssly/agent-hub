@@ -21,9 +21,9 @@ export const useSessionsStore = defineStore('sessions', () => {
   const isSearching = ref(false)
   const searchError = ref('')
 
-  // Batch selection mode (sessions list). Per-id map so toggling one card
-  // only invalidates that card's selected binding, not the whole Set.
-  const selectionMode = ref(false)
+  // Per-id map so toggling one card only invalidates that card's selected
+  // binding, not the whole Set. No explicit selection mode — checkboxes are
+  // always on the list, and bulk actions appear when anything is checked.
   const selectedMap = reactive<Record<string, true>>({})
   const isBulkDeleting = ref(false)
   const isBulkExporting = ref(false)
@@ -103,6 +103,7 @@ export const useSessionsStore = defineStore('sessions', () => {
     }
     searchQuery.value = ''
     searchResults.value = []
+    clearSelection()
     isLoading.value = true
     try {
       await refreshPlatforms(true)
@@ -116,6 +117,7 @@ export const useSessionsStore = defineStore('sessions', () => {
     selectedPathFilter.value = directoryFilter.value || 'all'
     searchQuery.value = ''
     searchResults.value = []
+    clearSelection()
     isLoading.value = true
     try {
       await loadSessions(false)
@@ -137,6 +139,7 @@ export const useSessionsStore = defineStore('sessions', () => {
     selectedPathFilter.value = filter
     searchQuery.value = ''
     searchResults.value = []
+    clearSelection()
     isLoading.value = true
     try {
       await loadSessions(false)
@@ -174,17 +177,8 @@ export const useSessionsStore = defineStore('sessions', () => {
     }
   }
 
-  function enterSelection() {
-    selectionMode.value = true
-  }
-
   function clearSelection() {
     for (const id of Object.keys(selectedMap)) delete selectedMap[id]
-  }
-
-  function exitSelection() {
-    selectionMode.value = false
-    clearSelection()
   }
 
   function toggleSelected(id: string) {
@@ -194,6 +188,19 @@ export const useSessionsStore = defineStore('sessions', () => {
 
   function selectAllLoaded() {
     for (const session of sessions.value) selectedMap[session.id] = true
+  }
+
+  function selectRange(fromId: string, toId: string) {
+    const ids = sessions.value.map(session => session.id as string)
+    const from = ids.indexOf(fromId)
+    const to = ids.indexOf(toId)
+    if (from < 0 || to < 0) {
+      toggleSelected(toId)
+      return
+    }
+    const start = Math.min(from, to)
+    const end = Math.max(from, to)
+    for (let i = start; i <= end; i++) selectedMap[ids[i]] = true
   }
 
   function isSelected(id: string) {
@@ -213,7 +220,7 @@ export const useSessionsStore = defineStore('sessions', () => {
       const result = await api.deleteSessions(platformId, ids)
       // Refresh once (not per-item). Reuse the path-filter-preserving refresh.
       await refreshPlatforms(true)
-      exitSelection()
+      clearSelection()
       return result
     } finally {
       isBulkDeleting.value = false
@@ -240,9 +247,9 @@ export const useSessionsStore = defineStore('sessions', () => {
     messagesModalOpen, activeSession,
     resumeModalOpen, resumeTarget,
     searchQuery, searchResults, isSearching, searchError,
-    selectionMode, selectedMap, selectedCount, isBulkDeleting, isBulkExporting, isSelected,
+    selectedMap, selectedCount, isBulkDeleting, isBulkExporting, isSelected,
     refreshPlatforms, loadSessions, selectPlatform, openResume,
     changePathFilter, loadMore, openMessages, doSearch,
-    enterSelection, exitSelection, toggleSelected, selectAllLoaded, clearSelection, bulkDelete, bulkExport,
+    toggleSelected, selectAllLoaded, selectRange, clearSelection, bulkDelete, bulkExport,
   }
 })

@@ -6,10 +6,6 @@ use crate::paths::join_relative;
 pub enum McpFormat {
     Json,
     Toml,
-    /// DeepSeek Harness: MCP servers are cordis plugin instances declared in
-    /// the profile's `cordis.patch.yml` (`@deepseek-ai/dsh-mcp-client`), not a
-    /// standalone servers map. Read-only listing.
-    DshCordisPatch,
 }
 
 #[derive(Debug, Clone)]
@@ -107,15 +103,12 @@ pub fn builtin_mcp_platforms() -> Vec<McpPlatformDef> {
             mcp_key: "mcpServers".into(),
         },
         McpPlatformDef {
-            id: "dsh".into(),
-            display_name: "DeepSeek Harness".into(),
-            presence_path: home.join(".dsh"),
-            // MCP servers live in each profile's cordis patch overlay; the
-            // path points at the profiles directory and the DshCordisPatch
-            // parser scans <profiles>/*/cordis.patch.yml.
-            config_path: join_relative(home.clone(), ".dsh/profiles"),
-            format: McpFormat::DshCordisPatch,
-            mcp_key: String::new(),
+            id: "omp".into(),
+            display_name: "Oh My Pi".into(),
+            presence_path: home.join(".omp"),
+            config_path: join_relative(home.clone(), ".omp/agent/mcp.json"),
+            format: McpFormat::Json,
+            mcp_key: "mcpServers".into(),
         },
     ]
 }
@@ -217,5 +210,10 @@ mod tests {
             .map(|platform| platform.id)
             .collect::<Vec<_>>();
         assert_eq!(&ids[..3], ["codex", "claude-code", "cursor"]);
+    }
+
+    #[test]
+    fn dsh_is_not_registered_as_a_native_mcp_platform() {
+        assert!(find_mcp_platform("dsh").is_none());
     }
 }

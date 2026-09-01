@@ -35,6 +35,7 @@ export type MonitorAgent =
   | 'workbuddy'
   | 'kiro'
   | 'dsh'
+  | 'omp'
 /** Same relative order as platform/registry.rs (skip Shared). */
 export const MONITOR_AGENTS: MonitorAgent[] = [
   'codex',
@@ -48,6 +49,7 @@ export const MONITOR_AGENTS: MonitorAgent[] = [
   'workbuddy',
   'kiro',
   'dsh',
+  'omp',
 ]
 /** Sidebar tab: one of the agents, or the merged "all" view. */
 export type MonitorTab = MonitorAgent | 'all'
@@ -61,6 +63,7 @@ export const WAITING_MONITOR_AGENTS: readonly MonitorAgent[] = [
   'zcode',
   'workbuddy',
   'dsh',
+  'omp',
 ]
 /** Agents whose hooks can report a red failed light (`StopFailure` / Cursor `error`). */
 export const FAILED_MONITOR_AGENTS: readonly MonitorAgent[] = [
@@ -102,6 +105,7 @@ export const MONITOR_AGENT_PLATFORM: Partial<Record<MonitorAgent, string>> = {
   workbuddy: 'workbuddy',
   kiro: 'kiro',
   dsh: 'dsh',
+  omp: 'omp',
 }
 
 export interface SessionState {
@@ -113,6 +117,7 @@ export interface SessionState {
   userPrompt?: string | null
   assistantReply?: string | null
   updatedAt: number
+  unread: boolean
 }
 
 /** A session row tagged with the agent it came from, for the merged view. */
@@ -161,6 +166,7 @@ const CHANGED_EVENTS: Record<MonitorAgent, string> = {
   workbuddy: 'session-monitor:workbuddy-changed',
   kiro: 'session-monitor:kiro-changed',
   dsh: 'session-monitor:dsh-changed',
+  omp: 'session-monitor:omp-changed',
 }
 
 const snapshotApi: Record<MonitorAgent, () => Promise<MonitorSnapshot>> = {
@@ -175,6 +181,7 @@ const snapshotApi: Record<MonitorAgent, () => Promise<MonitorSnapshot>> = {
   workbuddy: api.getWorkbuddySessionMonitorSnapshot,
   kiro: api.getKiroSessionMonitorSnapshot,
   dsh: api.getDshSessionMonitorSnapshot,
+  omp: api.getOmpSessionMonitorSnapshot,
 }
 
 const deleteSessionApi: Record<MonitorAgent, (sessionId: string) => Promise<void>> = {
@@ -189,6 +196,7 @@ const deleteSessionApi: Record<MonitorAgent, (sessionId: string) => Promise<void
   workbuddy: api.deleteWorkbuddySessionMonitorSession,
   kiro: api.deleteKiroSessionMonitorSession,
   dsh: api.deleteDshSessionMonitorSession,
+  omp: api.deleteOmpSessionMonitorSession,
 }
 
 const hookApi: Record<HookAgent, {
@@ -251,6 +259,11 @@ const hookApi: Record<HookAgent, {
     preview: api.previewDshHookChange,
     apply: api.applyDshHookChange,
   },
+  omp: {
+    status: api.getOmpHookStatus,
+    preview: api.previewOmpHookChange,
+    apply: api.applyOmpHookChange,
+  },
 }
 
 function emptySnapshot(): MonitorSnapshot {
@@ -275,6 +288,7 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     workbuddy: emptySnapshot(),
     kiro: emptySnapshot(),
     dsh: emptySnapshot(),
+    omp: emptySnapshot(),
   })
   const hookStatuses = ref<Record<HookAgent, HookStatus | null>>({
     codex: null,
@@ -288,6 +302,7 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     workbuddy: null,
     kiro: null,
     dsh: null,
+    omp: null,
   })
   const loading = ref(false)
   const hookLoading = ref(false)
@@ -340,10 +355,32 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
       return b.updatedAt - a.updatedAt
     })
   })
+  const unreadCountByAgent = computed<Record<MonitorAgent, number>>(() => {
+    const counts = {} as Record<MonitorAgent, number>
+    for (const agent of MONITOR_AGENTS) {
+      counts[agent] = snapshots.value[agent].sessions.filter(session => session.unread).length
+    }
+    return counts
+  })
+  const totalUnread = computed(() =>
+    visibleAgents.value.reduce((total, agent) => total + unreadCountByAgent.value[agent], 0),
+  )
+
+  function unreadForAgent(agent: MonitorAgent) {
+    return unreadCountByAgent.value[agent]
+  }
+
+  // Snapshot fetches can resolve after a newer cross-window event. Keep the
+  // monotonic backend revision so an old response never rolls unread state
+  // (or any other visible session field) backwards.
+  function applySnapshot(agent: MonitorAgent, next: MonitorSnapshot) {
+    if (next.revision < snapshots.value[agent].revision) return
+    snapshots.value[agent] = next
+  }
 
   async function loadSnapshot(agent: MonitorAgent): Promise<string | null> {
     try {
-      snapshots.value[agent] = (await snapshotApi[agent]()) || emptySnapshot()
+      applySnapshot(agent, (await snapshotApi[agent]()) || emptySnapshot())
       return null
     } catch (cause) {
       return errorMessage(cause)
@@ -434,7 +471,7 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
       unlisten = await Promise.all(
         MONITOR_AGENTS.map(agent =>
           listen<MonitorSnapshot>(CHANGED_EVENTS[agent], event => {
-            snapshots.value[agent] = event.payload
+            applySnapshot(agent, event.payload)
           }),
         ),
       )
@@ -580,6 +617,30 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     }
   }
 
+  async function markSessionRead(session: AgentSessionState) {
+    if (!session.unread) return
+    const observedUpdatedAt = session.updatedAt
+    try {
+      await api.markSessionMonitorSessionRead(session.agent, session.sessionId, observedUpdatedAt)
+      // Native windows normally receive the persisted snapshot event first.
+      // This guarded local mirror also keeps browser debug responsive, while
+      // never clearing a newer version that arrived during the IPC roundtrip.
+      const current = snapshots.value[session.agent]
+      const latest = current.sessions.find(item => item.sessionId === session.sessionId)
+      if (!latest?.unread || latest.updatedAt !== observedUpdatedAt) return
+      snapshots.value[session.agent] = {
+        ...current,
+        sessions: current.sessions.map(item =>
+          item.sessionId === session.sessionId && item.updatedAt === observedUpdatedAt
+            ? { ...item, unread: false }
+            : item,
+        ),
+      }
+    } catch (cause) {
+      error.value = errorMessage(cause)
+    }
+  }
+
   // Shared-modal open state. The modals fetch full history / resume commands
   // through the sessions adapters (MONITOR_AGENT_PLATFORM), so the monitor
   // itself still keeps only its lightweight snapshot data.
@@ -603,6 +664,9 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     snapshots,
     snapshot,
     displaySessions,
+    unreadCountByAgent,
+    totalUnread,
+    unreadForAgent,
     hookStatuses,
     hookStatus,
     loading,
@@ -630,6 +694,7 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     startDshWeb,
     stopDshWeb,
     deleteSession,
+    markSessionRead,
     messagesModalOpen,
     resumeModalOpen,
     modalSession,

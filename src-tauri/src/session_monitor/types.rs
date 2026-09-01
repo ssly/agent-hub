@@ -14,12 +14,13 @@ pub enum AgentKind {
     Workbuddy,
     Kiro,
     Dsh,
+    Omp,
 }
 
 impl AgentKind {
     /// Same relative order as `platform/registry.rs` builtin platforms
     /// (monitor subset: no Shared).
-    pub const ALL: [AgentKind; 11] = [
+    pub const ALL: [AgentKind; 12] = [
         Self::Codex,
         Self::Claude,
         Self::Cursor,
@@ -31,6 +32,7 @@ impl AgentKind {
         Self::Workbuddy,
         Self::Kiro,
         Self::Dsh,
+        Self::Omp,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -46,6 +48,7 @@ impl AgentKind {
             Self::Workbuddy => "workbuddy",
             Self::Kiro => "kiro",
             Self::Dsh => "dsh",
+            Self::Omp => "omp",
         }
     }
 
@@ -62,6 +65,7 @@ impl AgentKind {
             Self::Workbuddy => "workbuddy-state.json",
             Self::Kiro => "kiro-state.json",
             Self::Dsh => "dsh-state.json",
+            Self::Omp => "omp-state.json",
         }
     }
 
@@ -78,6 +82,7 @@ impl AgentKind {
             Self::Workbuddy => "session-monitor:workbuddy-changed",
             Self::Kiro => "session-monitor:kiro-changed",
             Self::Dsh => "session-monitor:dsh-changed",
+            Self::Omp => "session-monitor:omp-changed",
         }
     }
 }
@@ -138,6 +143,10 @@ pub struct SessionState {
     pub user_prompt: Option<String>,
     pub assistant_reply: Option<String>,
     pub updated_at: i64,
+    /// Persisted with the snapshot. Older state files deserialize as read so
+    /// upgrading never turns historical monitor rows into a flood of alerts.
+    #[serde(default)]
+    pub unread: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

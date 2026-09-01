@@ -92,7 +92,8 @@
       "qwen": "同时读取 Shared（~/.agents/skills）；MCP 配置位于 ~/.qwen/settings.json；扩展（~/.qwen/extensions）见下方只读列表，启停请使用 `qwen extensions` CLI。",
       "zcode": "同时读取 Shared（~/.agents/skills）；MCP 配置位于 ~/.zcode/cli/config.json；插件市场（~/.zcode/cli/plugins）见下方只读列表，启停请在 ZCode 设置中操作。",
       "workbuddy": "Skills 位于 ~/.workbuddy/skills；MCP 配置位于 ~/.workbuddy/mcp.json；原生技能生态请在 WorkBuddy 界面中管理。",
-      "dsh": "同时读取 Shared（~/.agents/skills）；Skills 在 ~/.dsh/skills（含单文件 Markdown Skill）；MCP 是 profile 的 cordis 插件实例（cordis.patch.yml），下方只读列表；插件体系即 profile 本身（dsh plugin add，本工具不管理）。"
+      "dsh": "同时读取 Shared（~/.agents/skills）；Skills 在 ~/.dsh/skills（含单文件 Markdown Skill）。DeepSeek Harness 没有独立的 MCP 配置；如通过官方 @deepseek-ai/dsh-mcp-client 连接工具，它属于 profile 的 Cordis 插件，应在 dsh plugin 或 cordis.patch.yml 中管理，本工具不在 MCP 区展示或管理。",
+      "omp": "Skills 在 ~/.omp/agent/skills（项目级 .omp/skills），omp 还会自行读取 Claude/Cursor 等目录的 skills，本工具只管理 ~/.omp 自己的文件；MCP 在 ~/.omp/agent/mcp.json（标准 mcpServers，支持读写）。"
     },
     "no_agents": "未发现可管理插件的 Agent。"
   },
@@ -133,6 +134,9 @@
     "path_filter_unknown": "未知路径",
     "path_filter_empty": "当前路径筛选下暂无会话。",
     "path_filter_current": "当前路径：{path}",
+    "path_filter_search": "搜索路径…",
+    "path_filter_search_empty": "没有匹配的路径",
+    "path_filter_search_clear": "清空搜索",
     "resume_terminal": "恢复终端",
     "resume_field_title": "会话标题",
     "resume_last_question": "最后提问",
@@ -171,8 +175,12 @@
     "clear_search": "清除",
     "search_match_in": "匹配于会话：",
     "view_full_session": "查看完整会话",
+    "select_session": "选择此会话",
+    "select_all_loaded": "全选已加载的会话",
+    "selected_count": "已选 {n}",
     "batch_select": "批量选择",
     "batch_select_all": "全选",
+    "batch_deselect": "取消选择",
     "batch_clear_selection": "清除",
     "batch_cancel": "取消",
     "batch_delete": "删除选中",
@@ -279,8 +287,7 @@
     "preview_conflict": "该服务器已存在，将被更新。",
     "preview_stats": "+{added} 行新增  -{removed} 行删除",
     "only_toml": "Codex 仅支持 TOML 格式，请粘贴 TOML 配置。",
-    "only_json": "该平台仅支持 JSON 格式。",
-    "dsh_readonly_note": "DeepSeek Harness 的 MCP 服务器是 profile 的 cordis 插件实例（~/.dsh/profiles/*/cordis.patch.yml），此处只读。请用 `dsh plugin` 或直接编辑 cordis.patch.yml。"
+    "only_json": "该平台仅支持 JSON 格式。"
   },
   "trash": {
     "title": "回收站",
@@ -534,6 +541,7 @@
     "agent_workbuddy": "WorkBuddy",
     "agent_kiro": "Kiro",
     "agent_dsh": "DeepSeek Harness",
+    "agent_omp": "Oh My Pi",
     "agent_all": "全部",
     "empty_all_hint": "任意 Agent 发起新会话后，都会实时出现在这里；进行中的排在最上面。",
     "hook_installed": "{agent} Hook 已完整安装",
@@ -564,6 +572,12 @@
     "status_waiting": "等待确认",
     "status_failed": "失败",
     "status_ended": "已结束",
+    "unread": "未读",
+    "unread_count": "{count} 条未读",
+    "relative_minutes": "{count}分",
+    "relative_hours": "{count}时",
+    "relative_days": "{count}天",
+    "relative_time_exact": "更新时间：{time}",
     "light_failed": "红 · 失败",
     "light_waiting": "黄 · 等待确认",
     "light_running": "绿 · 进行中",

@@ -1,4 +1,6 @@
 #[cfg(any(target_os = "macos", target_os = "windows"))]
+use tauri::Emitter;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use tauri::Manager;
 use tauri::{App, AppHandle};
 
@@ -63,6 +65,10 @@ static LAST_MOVE: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mute
 /// with controls that overflow the panel bounds.
 #[cfg(target_os = "macos")]
 static TRAY_OVERLAY_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Whether the tray window owns keyboard focus. The dock hover watcher uses
+/// this to bridge pointer position only while another app remains active.
+#[cfg(target_os = "macos")]
+static TRAY_FOCUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Last physical window position, kept in memory only (per user request:
 /// remembered while the app lives, forgotten on exit). Updated by both user
 /// drags and programmatic centering, so "remembered" means "where it last was".
@@ -94,6 +100,10 @@ const TRAY_DOCK_CHANGED_EVENT: &str = "usage-tray-dock-changed";
 /// appears with the dock-changed event after the tween completes.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 const TRAY_DOCK_ANIMATING_EVENT: &str = "usage-tray-dock-animating";
+/// Raw cursor position for row-level hover handling while the docked tray is
+/// visible but inactive. Coordinates are logical CSS pixels within the tray.
+#[cfg(target_os = "macos")]
+const TRAY_NATIVE_HOVER_EVENT: &str = "usage-tray-native-hover";
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 #[derive(Clone, serde::Serialize)]
@@ -103,6 +113,14 @@ struct DockChangedPayload {
     expanded: bool,
 }
 
+#[cfg(target_os = "macos")]
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeHoverPayload {
+    x: Option<f64>,
+    y: Option<f64>,
+}
+
 /// The panel's close button (✕): drop any dock state and hide the window.
 /// The next tray-icon click is always a fresh, centered, undocked open.
 #[tauri::command]
@@ -110,6 +128,7 @@ pub fn close_usage_tray(app: AppHandle) {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     if let Some(window) = app.get_webview_window("codex-usage") {
         clear_dock_state(&window);
+        let _ = window.emit("usage-tray-closed", ());
         let _ = window.hide();
     }
 
@@ -681,6 +700,24 @@ fn cursor_position() -> Option<(f64, f64)> {
     Some((point.x, point.y))
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn logical_point_in_tray(
+    cursor: (i32, i32),
+    window_position: (i32, i32),
+    scale: f64,
+) -> (f64, f64) {
+    (
+        (cursor.0 - window_position.0) as f64 / scale,
+        (cursor.1 - window_position.1) as f64 / scale,
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn emit_native_hover(window: &tauri::WebviewWindow, point: Option<(f64, f64)>) {
+    let (x, y) = point.map_or((None, None), |(x, y)| (Some(x), Some(y)));
+    let _ = window.emit(TRAY_NATIVE_HOVER_EVENT, NativeHoverPayload { x, y });
+}
+
 /// WKWebView hover is unreliable while another app is focused even with
 /// acceptsMouseMovedEvents, so dock-mode hover runs on raw cursor polling:
 /// over the strip → slide the panel out; away from the panel for 350ms →
@@ -690,6 +727,7 @@ fn spawn_dock_hover_watcher(window: tauri::WebviewWindow) {
     use std::sync::atomic::Ordering;
     std::thread::spawn(move || {
         let mut outside_since: Option<std::time::Instant> = None;
+        let mut native_hover_cursor: Option<(i32, i32)> = None;
         loop {
             std::thread::sleep(std::time::Duration::from_millis(120));
             // A hidden window must never be expanded by stale cursor matches
@@ -700,6 +738,9 @@ fn spawn_dock_hover_watcher(window: tauri::WebviewWindow) {
                 || TRAY_ANIMATING.load(Ordering::Relaxed)
                 || TRAY_OVERLAY_OPEN.load(Ordering::Relaxed)
             {
+                if native_hover_cursor.take().is_some() {
+                    emit_native_hover(&window, None);
+                }
                 outside_since = None;
                 continue;
             }
@@ -717,16 +758,32 @@ fn spawn_dock_hover_watcher(window: tauri::WebviewWindow) {
                 && py >= pos.y - 4
                 && py < pos.y + size.height as i32 + 4;
             if !tray_expanded() {
+                if native_hover_cursor.take().is_some() {
+                    emit_native_hover(&window, None);
+                }
                 if inside {
                     expand_dock(&window, true);
                 }
-            } else if inside {
-                outside_since = None;
             } else {
-                let since = outside_since.get_or_insert_with(std::time::Instant::now);
-                if since.elapsed().as_millis() >= 350 {
+                let bridge_cursor = if inside && !TRAY_FOCUSED.load(Ordering::Relaxed) {
+                    Some((px, py))
+                } else {
+                    None
+                };
+                if bridge_cursor != native_hover_cursor {
+                    native_hover_cursor = bridge_cursor;
+                    let point = bridge_cursor
+                        .map(|cursor| logical_point_in_tray(cursor, (pos.x, pos.y), scale));
+                    emit_native_hover(&window, point);
+                }
+                if inside {
                     outside_since = None;
-                    collapse_dock(&window, true);
+                } else {
+                    let since = outside_since.get_or_insert_with(std::time::Instant::now);
+                    if since.elapsed().as_millis() >= 350 {
+                        outside_since = None;
+                        collapse_dock(&window, true);
+                    }
                 }
             }
         }
@@ -781,6 +838,8 @@ fn reopen_usage_tray(window: &tauri::WebviewWindow, monitor: Option<tauri::Monit
     }
     let _ = window.show();
     let _ = window.set_focus();
+    #[cfg(target_os = "macos")]
+    TRAY_FOCUSED.store(true, std::sync::atomic::Ordering::Relaxed);
     let _ = window.emit("usage-tray-opened", ());
 }
 
@@ -1269,7 +1328,12 @@ fn setup_desktop(app: &mut App) -> tauri::Result<()> {
     let window_to_hide = window.clone();
     let window_for_moves = window.clone();
     window.on_window_event(move |event| match event {
-        WindowEvent::Focused(false) => {
+        WindowEvent::Focused(focused) => {
+            #[cfg(target_os = "macos")]
+            TRAY_FOCUSED.store(*focused, std::sync::atomic::Ordering::Relaxed);
+            if *focused {
+                return;
+            }
             // Windows: tao's drag-region implementation fakes an HTCAPTION
             // click, which fires a spurious Focused(false) immediately
             // followed by Focused(true) on every mousedown (tauri#10767,
@@ -1299,6 +1363,7 @@ fn setup_desktop(app: &mut App) -> tauri::Result<()> {
                     }
                     return;
                 }
+                let _ = window.emit("usage-tray-closed", ());
                 let _ = window.hide();
             });
         }
@@ -1351,6 +1416,7 @@ fn setup_desktop(app: &mut App) -> tauri::Result<()> {
                     // Hide the usage popup if open, then hand off to the main
                     // window's existing About / updater UI.
                     if let Some(usage) = app.get_webview_window("codex-usage") {
+                        let _ = usage.emit("usage-tray-closed", ());
                         let _ = usage.hide();
                     }
                     crate::show_main_window(app);
@@ -1491,6 +1557,14 @@ mod tests {
         };
         let position = centered_window_position(800.0, 1_040.0, screen);
         assert_eq!(position, (3_584, -100));
+    }
+
+    #[test]
+    fn native_hover_coordinates_are_logical_and_window_relative() {
+        assert_eq!(
+            logical_point_in_tray((1_260, 680), (860, 480), 2.0),
+            (200.0, 100.0)
+        );
     }
 
     #[test]

@@ -106,6 +106,16 @@ pub fn builtin_platforms() -> Vec<PlatformDef> {
             // <workspace>/.dsh/skills, which the default mirror already maps.
             skill_dir: join_relative(home.clone(), ".dsh/skills"),
         },
+        PlatformDef {
+            id: "omp".into(),
+            display_name: "Oh My Pi".into(),
+            description: "Oh My Pi (omp) coding agent skills".into(),
+            presence_path: home.join(".omp"),
+            // omp keeps user-level skills inside its agent directory
+            // (~/.omp/agent/skills); the project level lives at
+            // <workspace>/.omp/skills (see workspace_skill_dir below).
+            skill_dir: join_relative(home.clone(), ".omp/agent/skills"),
+        },
     ]
 }
 
@@ -119,6 +129,11 @@ pub fn workspace_skill_dir(platform_id: &str, workspace: &std::path::Path) -> Op
     // mirror of its global ~/.gemini/config/skills layout.
     if platform_id == "antigravity" {
         return Some(join_relative(workspace.to_path_buf(), ".agents/skills"));
+    }
+    // omp mirrors its agent dir globally (~/.omp/agent/skills) but drops the
+    // `agent` segment at project level (<workspace>/.omp/skills).
+    if platform_id == "omp" {
+        return Some(join_relative(workspace.to_path_buf(), ".omp/skills"));
     }
     let home = dirs::home_dir()?;
     let def = builtin_platforms()
@@ -213,7 +228,17 @@ mod tests {
                 "workbuddy",
                 "kiro",
                 "dsh",
+                "omp",
             ]
+        );
+    }
+
+    #[test]
+    fn omp_workspace_skills_drop_the_agent_segment() {
+        let root = PathBuf::from("/tmp/example-project");
+        assert_eq!(
+            workspace_skill_dir("omp", &root),
+            Some(root.join(".omp").join("skills"))
         );
     }
 }

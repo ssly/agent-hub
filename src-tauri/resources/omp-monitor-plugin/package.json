@@ -1,0 +1,13 @@
+{
+  "name": "agent-hub-omp-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Agent Hub session monitor \u2014 observe-only Oh My Pi extension",
+  "omp.extensions": [
+    "./index.js"
+  ],
+  "pi.extensions": [
+    "./index.js"
+  ]
+}

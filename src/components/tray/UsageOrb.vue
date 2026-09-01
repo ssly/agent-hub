@@ -44,13 +44,14 @@ const rings = computed(() =>
 // providers without a secondary window render at the same visual size.
 const bubbleR = computed(() => (props.windows.length >= 3 ? 50 : 64))
 
-function usedPercent(window: UsageWindow) {
-  return Math.min(100, Math.max(0, window.used_percent ?? 0))
+function remainingPercent(window: UsageWindow) {
+  const remaining = window.remaining_percent ?? 100 - (window.used_percent ?? 0)
+  return Math.min(100, Math.max(0, remaining))
 }
 
-// Water level: the tank fills bottom-up with the *consumed* share, so a nearly
-// full tank means the window is nearly exhausted.
-const waterDepth = computed(() => (2 * bubbleR.value * usedPercent(bubbleWindow.value.window)) / 100)
+// Water level: the tank fills bottom-up with the remaining share, so a full
+// tank means the window still has plenty of quota available.
+const waterDepth = computed(() => (2 * bubbleR.value * remainingPercent(bubbleWindow.value.window)) / 100)
 const waterStyle = computed(() => ({
   transform: `translate(${CX - bubbleR.value}px, ${CY + bubbleR.value - waterDepth.value}px)`,
 }))
@@ -117,13 +118,13 @@ function formatReset(resetAt: number) {
   }).format(new Date(resetAt * 1000))
 }
 
-/** Center readout is *used* share of the shortest window (not remaining). */
-const centerUsed = computed(() => Math.round(usedPercent(bubbleWindow.value.window)))
+/** Center readout is the remaining share of the shortest window. */
+const centerRemaining = computed(() => Math.round(remainingPercent(bubbleWindow.value.window)))
 </script>
 
 <template>
   <div class="usage-orb" :class="{ 'is-mini': mini }">
-    <!-- No graph/legend tooltips: used % + reset time sit in the side legend. -->
+    <!-- No graph/legend tooltips: remaining % + reset time sit in the side legend. -->
     <div class="usage-orb__graph">
       <svg viewBox="0 0 180 180" aria-hidden="true">
         <defs>
@@ -132,7 +133,7 @@ const centerUsed = computed(() => Math.round(usedPercent(bubbleWindow.value.wind
           </clipPath>
         </defs>
 
-        <!-- Outer rings (longer windows): accent color, arc = used %. -->
+        <!-- Outer rings (longer windows): accent color, arc = remaining %. -->
         <g
           v-for="(ring, index) in rings"
           :key="ring.item.key"
@@ -142,7 +143,7 @@ const centerUsed = computed(() => Math.round(usedPercent(bubbleWindow.value.wind
           <circle
             class="ring-fill"
             :cx="CX" :cy="CY" :r="ring.radius"
-            :stroke-dasharray="ringDash(ring.radius, usedPercent(ring.item.window))"
+            :stroke-dasharray="ringDash(ring.radius, remainingPercent(ring.item.window))"
             :transform="`rotate(-90 ${CX} ${CY})`"
           />
           <g class="ring-orbit" :style="{ animationDuration: `${9 + index * 5}s` }">
@@ -151,7 +152,7 @@ const centerUsed = computed(() => Math.round(usedPercent(bubbleWindow.value.wind
           </g>
         </g>
 
-        <!-- Inner tank (shortest window): green water, level = used %. -->
+        <!-- Inner tank (shortest window): green water, level = remaining %. -->
         <g class="usage-orb__tank tone-tank">
           <circle class="tank-bg" :cx="CX" :cy="CY" :r="bubbleR" />
           <g :clip-path="`url(#${clipId})`">
@@ -171,9 +172,9 @@ const centerUsed = computed(() => Math.round(usedPercent(bubbleWindow.value.wind
         </g>
       </svg>
 
-      <!-- Center readout: used % of the shortest window only (no label). -->
+      <!-- Center readout: remaining % of the shortest window only (no label). -->
       <div class="usage-orb__center">
-        <strong>{{ centerUsed }}%</strong>
+        <strong>{{ centerRemaining }}%</strong>
       </div>
     </div>
 
@@ -187,7 +188,7 @@ const centerUsed = computed(() => Math.round(usedPercent(bubbleWindow.value.wind
           <span class="legend-dot" />
           <span class="legend-label">{{ item.label }} {{ t('tray.limit') }}</span>
           <span class="legend-nums">
-            <strong class="legend-used">{{ t('tray.used') }} {{ Math.round(usedPercent(item.window)) }}%</strong>
+            <strong class="legend-remaining">{{ Math.round(remainingPercent(item.window)) }}% {{ t('tray.remaining') }}</strong>
             <span v-if="item.window.reset_at" class="legend-reset">
               {{ t('tray.reset_at', { time: formatReset(item.window.reset_at) }) }}
             </span>
@@ -216,7 +217,7 @@ const centerUsed = computed(() => Math.round(usedPercent(bubbleWindow.value.wind
   gap: 8px;
 }
 
-/* Inner circle = green; outer ring(s) = accent — both encode *used* share. */
+/* Inner circle = green; outer ring(s) = accent — both encode remaining share. */
 .tone-tank { color: var(--tray-success); }
 .tone-ring { color: var(--tray-accent); }
 
@@ -265,7 +266,7 @@ const centerUsed = computed(() => Math.round(usedPercent(bubbleWindow.value.wind
   100% { transform: translate(0, 0); opacity: 0; }
 }
 
-/* Center readout: used % of the shortest window. */
+/* Center readout: remaining % of the shortest window. */
 .usage-orb__center {
   position: absolute;
   inset: 0;
@@ -287,7 +288,7 @@ const centerUsed = computed(() => Math.round(usedPercent(bubbleWindow.value.wind
   text-shadow: 0 0 3px var(--tray-inset), 0 0 7px var(--tray-inset), 0 0 2px var(--tray-inset);
 }
 
-/* Per-window legend rows: dot + label on line 1, used/remaining on line 2,
+/* Per-window legend rows: dot + label on line 1, remaining + reset on line 2,
    sitting to the right of the orb so 1-window and 2-window providers share
    the same overall height. */
 .usage-orb__legend {
@@ -325,7 +326,7 @@ const centerUsed = computed(() => Math.round(usedPercent(bubbleWindow.value.wind
   gap: 2px 8px;
   min-width: 0;
 }
-.legend-used {
+.legend-remaining {
   color: var(--tray-ink);
   font-variant-numeric: tabular-nums;
   font-weight: 650;

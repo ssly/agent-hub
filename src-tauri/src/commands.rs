@@ -861,7 +861,6 @@ pub fn list_mcp_platforms(workspace_dir: Option<String>) -> Vec<McpPlatformView>
                 format: match def.format {
                     crate::mcp::McpFormat::Json => "json",
                     crate::mcp::McpFormat::Toml => "toml",
-                    crate::mcp::McpFormat::DshCordisPatch => "cordis-patch",
                 }
                 .to_string(),
                 server_count: servers.len(),
@@ -917,7 +916,6 @@ pub fn get_mcp_server(
         format: match def.format {
             crate::mcp::McpFormat::Json => "json",
             crate::mcp::McpFormat::Toml => "toml",
-            crate::mcp::McpFormat::DshCordisPatch => "cordis-patch",
         }
         .to_string(),
     })
@@ -1606,6 +1604,18 @@ fn parse_hook_action(action: &str) -> Result<HookAction, CommandError> {
 }
 
 #[tauri::command]
+pub fn mark_session_monitor_session_read(
+    monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
+    agent: AgentKind,
+    session_id: String,
+    observed_updated_at: i64,
+) -> Result<(), CommandError> {
+    monitor
+        .mark_session_read(agent, &session_id, observed_updated_at)
+        .map_err(CommandError::General)
+}
+
+#[tauri::command]
 pub fn get_codex_session_monitor_snapshot(
     monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
 ) -> MonitorSnapshot {
@@ -2072,6 +2082,49 @@ pub fn apply_dsh_hook_change(
 ) -> Result<crate::session_monitor::HookStatus, CommandError> {
     crate::session_monitor::apply_hook_change(
         AgentKind::Dsh,
+        parse_hook_action(&action)?,
+        &expected_before_hash,
+    )
+    .map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn get_omp_session_monitor_snapshot(
+    monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
+) -> MonitorSnapshot {
+    monitor.snapshot(AgentKind::Omp)
+}
+
+#[tauri::command]
+pub fn delete_omp_session_monitor_session(
+    monitor: tauri::State<'_, crate::session_monitor::ServiceHandle>,
+    session_id: String,
+) -> Result<(), CommandError> {
+    monitor
+        .remove_session(AgentKind::Omp, &session_id)
+        .map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn get_omp_hook_status() -> Result<crate::session_monitor::HookStatus, CommandError> {
+    crate::session_monitor::get_hook_status(AgentKind::Omp).map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn preview_omp_hook_change(
+    action: String,
+) -> Result<crate::session_monitor::HookChangePreview, CommandError> {
+    crate::session_monitor::preview_hook_change(AgentKind::Omp, parse_hook_action(&action)?)
+        .map_err(CommandError::General)
+}
+
+#[tauri::command]
+pub fn apply_omp_hook_change(
+    action: String,
+    expected_before_hash: String,
+) -> Result<crate::session_monitor::HookStatus, CommandError> {
+    crate::session_monitor::apply_hook_change(
+        AgentKind::Omp,
         parse_hook_action(&action)?,
         &expected_before_hash,
     )

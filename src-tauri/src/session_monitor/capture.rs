@@ -15,6 +15,7 @@ pub const ZCODE_HOOK_ARG: &str = "--agent-hub-zcode-hook";
 pub const WORKBUDDY_HOOK_ARG: &str = "--agent-hub-workbuddy-hook";
 pub const ANTIGRAVITY_HOOK_ARG: &str = "--agent-hub-antigravity-hook";
 pub const KIRO_HOOK_ARG: &str = "--agent-hub-kiro-hook";
+pub const OMP_HOOK_ARG: &str = "--agent-hub-omp-hook";
 /// Runaway-stdin guard, not a payload policy: Kimi embeds pasted images as
 /// base64 in the prompt content parts, so a legitimate UserPromptSubmit can
 /// reach several MiB. The monitor only extracts the text parts anyway.
@@ -70,6 +71,8 @@ pub fn try_capture_hook_event() -> bool {
         AgentKind::Antigravity
     } else if std::env::args().any(|arg| arg == KIRO_HOOK_ARG) {
         AgentKind::Kiro
+    } else if std::env::args().any(|arg| arg == OMP_HOOK_ARG) {
+        AgentKind::Omp
     } else {
         return false;
     };
@@ -210,6 +213,8 @@ fn capture_stdin_event(agent: AgentKind) -> Result<(), String> {
         "PermissionRequest"
     } else if event_name == "Stop" && is_cursor_error_stop(agent, &input) {
         "StopFailure"
+    } else if event_name == "Stop" && is_cursor_aborted_stop(agent, &input) {
+        "Interrupted"
     } else {
         event_name
     };
@@ -315,18 +320,23 @@ fn capture_stdin_event(agent: AgentKind) -> Result<(), String> {
 /// PascalCase, Grok uses snake_case, and Cursor uses camelCase lifecycle
 /// names. Returns None for events we ignore.
 /// Kimi Code fires Interrupt (never Stop) when the user aborts a turn —
-/// that still ends the turn (gray). StopFailure is kept distinct (red).
+/// it still ends the turn (gray), but must not mark a reply as unread.
+/// StopFailure remains a distinct red state.
 fn canonical_event_name(name: &str) -> Option<&'static str> {
     match name {
         "UserPromptSubmit" | "user_prompt_submit" | "userPromptSubmit" | "PreInvocation"
         | "pre_invocation" => Some("UserPromptSubmit"),
         "beforeSubmitPrompt" => Some("UserPromptSubmit"),
-        "afterAgentResponse" => Some("AssistantResponse"),
+        "afterAgentResponse" | "assistantResponse" | "AssistantResponse" => {
+            Some("AssistantResponse")
+        }
         // Kiro docs also call this "Agent Stop"; CLI payloads may use camelCase.
-        "Stop" | "stop" | "agentStop" | "AgentStop" | "Interrupt" | "interrupt"
-        | "StopCancelled" | "stop_cancelled" | "stopCancelled" => Some("Stop"),
-        // API/tool error — red light. Interrupt stays Stop (user abort is ended,
-        // not a failure).
+        "Stop" | "stop" | "agentStop" | "AgentStop" => Some("Stop"),
+        "Interrupt" | "interrupt" | "StopCancelled" | "stop_cancelled" | "stopCancelled" => {
+            Some("Interrupted")
+        }
+        // API/tool error — red light. An interrupt is separately normalized to
+        // an ended (not failed) turn above.
         "StopFailure" | "stop_failure" => Some("StopFailure"),
         "PermissionRequest" | "permission_request" | "permissionRequest" => {
             Some("PermissionRequest")
@@ -348,6 +358,12 @@ fn is_cursor_error_stop(agent: AgentKind, input: &serde_json::Value) -> bool {
     agent == AgentKind::Cursor
         && string_field_any(input, &["status"])
             .is_some_and(|status| status.eq_ignore_ascii_case("error"))
+}
+
+fn is_cursor_aborted_stop(agent: AgentKind, input: &serde_json::Value) -> bool {
+    agent == AgentKind::Cursor
+        && string_field_any(input, &["status"])
+            .is_some_and(|status| status.eq_ignore_ascii_case("aborted"))
 }
 
 fn is_wait_lifecycle_event(name: &str) -> bool {
@@ -469,6 +485,12 @@ fn payload_matches_agent(agent: AgentKind, input: &serde_json::Value) -> bool {
         }
         // Every genuine Cursor hook payload carries conversation_id.
         AgentKind::Cursor => string_field(input, "conversation_id").is_some(),
+        // The bundled omp extension envelope is Claude-style snake_case and
+        // always carries both fields; anything else did not come from us.
+        AgentKind::Omp => {
+            string_field(input, "hook_event_name").is_some()
+                && string_field(input, "session_id").is_some()
+        }
         _ => true,
     }
 }
@@ -1064,9 +1086,10 @@ mod tests {
         );
         assert_eq!(canonical_event_name("Stop"), Some("Stop"));
         assert_eq!(canonical_event_name("stop"), Some("Stop"));
-        // Kimi Code fires Interrupt instead of Stop on user abort (Esc/Ctrl+C).
-        assert_eq!(canonical_event_name("Interrupt"), Some("Stop"));
-        assert_eq!(canonical_event_name("interrupt"), Some("Stop"));
+        // Kimi Code fires Interrupt on user abort (Esc/Ctrl+C), which ends
+        // the row without looking like a completed reply.
+        assert_eq!(canonical_event_name("Interrupt"), Some("Interrupted"));
+        assert_eq!(canonical_event_name("interrupt"), Some("Interrupted"));
         assert_eq!(canonical_event_name("StopFailure"), Some("StopFailure"));
         assert_eq!(canonical_event_name("stop_failure"), Some("StopFailure"));
         assert_eq!(canonical_event_name("SessionStart"), None);
@@ -1089,7 +1112,7 @@ mod tests {
             canonical_event_name("post_tool_use_failure"),
             Some("PostToolUse")
         );
-        assert_eq!(canonical_event_name("stop_cancelled"), Some("Stop"));
+        assert_eq!(canonical_event_name("stop_cancelled"), Some("Interrupted"));
         assert_eq!(canonical_event_name("SubagentStop"), None);
     }
 
@@ -1106,6 +1129,22 @@ mod tests {
         assert!(!is_cursor_error_stop(
             AgentKind::Claude,
             &serde_json::json!({"status": "error"})
+        ));
+    }
+
+    #[test]
+    fn cursor_aborted_stop_is_interrupted() {
+        assert!(is_cursor_aborted_stop(
+            AgentKind::Cursor,
+            &serde_json::json!({"status": "aborted"})
+        ));
+        assert!(!is_cursor_aborted_stop(
+            AgentKind::Cursor,
+            &serde_json::json!({"status": "completed"})
+        ));
+        assert!(!is_cursor_aborted_stop(
+            AgentKind::Claude,
+            &serde_json::json!({"status": "aborted"})
         ));
     }
 
