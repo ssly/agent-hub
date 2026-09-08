@@ -34,12 +34,9 @@ const SUBAGENT_STOP: &str = "SubagentStop";
 // Grok StopCancelled fires instead of Stop on a declined permission prompt.
 const PERMISSION_REQUEST: &str = "PermissionRequest";
 const PERMISSION_RESULT: &str = "PermissionResult";
-const PERMISSION_DENIED: &str = "PermissionDenied";
-const POST_TOOL_USE: &str = "PostToolUse";
 const NOTIFICATION: &str = "Notification";
 const STOP_CANCELLED: &str = "StopCancelled";
 const CURSOR_BEFORE_SUBMIT_PROMPT: &str = "beforeSubmitPrompt";
-const CURSOR_AFTER_AGENT_RESPONSE: &str = "afterAgentResponse";
 const CURSOR_STOP: &str = "stop";
 // Antigravity's official event set (no UserPromptSubmit): PreInvocation fires
 // before each model call; Stop when the execution loop ends.
@@ -48,27 +45,21 @@ const ANTIGRAVITY_STOP: &str = "Stop";
 /// Top-level named hook entry written into ~/.gemini/config/hooks.json.
 const ANTIGRAVITY_HOOK_NAME: &str = "agent-hub";
 
-/// The managed hook events each agent gets on install. Cursor / Antigravity /
-/// Kiro have no observational "waiting for user confirm" event, so they stay
-/// on turn-boundary hooks only (green/gray, no yellow).
+/// The managed hook events each agent gets on install. Pruned to essential
+/// lifecycle boundaries (start, finish, block/waiting, failure/abort).
 fn managed_events(agent: AgentKind) -> &'static [&'static str] {
     match agent {
-        AgentKind::Codex => &[USER_PROMPT_SUBMIT, STOP, PERMISSION_REQUEST, POST_TOOL_USE],
+        AgentKind::Codex => &[USER_PROMPT_SUBMIT, STOP, PERMISSION_REQUEST],
         AgentKind::Claude => &[
             USER_PROMPT_SUBMIT,
             STOP,
             STOP_FAILURE,
             PERMISSION_REQUEST,
-            PERMISSION_DENIED,
-            POST_TOOL_USE,
         ],
         // Grok's SubagentStart names sub-agent child sessions so capture can
         // drop their events (they would plant permanently-running phantom
-        // rows). Grok sub-agents never fire plain stop, so no marker-based
-        // Stop filtering is needed here, unlike Kimi. Official Grok has no
-        // PermissionRequest; Notification (matcher permission_prompt) is the
-        // wait signal. StopCancelled is Grok's "declined permission / interrupt"
-        // stand-in for Stop.
+        // rows). Notification (matcher permission_prompt) is the wait signal.
+        // StopCancelled is Grok's "declined permission / interrupt" stand-in for Stop.
         AgentKind::Grok => &[
             USER_PROMPT_SUBMIT,
             STOP,
@@ -76,12 +67,10 @@ fn managed_events(agent: AgentKind) -> &'static [&'static str] {
             SUBAGENT_START,
             SUBAGENT_STOP,
             NOTIFICATION,
-            POST_TOOL_USE,
             STOP_CANCELLED,
         ],
         AgentKind::Cursor => &[
             CURSOR_BEFORE_SUBMIT_PROMPT,
-            CURSOR_AFTER_AGENT_RESPONSE,
             CURSOR_STOP,
         ],
         AgentKind::Kimi => &[
@@ -94,29 +83,21 @@ fn managed_events(agent: AgentKind) -> &'static [&'static str] {
             PERMISSION_REQUEST,
             PERMISSION_RESULT,
         ],
-        // Qwen Code is structurally identical to Claude Code (snake_case
-        // payloads, matcher groups, no trust gate). Official semantics: Stop
-        // fires for the main turn only, sub-agents end via SubagentStop — no
-        // marker filtering needed, so SubagentStart/SubagentStop stay
-        // unregistered, exactly like Claude Code.
+        // Qwen Code is structurally identical to Claude Code.
         AgentKind::Qwen => &[
             USER_PROMPT_SUBMIT,
             STOP,
             STOP_FAILURE,
             PERMISSION_REQUEST,
-            PERMISSION_DENIED,
-            POST_TOOL_USE,
         ],
         // ZCode snapshots hook config at session start; its managed events
-        // take no matcher. Official set includes PermissionRequest + PostToolUse.
-        AgentKind::ZCode => &[USER_PROMPT_SUBMIT, STOP, PERMISSION_REQUEST, POST_TOOL_USE],
+        // take no matcher.
+        AgentKind::ZCode => &[USER_PROMPT_SUBMIT, STOP, PERMISSION_REQUEST],
         AgentKind::Workbuddy => &[
             USER_PROMPT_SUBMIT,
             STOP,
             STOP_FAILURE,
             PERMISSION_REQUEST,
-            PERMISSION_DENIED,
-            POST_TOOL_USE,
         ],
         AgentKind::Antigravity => &[ANTIGRAVITY_PRE_INVOCATION, ANTIGRAVITY_STOP],
         // Kiro: UserPromptSubmit + Stop. Install writes BOTH:
@@ -724,12 +705,26 @@ fn is_managed_handler(handler: &Value, arg: &str) -> bool {
             .is_some_and(|command| command.split_whitespace().any(|part| part == arg))
 }
 
+pub(crate) fn normalize_executable_path(path: &str) -> String {
+    let lower = path.to_ascii_lowercase();
+    if let Some(pos) = lower.find("/agent hub.app/") {
+        let mut normalized = String::with_capacity(path.len());
+        normalized.push_str(&path[..pos]);
+        normalized.push_str("/Agent Hub.app/");
+        normalized.push_str(&path[pos + "/agent hub.app/".len()..]);
+        normalized
+    } else {
+        path.to_string()
+    }
+}
+
 /// The bare Agent Hub executable path. ZCode's `process` hook executor takes
 /// the binary path and an args array instead of one shell string.
 fn expected_executable() -> Result<String, String> {
     let executable = std::env::current_exe()
         .map_err(|error| format!("unable to locate Agent Hub executable: {error}"))?;
-    Ok(executable.to_string_lossy().into_owned())
+    let path = executable.to_string_lossy().into_owned();
+    Ok(normalize_executable_path(&path))
 }
 
 /// Windows: write/update a small `.cmd` shim that invokes the real GUI binary.
@@ -2124,7 +2119,7 @@ mod tests {
         .unwrap();
         let root: Value = serde_json::from_str(&after).unwrap();
         assert_eq!(root["custom"], "keep-me");
-        assert_eq!(managed_command_count(&root, CODEX_HOOK_ARG), 4);
+        assert_eq!(managed_command_count(&root, CODEX_HOOK_ARG), 3);
         assert!(after.contains("existing-command"));
     }
 
@@ -2184,7 +2179,7 @@ mod tests {
         let root: Value = serde_json::from_str(&after).unwrap();
         assert_eq!(root["model"], "claude-sonnet-5");
         assert!(root.get("permissions").is_some());
-        assert_eq!(managed_command_count(&root, CLAUDE_HOOK_ARG), 6);
+        assert_eq!(managed_command_count(&root, CLAUDE_HOOK_ARG), 4);
         assert!(after.contains("StopFailure"));
         // A Codex handler in the same file is not managed by the Claude
         // target and survives install/uninstall cycles.
@@ -2236,8 +2231,8 @@ mod tests {
         let root: Value = serde_json::from_str(&after).unwrap();
         assert_eq!(root["model"], "qwen3-coder-plus");
         assert!(root.get("mcpServers").is_some());
-        // Six managed events: turn boundaries + permission wait/resume.
-        assert_eq!(managed_command_count(&root, QWEN_HOOK_ARG), 6);
+        // Four managed events: turn boundaries + failure + permission wait.
+        assert_eq!(managed_command_count(&root, QWEN_HOOK_ARG), 4);
         assert!(managed_commands_for(&root, USER_PROMPT_SUBMIT, QWEN_HOOK_ARG).len() == 1);
         assert!(managed_commands_for(&root, STOP, QWEN_HOOK_ARG).len() == 1);
         assert!(managed_commands_for(&root, STOP_FAILURE, QWEN_HOOK_ARG).len() == 1);
@@ -2282,13 +2277,12 @@ mod tests {
         )
         .unwrap();
         let root: Value = serde_json::from_str(&after).unwrap();
-        assert_eq!(managed_command_count(&root, GROK_HOOK_ARG), 8);
+        assert_eq!(managed_command_count(&root, GROK_HOOK_ARG), 7);
         let groups = root["hooks"][NOTIFICATION]
             .as_array()
             .expect("Notification");
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0]["matcher"], "permission_prompt");
-        assert!(managed_commands_for(&root, POST_TOOL_USE, GROK_HOOK_ARG).len() == 1);
         assert!(managed_commands_for(&root, STOP_CANCELLED, GROK_HOOK_ARG).len() == 1);
     }
 
@@ -2308,13 +2302,10 @@ mod tests {
         let installed = cursor_render_after(HookAction::Install, path, command, before).unwrap();
         let root: Value = serde_json::from_str(&installed).unwrap();
         let managed = cursor_managed_entries(&root);
-        assert_eq!(managed.len(), 3);
+        assert_eq!(managed.len(), 2);
         assert!(managed
             .iter()
             .any(|(event, _)| event == CURSOR_BEFORE_SUBMIT_PROMPT));
-        assert!(managed
-            .iter()
-            .any(|(event, _)| event == CURSOR_AFTER_AGENT_RESPONSE));
         assert!(managed.iter().any(|(event, _)| event == CURSOR_STOP));
         assert!(installed.contains("existing-command"));
         assert!(installed.contains("notify-send done"));
@@ -2588,11 +2579,10 @@ mod tests {
         let root: Value = serde_json::from_str(&after).unwrap();
         assert_eq!(root["hooks"]["enabled"], json!(true));
         let managed = zcode_managed_entries(&root);
-        assert_eq!(managed.len(), 4);
+        assert_eq!(managed.len(), 3);
         assert!(managed.iter().any(|(event, _)| event == USER_PROMPT_SUBMIT));
         assert!(managed.iter().any(|(event, _)| event == STOP));
         assert!(managed.iter().any(|(event, _)| event == PERMISSION_REQUEST));
-        assert!(managed.iter().any(|(event, _)| event == POST_TOOL_USE));
         assert!(managed
             .iter()
             .all(|(_, cmd)| cmd == "/Applications/Agent Hub.app/Contents/MacOS/agent-hub"));
@@ -2625,7 +2615,7 @@ mod tests {
         assert_eq!(root["custom"], "keep-me");
         // Installing flips the master switch on — hooks never run otherwise.
         assert_eq!(root["hooks"]["enabled"], json!(true));
-        assert_eq!(zcode_managed_entries(&root).len(), 4);
+        assert_eq!(zcode_managed_entries(&root).len(), 3);
         assert!(after.contains("other-tool"));
         assert!(after.contains("SessionStart"));
     }
@@ -2931,5 +2921,25 @@ enabled = false
             "agent-hub --agent-hub-qwen-hook",
             10_000
         ));
+    }
+
+    #[test]
+    fn normalize_executable_path_standardizes_casing() {
+        assert_eq!(
+            normalize_executable_path("/Applications/AGENT HUB.app/Contents/MacOS/agent-hub"),
+            "/Applications/Agent Hub.app/Contents/MacOS/agent-hub"
+        );
+        assert_eq!(
+            normalize_executable_path("/Applications/agent hub.app/Contents/MacOS/agent-hub"),
+            "/Applications/Agent Hub.app/Contents/MacOS/agent-hub"
+        );
+        assert_eq!(
+            normalize_executable_path("/Applications/Agent Hub.app/Contents/MacOS/agent-hub"),
+            "/Applications/Agent Hub.app/Contents/MacOS/agent-hub"
+        );
+        assert_eq!(
+            normalize_executable_path("/usr/local/bin/agent-hub"),
+            "/usr/local/bin/agent-hub"
+        );
     }
 }

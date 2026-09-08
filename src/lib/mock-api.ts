@@ -4,6 +4,8 @@
  * developed and tested in a regular browser via `npm run dev:web`.
  */
 
+import type { SupportedAgentInfo } from './api'
+
 // ---- Fake data generators ----
 
 const PLATFORMS = [
@@ -552,7 +554,7 @@ export async function getGrokUsage(force = false) {
   return structuredClone(payload)
 }
 export async function getUsageProviderAvailability() {
-  return { codex: true, grok_build: true, kimi_code: true, claude_code: true }
+  return { codex: true, grok_build: true, kimi_code: true, claude_code: true, kiro: true }
 }
 export async function resizeUsageTray() {}
 export async function closeUsageTray() {}
@@ -566,6 +568,7 @@ export async function openUsageTray() {}
 // Shared usage-monitor settings mock (backend file in the real app).
 const mockUsageMonitorSettings = {
   refreshMinutes: 5,
+  monitorLimit: 6,
   selectedAgent: null as string | null,
   listening: {} as Record<string, boolean>,
 }
@@ -576,6 +579,10 @@ export async function setUsageRefreshMinutes(minutes: number) {
   mockUsageMonitorSettings.refreshMinutes = Math.min(10, Math.max(1, Math.round(minutes)))
   return structuredClone(mockUsageMonitorSettings)
 }
+export async function setUsageMonitorLimit(limit: number) {
+  mockUsageMonitorSettings.monitorLimit = Math.min(12, Math.max(6, Math.round(limit)))
+  return structuredClone(mockUsageMonitorSettings)
+}
 export async function setUsageSelectedAgent(agent: string | null) {
   mockUsageMonitorSettings.selectedAgent = agent
   return structuredClone(mockUsageMonitorSettings)
@@ -583,6 +590,32 @@ export async function setUsageSelectedAgent(agent: string | null) {
 export async function setUsageAgentListening(agent: string, enabled: boolean) {
   mockUsageMonitorSettings.listening[agent] = enabled
   return structuredClone(mockUsageMonitorSettings)
+}
+
+const mockSupportedAgents: SupportedAgentInfo[] = [
+  { id: 'codex', display_name: 'Codex', user_dir_display: '~/.codex', user_dir_resolved: '/Users/mock/.codex', exists: true, enabled: true },
+  { id: 'claude-code', display_name: 'Claude Code', user_dir_display: '~/.claude', user_dir_resolved: '/Users/mock/.claude', exists: true, enabled: true },
+  { id: 'cursor', display_name: 'Cursor', user_dir_display: '~/.cursor', user_dir_resolved: '/Users/mock/.cursor', exists: false, enabled: false },
+  { id: 'antigravity', display_name: 'Antigravity', user_dir_display: '~/.gemini', user_dir_resolved: '/Users/mock/.gemini', exists: true, enabled: true },
+  { id: 'grok-build', display_name: 'Grok Build', user_dir_display: '~/.grok', user_dir_resolved: '/Users/mock/.grok', exists: false, enabled: false },
+  { id: 'kimi-code', display_name: 'Kimi Code', user_dir_display: '~/.kimi-code', user_dir_resolved: '/Users/mock/.kimi-code', exists: true, enabled: true },
+  { id: 'qwen', display_name: 'Qwen Code', user_dir_display: '~/.qwen', user_dir_resolved: '/Users/mock/.qwen', exists: false, enabled: false },
+  { id: 'zcode', display_name: 'ZCode', user_dir_display: '~/.zcode', user_dir_resolved: '/Users/mock/.zcode', exists: false, enabled: false },
+  { id: 'workbuddy', display_name: 'WorkBuddy', user_dir_display: '~/.workbuddy', user_dir_resolved: '/Users/mock/.workbuddy', exists: false, enabled: false },
+  { id: 'kiro', display_name: 'Kiro', user_dir_display: '~/.kiro', user_dir_resolved: '/Users/mock/.kiro', exists: false, enabled: false },
+  { id: 'dsh', display_name: 'DeepSeek Harness', user_dir_display: '~/.dsh', user_dir_resolved: '/Users/mock/.dsh', exists: true, enabled: true },
+  { id: 'omp', display_name: 'Oh My Pi', user_dir_display: '~/.omp', user_dir_resolved: '/Users/mock/.omp', exists: false, enabled: false },
+]
+
+export async function getSupportedAgents(): Promise<SupportedAgentInfo[]> {
+  return structuredClone(mockSupportedAgents)
+}
+
+export async function setEnabledAgents(agentIds: string[]): Promise<SupportedAgentInfo[]> {
+  for (const agent of mockSupportedAgents) {
+    agent.enabled = agentIds.includes(agent.id)
+  }
+  return structuredClone(mockSupportedAgents)
 }
 
 let mockClaudeUsage: { at: number; data: any } | null = null
@@ -675,6 +708,35 @@ export async function getDeepseekUsage(force = false) {
     fetched_at: Math.floor(Date.now() / 1000),
   }
   mockDeepseekUsage = { at: Date.now(), data: payload }
+  return structuredClone(payload)
+}
+
+let mockKiroUsage: { at: number; data: any } | null = null
+export async function getKiroUsage(force = false) {
+  if (!force && mockCacheFresh(mockKiroUsage)) {
+    return structuredClone(mockKiroUsage!.data)
+  }
+  await delay()
+  const now = Math.floor(Date.now() / 1000)
+  const windowMonth = {
+    used_percent: 20,
+    remaining_percent: 80,
+    reset_after_seconds: 86_400 * 20,
+    reset_at: now + 86_400 * 20,
+    window_seconds: 2_592_000,
+  }
+  const payload = {
+    account_name: 'kiro-user',
+    plan_type: 'KIRO FREE',
+    usage_window: windowMonth,
+    usage_windows: [windowMonth],
+    credits_used: 10,
+    credits_limit: 50,
+    free_trial: null,
+    add_on_credits: [],
+    fetched_at: now,
+  }
+  mockKiroUsage = { at: Date.now(), data: payload }
   return structuredClone(payload)
 }
 

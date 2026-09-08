@@ -201,6 +201,29 @@ pub fn list_platforms(state: tauri::State<'_, SafeState>) -> Vec<PlatformView> {
 }
 
 #[tauri::command]
+pub fn get_supported_agents(
+    state: tauri::State<'_, SafeState>,
+) -> Vec<crate::platform::SupportedAgentInfo> {
+    let s = state.lock().unwrap();
+    crate::platform::get_supported_agents(&s.config)
+}
+
+#[tauri::command]
+pub fn set_enabled_agents(
+    state: tauri::State<'_, SafeState>,
+    agent_ids: Vec<String>,
+) -> Result<Vec<crate::platform::SupportedAgentInfo>, CommandError> {
+    let mut s = state.lock().unwrap();
+    s.config.general.enabled_platforms = Some(agent_ids);
+    s.config
+        .save()
+        .map_err(|e| CommandError::SyncError(format!("Failed to save config: {e}")))?;
+    s.platforms = crate::platform::discover_platforms(&s.config);
+    crate::platform::ensure_all_skills_loaded(&mut s.platforms);
+    Ok(crate::platform::get_supported_agents(&s.config))
+}
+
+#[tauri::command]
 pub fn get_platform_skills(
     state: tauri::State<'_, SafeState>,
     platform_id: String,
@@ -517,6 +540,15 @@ pub fn set_locale(
     };
     // Keep the native tray right-click menu in sync with the UI language.
     crate::tray::apply_locale(&app, &tag);
+    // Keep the main window title in sync with the UI language.
+    if let Some(main_win) = app.get_webview_window("main") {
+        let title = if tag.to_ascii_lowercase().starts_with("zh") {
+            "智能体中枢"
+        } else {
+            "Agent Hub"
+        };
+        let _ = main_win.set_title(title);
+    }
     // The tray popup is a separate webview with its own vue-i18n instance;
     // broadcast so it re-renders in the new language immediately.
     {
@@ -645,9 +677,23 @@ pub fn read_skill_file(
 
 #[tauri::command(async)]
 pub fn list_session_platforms(
+    state: tauri::State<'_, SafeState>,
     path_filter: Option<String>,
 ) -> Result<Vec<session::SessionPlatform>, CommandError> {
-    session::list_session_platforms(path_filter.as_deref()).map_err(CommandError::SyncError)
+    let s = state.lock().unwrap();
+    let platforms = session::list_session_platforms(path_filter.as_deref()).map_err(CommandError::SyncError)?;
+    if let Some(ref enabled) = s.config.general.enabled_platforms {
+        Ok(platforms
+            .into_iter()
+            .filter(|p| {
+                enabled.contains(&p.id)
+                    || (p.id == "grok" && enabled.iter().any(|e| e == "grok" || e == "grok-build"))
+                    || (p.id == "kimi" && enabled.iter().any(|e| e == "kimi" || e == "kimi-code"))
+            })
+            .collect())
+    } else {
+        Ok(platforms)
+    }
 }
 
 #[tauri::command(async)]
@@ -837,13 +883,24 @@ fn server_summary(config: &serde_json::Value) -> String {
 }
 
 #[tauri::command]
-pub fn list_mcp_platforms(workspace_dir: Option<String>) -> Vec<McpPlatformView> {
+pub fn list_mcp_platforms(
+    state: tauri::State<'_, SafeState>,
+    workspace_dir: Option<String>,
+) -> Vec<McpPlatformView> {
+    let s = state.lock().unwrap();
     let workspace = resolve_workspace_dir(workspace_dir.as_deref())
         .ok()
         .flatten();
     crate::mcp::builtin_mcp_platforms()
         .into_iter()
-        .filter(|def| workspace.is_some() || def.presence_path.exists())
+        .filter(|def| {
+            if let Some(ref enabled) = s.config.general.enabled_platforms {
+                if !enabled.contains(&def.id) {
+                    return false;
+                }
+            }
+            workspace.is_some() || def.presence_path.exists()
+        })
         .map(|global_def| {
             let def = workspace
                 .as_deref()
@@ -2150,10 +2207,23 @@ pub fn stop_dsh_web() -> Result<crate::session_monitor::DshWebStatus, CommandErr
 /// exists on this machine (same semantics as the Plugins tab sidebar filter;
 /// see `session_monitor::agent_available`).
 #[tauri::command]
-pub fn list_available_monitor_agents() -> Vec<String> {
+pub fn list_available_monitor_agents(state: tauri::State<'_, SafeState>) -> Vec<String> {
+    let s = state.lock().unwrap();
     AgentKind::ALL
         .into_iter()
-        .filter(|agent| crate::session_monitor::agent_available(*agent))
+        .filter(|agent| {
+            if let Some(ref enabled) = s.config.general.enabled_platforms {
+                let agent_str = agent.as_str();
+                let matches = enabled.contains(&agent_str.to_string())
+                    || (agent_str == "claude" && enabled.iter().any(|e| e == "claude" || e == "claude-code"))
+                    || (agent_str == "grok" && enabled.iter().any(|e| e == "grok" || e == "grok-build"))
+                    || (agent_str == "kimi" && enabled.iter().any(|e| e == "kimi" || e == "kimi-code"));
+                if !matches {
+                    return false;
+                }
+            }
+            crate::session_monitor::agent_available(*agent)
+        })
         .map(|agent| agent.as_str().to_string())
         .collect()
 }

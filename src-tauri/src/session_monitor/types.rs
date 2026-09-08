@@ -104,10 +104,9 @@ pub enum SessionSource {
 #[serde(rename_all = "lowercase")]
 pub enum RuntimeStatus {
     Running,
-    /// Turn is blocked on a user permission/approval prompt.
+    /// Turn is blocked on a user permission/approval prompt, or interrupted/failed.
+    #[serde(alias = "failed")]
     Waiting,
-    /// Turn died on an API/tool error (`StopFailure`, Cursor `stop` + `error`).
-    Failed,
     Ended,
 }
 

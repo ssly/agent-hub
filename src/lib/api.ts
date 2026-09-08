@@ -487,20 +487,51 @@ export const getDeepseekSettings = () =>
 export const getDeepseekUsage = (force = false) =>
   invoke<DeepSeekUsage>('get_deepseek_usage', { force })
 
+// Kiro / Kiro CLI plan limits and credit usage via official control plane API.
+export interface KiroFreeTrial {
+  current_usage: number
+  usage_limit: number
+  status: string
+  expiry: number | null
+}
+
+export interface KiroAddOnCredit {
+  used: number
+  total: number
+  expires_at: number | null
+  is_active: boolean
+}
+
+export interface KiroUsage {
+  account_name: string | null
+  plan_type: string
+  usage_window: UsageWindow
+  usage_windows: UsageWindow[]
+  credits_used: number
+  credits_limit: number
+  free_trial: KiroFreeTrial | null
+  add_on_credits: KiroAddOnCredit[]
+  fetched_at: number
+}
+export const getKiroUsage = (force = false) =>
+  invoke<KiroUsage>('get_kiro_usage', { force })
+
 export interface UsageProviderAvailability {
   codex: boolean
   grok_build: boolean
   kimi_code: boolean
   claude_code: boolean
+  kiro?: boolean
 }
 export const getUsageProviderAvailability = () =>
   invoke<UsageProviderAvailability>('get_usage_provider_availability')
 
 // Shared usage-monitor settings (backend file ~/.agent-hub/usage-monitor.json,
 // both windows sync via `usage-monitor-settings-changed`). refreshMinutes is
-// clamped to 1–10; a missing `listening` key means the agent is paused.
+// clamped to 1–10, monitorLimit is clamped to 6–12; a missing `listening` key means the agent is paused.
 export interface UsageMonitorSettings {
   refreshMinutes: number
+  monitorLimit: number
   selectedAgent: string | null
   listening: Record<string, boolean>
 }
@@ -508,10 +539,27 @@ export const getUsageMonitorSettings = () =>
   invoke<UsageMonitorSettings>('get_usage_monitor_settings')
 export const setUsageRefreshMinutes = (minutes: number) =>
   invoke<UsageMonitorSettings>('set_usage_refresh_minutes', { minutes })
+export const setUsageMonitorLimit = (limit: number) =>
+  invoke<UsageMonitorSettings>('set_usage_monitor_limit', { limit })
 export const setUsageSelectedAgent = (agent: string | null) =>
   invoke<UsageMonitorSettings>('set_usage_selected_agent', { agent })
 export const setUsageAgentListening = (agent: string, enabled: boolean) =>
   invoke<UsageMonitorSettings>('set_usage_agent_listening', { agent, enabled })
+
+export interface SupportedAgentInfo {
+  id: string
+  display_name: string
+  user_dir_display: string
+  user_dir_resolved: string
+  exists: boolean
+  enabled: boolean
+}
+
+export const getSupportedAgents = () =>
+  invoke<SupportedAgentInfo[]>('get_supported_agents')
+
+export const setEnabledAgents = (agentIds: string[]) =>
+  invoke<SupportedAgentInfo[]>('set_enabled_agents', { agentIds })
 
 // App
 export const getAppVersion = () => invoke<string>('get_app_version')

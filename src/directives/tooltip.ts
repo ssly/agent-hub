@@ -15,12 +15,15 @@ import type { Directive } from 'vue'
  * invert with the theme via --ink / --canvas (styles in theme.css § Tooltip).
  */
 
+export const DEFAULT_TOOLTIP_MAX_LINES = 12
+
 export type TooltipPlacement = 'bottom' | 'left' | 'right' | 'top'
 export type TooltipValue =
   | string
   | {
       text?: string
-      clamp?: boolean
+      clamp?: boolean | number
+      maxLines?: number
       placement?: TooltipPlacement
     }
   | undefined
@@ -49,26 +52,44 @@ function usedLineHeight(style: CSSStyleDeclaration): number {
   return (Number.isFinite(font) && font > 0 ? font : 12) * 1.45
 }
 
-function clampToThreeLines(tip: HTMLElement, text: string) {
+function clampToLines(tip: HTMLElement, text: string, maxLines: number) {
+  if (maxLines <= 0) {
+    tip.textContent = text
+    return
+  }
   const style = getComputedStyle(tip)
-  const limit =
-    usedLineHeight(style) * 3 +
-    (parseFloat(style.paddingTop) || 0) +
-    (parseFloat(style.paddingBottom) || 0)
-  tip.textContent = text
+  const lineHeight = usedLineHeight(style)
+  const paddingTop = parseFloat(style.paddingTop) || 0
+  const paddingBottom = parseFloat(style.paddingBottom) || 0
+  const limit = lineHeight * maxLines + paddingTop + paddingBottom
+
+  const normalised = text.replace(/\r\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
+  tip.textContent = normalised
   if (tip.scrollHeight <= limit + 1) return
-  // Binary search the longest prefix that, with an ellipsis appended, still
-  // fits three lines. Re-apply the winning slice after the loop — the last
-  // probe may have been a too-long candidate.
+
   let lo = 0
-  let hi = text.length
+  let hi = normalised.length
   while (lo < hi) {
     const mid = (lo + hi + 1) >> 1
-    tip.textContent = `${text.slice(0, mid)}…`
-    if (tip.scrollHeight <= limit + 1) lo = mid
-    else hi = mid - 1
+    let cut = mid
+    if (cut > 0 && cut < normalised.length) {
+      const code = normalised.charCodeAt(cut - 1)
+      if (code >= 0xd800 && code <= 0xdbff) cut--
+    }
+    tip.textContent = `${normalised.slice(0, cut).trimEnd()}…`
+    if (tip.scrollHeight <= limit + 1) {
+      lo = mid
+    } else {
+      hi = mid - 1
+    }
   }
-  tip.textContent = lo > 0 ? `${text.slice(0, lo)}…` : '…'
+
+  let finalCut = lo
+  if (finalCut > 0 && finalCut < normalised.length) {
+    const code = normalised.charCodeAt(finalCut - 1)
+    if (code >= 0xd800 && code <= 0xdbff) finalCut--
+  }
+  tip.textContent = finalCut > 0 ? `${normalised.slice(0, finalCut).trimEnd()}…` : '…'
 }
 
 function capWidth(margin: number): number {
@@ -81,29 +102,29 @@ function show(
   el: HTMLElement,
   text: string,
   placement: TooltipPlacement,
-  clamp: boolean,
+  maxLines: number,
 ) {
   if (!text) return
   const tip = ensureTip()
-  // Clamped tips wrap as normal text (white-space: normal collapses the
-  // newlines); the 3-line cut itself is JS because CSS line-clamp paints a
-  // ghost 4th line in WebKit/Blink.
-  const content = clamp ? text.replace(/\s*\n+\s*/g, ' ').trim() : text
-  tip.textContent = content
-  tip.classList.toggle('is-clamped', clamp)
+  const isClamped = maxLines > 0
+  tip.classList.toggle('is-clamped', isClamped)
+  if (isClamped) {
+    tip.style.setProperty('--tooltip-max-lines', String(maxLines))
+  } else {
+    tip.style.removeProperty('--tooltip-max-lines')
+  }
   tip.classList.add('is-visible')
 
   const margin = 16
 
-  // Reset geometry before measuring: shrink-to-fit would otherwise size the
-  // box against the previous show's leftover position. Cap width first so a
-  // clamped tip is measured (and cut) at the width it will actually use —
-  // measuring at full window width then shrinking later unwraps 3 lines into
-  // a tall stack of path fragments.
   tip.style.left = '0px'
   tip.style.top = '0px'
   tip.style.maxWidth = `${capWidth(margin)}px`
-  if (clamp) clampToThreeLines(tip, content)
+  if (isClamped) {
+    clampToLines(tip, text, maxLines)
+  } else {
+    tip.textContent = text
+  }
 
   const rect = el.getBoundingClientRect()
   const tipRect = tip.getBoundingClientRect()
@@ -132,7 +153,9 @@ function show(
     const space = Math.max(leftSpace, rightSpace)
     if (space < 96) return false
     tip.style.maxWidth = `${space}px`
-    if (clamp) clampToThreeLines(tip, content)
+    if (isClamped) {
+      clampToLines(tip, text, maxLines)
+    }
     const shrunk = tip.getBoundingClientRect()
     placeAt(leftSpace >= rightSpace ? rect.left - shrunk.width - 6 : rect.right + 6, shrunk.height)
     return true
@@ -170,7 +193,7 @@ function show(
 
 type TooltipElement = HTMLElement & {
   __ahTooltip__?: { onEnter: () => void; onLeave: () => void }
-  __ahTooltipConfig__?: { text: string; placement: TooltipPlacement; clamp: boolean }
+  __ahTooltipConfig__?: { text: string; placement: TooltipPlacement; maxLines: number }
 }
 
 function parsePlacement(arg: string | undefined): TooltipPlacement {
@@ -182,18 +205,28 @@ function resolveBinding(
   value: TooltipValue,
   arg: string | undefined,
   clampModifier: boolean,
-): { text: string; placement: TooltipPlacement; clamp: boolean } {
+): { text: string; placement: TooltipPlacement; maxLines: number } {
   if (value && typeof value === 'object') {
+    let maxLines = DEFAULT_TOOLTIP_MAX_LINES
+    if (typeof value.maxLines === 'number') {
+      maxLines = Math.max(0, value.maxLines)
+    } else if (typeof value.clamp === 'number') {
+      maxLines = Math.max(0, value.clamp)
+    } else if (value.clamp === false) {
+      maxLines = 0
+    } else if (value.clamp === true || clampModifier) {
+      maxLines = DEFAULT_TOOLTIP_MAX_LINES
+    }
     return {
       text: value.text ?? '',
       placement: value.placement ?? parsePlacement(arg),
-      clamp: value.clamp === true || clampModifier,
+      maxLines,
     }
   }
   return {
     text: value ?? '',
     placement: parsePlacement(arg),
-    clamp: clampModifier,
+    maxLines: DEFAULT_TOOLTIP_MAX_LINES,
   }
 }
 
@@ -204,7 +237,7 @@ export const vTooltip: Directive<TooltipElement, TooltipValue> = {
       onEnter: () => {
         const cfg = el.__ahTooltipConfig__
         if (!cfg) return
-        show(el, cfg.text, cfg.placement, cfg.clamp)
+        show(el, cfg.text, cfg.placement, cfg.maxLines)
       },
       onLeave: hide,
     }

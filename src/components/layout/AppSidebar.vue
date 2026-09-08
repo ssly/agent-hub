@@ -6,12 +6,18 @@ import { useAppStore } from '@/stores/app'
 import { useSkillsStore } from '@/stores/skills'
 import { usePluginsStore } from '@/stores/plugins'
 import { useSessionsStore } from '@/stores/sessions'
-import { useSessionMonitorStore, type MonitorAgent, type MonitorTab } from '@/stores/session-monitor'
+import {
+  useSessionMonitorStore,
+  monitorStatusRank,
+  type MonitorAgent,
+  type MonitorTab,
+  type SessionState,
+} from '@/stores/session-monitor'
 import { useSwitchStore } from '@/stores/switch'
 import { useToast } from '@/composables/useToast'
 import { openUsageTray, pickPluginDirectory } from '@/lib/api'
 import AgentIcon from '@/components/agents/AgentIcon.vue'
-import AppModal from '@/components/ui/AppModal.vue'
+import SettingsModal from '@/components/settings/SettingsModal.vue'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -23,28 +29,24 @@ const switchStore = useSwitchStore()
 const { showToast } = useToast()
 const isPickingDirectory = ref(false)
 
-// Usage settings modal (auto-refresh interval slider, 1–10 min). The value is
-// shared with the tray popup through backend in-memory settings; the
-// `usage-monitor-settings-changed` listener in the switch store keeps this
-// modal in sync when the tray changes it.
-const usageSettingsOpen = ref(false)
-const refreshMinutesDraft = ref<number | null>(null)
+const settingsModalOpen = ref(false)
 
-async function openUsageSettings() {
-  await switchStore.loadMonitorSettings()
-  refreshMinutesDraft.value = null
-  usageSettingsOpen.value = true
+function openSettings() {
+  settingsModalOpen.value = true
 }
 
-function onRefreshMinutesInput(event: Event) {
-  const value = Number((event.target as HTMLInputElement).value)
-  if (Number.isFinite(value)) refreshMinutesDraft.value = Math.min(10, Math.max(1, Math.round(value)))
-}
-
-async function persistRefreshMinutes() {
-  if (refreshMinutesDraft.value == null) return
-  await switchStore.updateRefreshMinutes(refreshMinutesDraft.value)
-  refreshMinutesDraft.value = null
+async function handleSettingsChange() {
+  await handleRefresh()
+  if (appStore.currentTab === 'plugins') {
+    await skillsStore.refreshPlatforms()
+  } else if (appStore.currentTab === 'sessions') {
+    await sessionsStore.refreshPlatforms(true)
+  } else if (appStore.currentTab === 'monitor') {
+    await sessionMonitorStore.loadAvailability(true)
+    await sessionMonitorStore.refresh()
+  } else if (appStore.currentTab === 'accounts') {
+    if (switchStore.selectedAgent) await switchStore.loadSelectedAgent()
+  }
 }
 
 const workspaceName = computed(() => {
@@ -158,6 +160,7 @@ function getSidebarItems() {
     { id: 'claude-code', display_name: 'Claude Code' },
     { id: 'grok-build', display_name: 'Grok Build' },
     { id: 'kimi-code', display_name: 'Kimi Code' },
+    { id: 'kiro', display_name: 'Kiro' },
     { id: 'deepseek', display_name: 'DeepSeek Harness' },
   ]
   return pluginsStore.platforms
@@ -181,9 +184,54 @@ function monitorUnreadCount(agent: string) {
     : sessionMonitorStore.unreadForAgent(agent as MonitorAgent)
 }
 
-function monitorUnreadLabel(agent: string) {
-  const count = monitorUnreadCount(agent)
-  return count > 9 ? '…' : String(count)
+function getAgentSessions(agentId: string): SessionState[] {
+  if (agentId === 'all') {
+    return sessionMonitorStore.displaySessions
+  }
+  return sessionMonitorStore.snapshots[agentId as MonitorAgent]?.sessions ?? []
+}
+
+function getAgentLatestSession(agentId: string): SessionState | undefined {
+  const sessions = getAgentSessions(agentId)
+  if (sessions.length === 0) return undefined
+  if (agentId === 'all') {
+    return sessionMonitorStore.displaySessions[0]
+  }
+  return [...sessions].sort((a, b) => {
+    const rank = monitorStatusRank(a.status, a.unread) - monitorStatusRank(b.status, b.unread)
+    if (rank !== 0) return rank
+    return b.updatedAt - a.updatedAt
+  })[0]
+}
+
+function getAgentLatestStatus(agentId: string): 'running' | 'waiting' | 'unread' | 'ended' | null {
+  const session = getAgentLatestSession(agentId)
+  if (!session) return null
+  if (session.status === 'running') return 'running'
+  if (session.status === 'waiting') return 'waiting'
+  if (session.status === 'ended' && session.unread) return 'unread'
+  return 'ended'
+}
+
+function getAgentLatestTooltip(agentId: string): string {
+  const session = getAgentLatestSession(agentId)
+  if (!session) return ''
+  const status = getAgentLatestStatus(agentId)
+  let statusText = ''
+  if (status === 'running') {
+    statusText = t('session_monitor.status_running')
+  } else if (status === 'waiting') {
+    statusText = t('session_monitor.status_waiting')
+  } else if (status === 'unread') {
+    const unread = monitorUnreadCount(agentId)
+    statusText = unread > 1
+      ? `${t('session_monitor.status_unread')} (${unread})`
+      : t('session_monitor.status_unread')
+  } else {
+    statusText = t('session_monitor.status_ended')
+  }
+  const prompt = session.userPrompt ? ` · ${session.userPrompt}` : ''
+  return `${statusText}${prompt}`
 }
 
 async function handleItemClick(id: string) {
@@ -328,10 +376,12 @@ function handleSessionSearch(e: Event) {
               {{ item.session_count }}
             </span>
             <span
-              v-else-if="appStore.currentTab === 'monitor' && monitorUnreadCount(item.id) > 0"
-              class="ah-platform-item__unread"
-              :aria-label="t('session_monitor.unread_count', { count: monitorUnreadCount(item.id) })"
-            >{{ monitorUnreadLabel(item.id) }}</span>
+              v-else-if="appStore.currentTab === 'monitor' && getAgentLatestStatus(item.id)"
+              class="ah-platform-item__status-dot"
+              :class="`is-${getAgentLatestStatus(item.id)}`"
+              v-tooltip:right.clamp="getAgentLatestTooltip(item.id)"
+              :aria-label="getAgentLatestTooltip(item.id)"
+            />
           </div>
         </button>
         <p v-if="getSidebarItems().length === 0" class="text-sm p-3" style="color: var(--ink-3)">
@@ -382,7 +432,7 @@ function handleSessionSearch(e: Event) {
           <button
             v-tooltip="t('ui.settings')"
             class="sidebar-footer-btn"
-            @click.stop="openUsageSettings"
+            @click.stop="openSettings"
           >
             <Settings :size="12" />
           </button>
@@ -428,36 +478,12 @@ function handleSessionSearch(e: Event) {
       </div>
     </template>
 
-    <!-- Usage settings: shared auto-refresh interval (1–10 min), synced with
-         the tray popup through the backend settings snapshot. -->
-    <AppModal
-      :show="usageSettingsOpen"
-      :title="t('usage_settings.title')"
-      width-class="w-[22rem]"
-      @close="usageSettingsOpen = false"
-    >
-      <div class="flex flex-col gap-2">
-        <label class="text-xs font-semibold" style="color: var(--ink-2)">
-          {{ t('usage_settings.refresh_interval') }}
-        </label>
-        <div class="flex items-center gap-3">
-          <input
-            type="range"
-            class="usage-settings-slider flex-1"
-            min="1"
-            max="10"
-            step="1"
-            :value="refreshMinutesDraft ?? switchStore.refreshMinutes"
-            :aria-label="t('usage_settings.refresh_interval')"
-            @input="onRefreshMinutesInput"
-            @change="persistRefreshMinutes"
-          >
-          <span class="usage-settings-value">
-            {{ t('usage_settings.minutes', { n: refreshMinutesDraft ?? switchStore.refreshMinutes }) }}
-          </span>
-        </div>
-      </div>
-    </AppModal>
+    <!-- Global Settings modal: Supported agents toggle & Usage auto-refresh interval -->
+    <SettingsModal
+      :show="settingsModalOpen"
+      @close="settingsModalOpen = false"
+      @change="handleSettingsChange"
+    />
   </aside>
 </template>
 
@@ -616,68 +642,27 @@ function handleSessionSearch(e: Event) {
   to { transform: rotate(360deg); }
 }
 
-/* Usage settings modal slider (mirrors the tray popup's slider look). */
-.usage-settings-slider {
-  -webkit-appearance: none;
-  appearance: none;
-  height: 14px;
-  margin: 0;
-  padding: 0;
-  background: transparent;
-  cursor: pointer;
-}
-.usage-settings-slider:focus { outline: none; }
-.usage-settings-slider::-webkit-slider-runnable-track {
-  height: 3px;
+.ah-platform-item__status-dot {
+  flex: 0 0 7px;
+  width: 7px;
+  height: 7px;
   border-radius: 999px;
-  background: var(--border);
+  margin-right: 3px;
+  transition: background-color var(--dur-fast) var(--ease-soft), box-shadow var(--dur-fast) var(--ease-soft);
 }
-.usage-settings-slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 12px;
-  height: 12px;
-  margin-top: -4.5px;
-  border: 0;
-  border-radius: 50%;
+.ah-platform-item__status-dot.is-running {
+  background: var(--signal-green);
+  box-shadow: 0 0 5px color-mix(in srgb, var(--signal-green) 55%, transparent);
+}
+.ah-platform-item__status-dot.is-waiting {
+  background: var(--signal-yellow);
+  box-shadow: 0 0 5px color-mix(in srgb, var(--signal-yellow) 55%, transparent);
+}
+.ah-platform-item__status-dot.is-unread {
   background: var(--signal-red);
-  cursor: grab;
+  box-shadow: 0 0 5px color-mix(in srgb, var(--signal-red) 55%, transparent);
 }
-.usage-settings-slider::-moz-range-track {
-  height: 3px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--border);
-}
-.usage-settings-slider::-moz-range-thumb {
-  width: 12px;
-  height: 12px;
-  border: 0;
-  border-radius: 50%;
-  background: var(--accent);
-  cursor: grab;
-}
-.usage-settings-value {
-  min-width: 46px;
-  text-align: right;
-  font-size: 12px;
-  color: var(--ink-2);
-  font-variant-numeric: tabular-nums;
-}
-.ah-platform-item__unread {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 18px;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  border-radius: 50%;
-  background: var(--accent);
-  color: var(--on-accent);
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
+.ah-platform-item__status-dot.is-ended {
+  background: var(--ink-4);
 }
 </style>

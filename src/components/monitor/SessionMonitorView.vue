@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Activity, CheckCircle2, CircleStop } from 'lucide-vue-next'
+import { Activity, CheckCircle2, CheckCheck, CircleStop } from 'lucide-vue-next'
 import AppModal from '@/components/ui/AppModal.vue'
 import AppLoading from '@/components/ui/AppLoading.vue'
 import SessionCard from '@/components/sessions/SessionCard.vue'
@@ -18,7 +18,6 @@ import {
   type AgentSessionState,
   type SessionState,
 } from '@/stores/session-monitor'
-import MonitorStatusLights from '@/components/monitor/MonitorStatusLights.vue'
 
 const { t, locale } = useI18n()
 const store = useSessionMonitorStore()
@@ -270,23 +269,25 @@ function monitorSessionKey(session: AgentSessionState) {
   return `${session.agent}-${session.sessionId}`
 }
 
-const hoveredSessionKey = ref<string | null>(null)
-
-function markSessionRead(session: AgentSessionState) {
-  hoveredSessionKey.value = monitorSessionKey(session)
-  void store.markSessionRead(session)
-}
-
-function clearHoveredSession(session: AgentSessionState) {
-  if (hoveredSessionKey.value === monitorSessionKey(session)) {
-    hoveredSessionKey.value = null
+function handleOpenSession(session: AgentSessionState) {
+  if (session.unread) {
+    void store.markSessionRead(session)
+  }
+  if (sessionPlatform(session) !== null) {
+    store.openMessages(session)
   }
 }
 
-watch(() => store.displaySessions, sessions => {
-  const hovered = sessions.find(session => monitorSessionKey(session) === hoveredSessionKey.value)
-  if (hovered?.unread) void store.markSessionRead(hovered)
-})
+function markSessionRead(session: AgentSessionState) {
+  void store.markSessionRead(session)
+}
+
+const hasUnreadSessions = computed(() => store.displaySessions.some(session => session.unread))
+
+async function handleMarkAllRead() {
+  await store.markAllRead(store.activeAgent)
+  showToast(t('session_monitor.all_read_success'), 'success')
+}
 
 function sourceLabel(session: SessionState): string {
   if (session.source === 'chatgpt') return t('session_monitor.source_chatgpt')
@@ -451,7 +452,6 @@ onUnmounted(() => {
           </div>
         </div>
         <div class="hook-card__meta">
-          <MonitorStatusLights :agent="store.activeAgent as MonitorTab" />
           <span>{{ t('session_monitor.running_summary', { count: runningCount }) }}</span>
           <span>{{ t('session_monitor.total_summary', { count: store.snapshot.sessions.length }) }}</span>
         </div>
@@ -470,9 +470,20 @@ onUnmounted(() => {
 
       <div class="session-list-header">
         <h2>{{ sessionsTitle() }}</h2>
-        <button class="btn btn-secondary btn-sm" :disabled="store.loading" @click="store.refresh()">
-          {{ t('session_monitor.refresh') }}
-        </button>
+        <div class="session-list-header__actions">
+          <button
+            v-if="hasUnreadSessions"
+            class="btn btn-secondary btn-sm"
+            :disabled="store.loading"
+            @click="handleMarkAllRead"
+          >
+            <CheckCheck :size="14" />
+            {{ t('session_monitor.mark_all_read') }}
+          </button>
+          <button class="btn btn-secondary btn-sm" :disabled="store.loading" @click="store.refresh()">
+            {{ t('session_monitor.refresh') }}
+          </button>
+        </div>
       </div>
 
       <div v-if="store.displaySessions.length === 0" class="monitor-empty">
@@ -496,15 +507,14 @@ onUnmounted(() => {
           :title="session.userPrompt || t('session_monitor.no_prompt')"
           :unread="session.unread"
           :resumable="sessionPlatform(session) !== null"
-          @open="sessionPlatform(session) !== null && store.openMessages(session)"
+          @open="handleOpenSession(session)"
           @resume="store.openResume(session)"
           @delete="store.deleteSession(session.sessionId, session.agent)"
           @read="markSessionRead(session)"
-          @mouseleave="clearHoveredSession(session)"
         >
           <div class="session-row__line">
-            <p v-tooltip="session.assistantReply || (session.status === 'waiting' ? t('session_monitor.waiting_confirm') : session.status === 'running' ? t('session_monitor.waiting_reply', { agent: agentLabel(session.agent) }) : session.status === 'failed' ? t('session_monitor.status_failed') : t('session_monitor.no_reply'))">
-              {{ session.assistantReply || (session.status === 'waiting' ? t('session_monitor.waiting_confirm') : session.status === 'running' ? t('session_monitor.waiting_reply', { agent: agentLabel(session.agent) }) : session.status === 'failed' ? t('session_monitor.status_failed') : t('session_monitor.no_reply')) }}
+            <p v-tooltip.clamp="session.assistantReply || (session.status === 'waiting' ? t('session_monitor.waiting_confirm') : session.status === 'running' ? t('session_monitor.waiting_reply', { agent: agentLabel(session.agent) }) : t('session_monitor.no_reply'))">
+              {{ session.assistantReply || (session.status === 'waiting' ? t('session_monitor.waiting_confirm') : session.status === 'running' ? t('session_monitor.waiting_reply', { agent: agentLabel(session.agent) }) : t('session_monitor.no_reply')) }}
             </p>
           </div>
         </SessionCard>
@@ -613,6 +623,7 @@ onUnmounted(() => {
 }
 .session-list-header { display: flex; align-items: center; justify-content: space-between; margin: 14px 0 8px; }
 .session-list-header h2 { color: var(--ink); font: 600 15px/1.2 var(--font-serif); }
+.session-list-header__actions { display: flex; align-items: center; gap: 8px; }
 .session-monitor-list { display: flex; flex-direction: column; gap: 8px; }
 /* Q&A line inside the shared card's default slot (monitor-specific body). */
 .session-row__line { min-width: 0; margin-top: 3px; font-size: 12.5px; line-height: 1.45; }

@@ -14,13 +14,13 @@ export type SessionSource =
   | 'antigravity'
   /** Antigravity IDE surface. */
   | 'antigravity-ide'
-export type RuntimeStatus = 'running' | 'waiting' | 'failed' | 'ended'
+export type RuntimeStatus = 'running' | 'waiting' | 'ended'
 
-/** Sort key: working, waiting-for-confirm, failed, then ended. */
-export function monitorStatusRank(status: RuntimeStatus): number {
-  if (status === 'running') return 0
-  if (status === 'waiting') return 1
-  if (status === 'failed') return 2
+/** Sort key: waiting (needs attention), working, ended unread (new result), ended read. */
+export function monitorStatusRank(status: RuntimeStatus, unread?: boolean): number {
+  if (status === 'waiting') return 0
+  if (status === 'running') return 1
+  if (status === 'ended' && unread) return 2
   return 3
 }
 export type MonitorAgent =
@@ -53,41 +53,6 @@ export const MONITOR_AGENTS: MonitorAgent[] = [
 ]
 /** Sidebar tab: one of the agents, or the merged "all" view. */
 export type MonitorTab = MonitorAgent | 'all'
-/** Agents whose hooks can report the yellow waiting-for-confirm light. */
-export const WAITING_MONITOR_AGENTS: readonly MonitorAgent[] = [
-  'codex',
-  'claude',
-  'grok',
-  'kimi',
-  'qwen',
-  'zcode',
-  'workbuddy',
-  'dsh',
-  'omp',
-]
-/** Agents whose hooks can report a red failed light (`StopFailure` / Cursor `error`). */
-export const FAILED_MONITOR_AGENTS: readonly MonitorAgent[] = [
-  'claude',
-  'cursor',
-  'grok',
-  'kimi',
-  'qwen',
-  'workbuddy',
-  'dsh',
-]
-
-/** Capability lights on the agent icon row: 红 / 黄 / 绿 only (no gray). */
-export function monitorAgentLights(agent: MonitorTab): RuntimeStatus[] {
-  const lights: RuntimeStatus[] = []
-  if (agent === 'all' || FAILED_MONITOR_AGENTS.includes(agent as MonitorAgent)) {
-    lights.push('failed')
-  }
-  if (agent === 'all' || WAITING_MONITOR_AGENTS.includes(agent as MonitorAgent)) {
-    lights.push('waiting')
-  }
-  lights.push('running')
-  return lights
-}
 /** Agents whose monitor feed is driven by installed hooks. */
 export type HookAgent = MonitorAgent
 export const HOOK_AGENTS: HookAgent[] = [...MONITOR_AGENTS]
@@ -350,7 +315,7 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
       )
       : snapshots.value[tab].sessions.map(session => ({ ...session, agent: tab }))
     return sessions.sort((a, b) => {
-      const rank = monitorStatusRank(a.status) - monitorStatusRank(b.status)
+      const rank = monitorStatusRank(a.status, a.unread) - monitorStatusRank(b.status, b.unread)
       if (rank !== 0) return rank
       return b.updatedAt - a.updatedAt
     })
@@ -486,8 +451,8 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
    * side). Best-effort like ensureListeners: outside Tauri or on failure the
    * list stays null and every agent keeps showing.
    */
-  async function loadAvailability() {
-    if (availabilityRequested) return
+  async function loadAvailability(force = false) {
+    if (availabilityRequested && !force) return
     availabilityRequested = true
     const isTauri = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__
     if (!isTauri) return
@@ -641,6 +606,28 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     }
   }
 
+  async function markAllRead(targetAgent?: MonitorTab) {
+    const scope = targetAgent ?? activeAgent.value
+    const targets: AgentSessionState[] = []
+    if (scope === 'all') {
+      for (const agent of visibleAgents.value) {
+        for (const session of snapshots.value[agent].sessions) {
+          if (session.unread) {
+            targets.push({ ...session, agent })
+          }
+        }
+      }
+    } else {
+      for (const session of snapshots.value[scope].sessions) {
+        if (session.unread) {
+          targets.push({ ...session, agent: scope })
+        }
+      }
+    }
+    if (targets.length === 0) return
+    await Promise.all(targets.map(session => markSessionRead(session)))
+  }
+
   // Shared-modal open state. The modals fetch full history / resume commands
   // through the sessions adapters (MONITOR_AGENT_PLATFORM), so the monitor
   // itself still keeps only its lightweight snapshot data.
@@ -650,6 +637,9 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
   const resumeSession = ref<AgentSessionState | null>(null)
 
   function openMessages(session: AgentSessionState) {
+    if (session.unread) {
+      void markSessionRead(session)
+    }
     modalSession.value = session
     messagesModalOpen.value = true
   }
@@ -683,6 +673,7 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     hydrated,
     availableAgents,
     visibleAgents,
+    loadAvailability,
     beginEnter,
     initialize,
     refresh,
@@ -695,6 +686,7 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     stopDshWeb,
     deleteSession,
     markSessionRead,
+    markAllRead,
     messagesModalOpen,
     resumeModalOpen,
     modalSession,

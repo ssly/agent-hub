@@ -143,6 +143,100 @@ pub fn workspace_skill_dir(platform_id: &str, workspace: &std::path::Path) -> Op
     Some(workspace.join(relative))
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct SupportedAgentInfo {
+    pub id: String,
+    pub display_name: String,
+    pub user_dir_display: String,
+    pub user_dir_resolved: String,
+    pub exists: bool,
+    pub enabled: bool,
+}
+
+pub fn get_supported_agents(config: &crate::config::Config) -> Vec<SupportedAgentInfo> {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let mut agents = Vec::new();
+
+    let builtin = builtin_platforms();
+    for p in builtin {
+        // "shared" is the shared skill directory across agents, not an
+        // individual configurable agent. It is always enabled and omitted
+        // from the Settings agent toggle list.
+        if p.id == "shared" {
+            continue;
+        }
+
+        let (display_path, candidates) = match p.id.as_str() {
+            "shared" => ("~/.agents", vec![home.join(".agents")]),
+            "codex" => ("~/.codex", vec![home.join(".codex")]),
+            "claude-code" => ("~/.claude", vec![home.join(".claude"), home.join(".claude.json")]),
+            "cursor" => ("~/.cursor", vec![home.join(".cursor")]),
+            "antigravity" => (
+                "~/.gemini",
+                vec![
+                    join_relative(home.clone(), ".gemini/config"),
+                    home.join(".gemini"),
+                ],
+            ),
+            "grok-build" => ("~/.grok", vec![home.join(".grok")]),
+            "kimi-code" => ("~/.kimi-code", vec![home.join(".kimi-code")]),
+            "qwen" => ("~/.qwen", vec![home.join(".qwen")]),
+            "zcode" => ("~/.zcode", vec![home.join(".zcode")]),
+            "workbuddy" => (
+                "~/.workbuddy",
+                vec![home.join(".workbuddy"), home.join(".codebuddy")],
+            ),
+            "kiro" => ("~/.kiro", vec![home.join(".kiro")]),
+            "dsh" => ("~/.dsh", vec![home.join(".dsh")]),
+            "omp" => ("~/.omp", vec![home.join(".omp")]),
+            _ => ("~", vec![p.presence_path.clone()]),
+        };
+
+        let existing_candidate = candidates.iter().find(|c| c.exists());
+        let exists = existing_candidate.is_some();
+        let user_dir_resolved = existing_candidate
+            .cloned()
+            .unwrap_or_else(|| candidates[0].clone())
+            .display()
+            .to_string();
+
+        let enabled = if let Some(ref list) = config.general.enabled_platforms {
+            list.contains(&p.id)
+        } else {
+            exists
+        };
+
+        agents.push(SupportedAgentInfo {
+            id: p.id,
+            display_name: p.display_name,
+            user_dir_display: display_path.to_string(),
+            user_dir_resolved,
+            exists,
+            enabled,
+        });
+    }
+
+    for custom in &config.platforms {
+        let presence_path = join_relative(home.clone(), &custom.skill_dir);
+        let exists = presence_path.exists();
+        let enabled = if let Some(ref list) = config.general.enabled_platforms {
+            list.contains(&custom.id)
+        } else {
+            exists
+        };
+        agents.push(SupportedAgentInfo {
+            id: custom.id.clone(),
+            display_name: custom.display_name.clone(),
+            user_dir_display: custom.skill_dir.clone(),
+            user_dir_resolved: presence_path.display().to_string(),
+            exists,
+            enabled,
+        });
+    }
+
+    agents
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,5 +334,35 @@ mod tests {
             workspace_skill_dir("omp", &root),
             Some(root.join(".omp").join("skills"))
         );
+    }
+
+    #[test]
+    fn get_supported_agents_lists_all_builtins_with_paths() {
+        let config = crate::config::Config::default();
+        let agents = get_supported_agents(&config);
+        // "shared" is omitted as it is the shared skill directory, not a configurable agent.
+        assert_eq!(agents.len(), 12);
+        assert_eq!(agents[0].id, "codex");
+        assert_eq!(agents[0].user_dir_display, "~/.codex");
+        assert_eq!(agents[1].id, "claude-code");
+        assert_eq!(agents[1].user_dir_display, "~/.claude");
+
+        // When enabled_platforms is None, enabled matches exists (e.g. codex enabled if ~/.codex exists)
+        for agent in &agents {
+            assert_eq!(agent.enabled, agent.exists);
+            assert!(!agent.user_dir_resolved.is_empty());
+        }
+
+        // When enabled_platforms is Some, enabled matches the list
+        let mut custom_config = crate::config::Config::default();
+        custom_config.general.enabled_platforms = Some(vec!["codex".into(), "claude-code".into()]);
+        let custom_agents = get_supported_agents(&custom_config);
+        for agent in &custom_agents {
+            if agent.id == "codex" || agent.id == "claude-code" {
+                assert!(agent.enabled);
+            } else {
+                assert!(!agent.enabled);
+            }
+        }
     }
 }

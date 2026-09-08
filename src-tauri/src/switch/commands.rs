@@ -1174,6 +1174,7 @@ pub struct UsageProviderAvailability {
     pub grok_build: bool,
     pub kimi_code: bool,
     pub claude_code: bool,
+    pub kiro: bool,
 }
 
 /// Report which quota providers have usable local credentials without making
@@ -1187,12 +1188,14 @@ pub fn get_usage_provider_availability() -> UsageProviderAvailability {
         .is_ok();
     let kimi_code = resolve_kimi_credential().is_ok();
     let claude_code = resolve_claude_oauth().is_ok();
+    let kiro = super::kiro::is_available();
 
     UsageProviderAvailability {
         codex,
         grok_build,
         kimi_code,
         claude_code,
+        kiro,
     }
 }
 

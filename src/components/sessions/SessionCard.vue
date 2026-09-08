@@ -28,7 +28,7 @@ const props = withDefaults(defineProps<{
   badgeIcon?: string | null
   source?: 'terminal' | 'chatgpt' | 'cursor' | 'antigravity' | 'antigravity-ide' | null
   sourceLabel?: string
-  status?: 'running' | 'waiting' | 'failed' | 'ended' | null
+  status?: 'running' | 'waiting' | 'ended' | null
   time?: string
   /** Unix seconds or ms; formatted here so the parent list does not
    *  toLocaleString every row on each selection toggle. Ignored when `time` is set. */
@@ -84,8 +84,29 @@ const showSource = computed(() => {
 const statusLabel = computed(() => {
   if (props.status === 'running') return t('session_monitor.status_running')
   if (props.status === 'waiting') return t('session_monitor.status_waiting')
-  if (props.status === 'failed') return t('session_monitor.status_failed')
+  if (props.status === 'ended' && props.unread) return t('session_monitor.status_unread')
   return t('session_monitor.status_ended')
+})
+
+const statusPillText = computed(() => {
+  if (props.status === 'running') return t('session_monitor.status_running')
+  if (props.status === 'waiting') return t('session_monitor.status_waiting')
+  if (props.status === 'ended' && props.unread) return t('session_monitor.unread')
+  return t('session_monitor.status_ended')
+})
+
+const statusTooltip = computed(() => {
+  if (props.status === 'ended' && props.unread) {
+    return `${t('session_monitor.status_unread')} · ${t('session_monitor.mark_read')}`
+  }
+  return statusLabel.value
+})
+
+const statusClass = computed(() => {
+  if (props.status === 'running') return 'session-status--running'
+  if (props.status === 'waiting') return 'session-status--waiting'
+  if (props.status === 'ended' && props.unread) return 'session-status--unread'
+  return 'session-status--ended'
 })
 
 const displayTime = computed(() => {
@@ -140,11 +161,9 @@ function handleDelete() {
       'session-card--unread': unread,
       'session-card--running': status === 'running',
       'session-card--waiting': status === 'waiting',
-      'session-card--failed': status === 'failed',
     }"
     @click="handleClick"
     @mousedown="handleCardMouseDown"
-    @mouseenter="emit('read')"
   >
     <div class="session-card__head">
       <div class="session-card__badges">
@@ -166,12 +185,14 @@ function handleDelete() {
         </span>
         <span
           v-if="status"
-          v-tooltip="statusLabel"
+          v-tooltip="statusTooltip"
           class="session-status"
-          :class="`session-status--${status}`"
+          :class="[statusClass, { 'session-status--clickable': status === 'ended' && unread }]"
           :aria-label="statusLabel"
+          @click.stop="status === 'ended' && unread ? emit('read') : undefined"
         >
           <span class="session-status__dot" />
+          <span class="session-status__text">{{ statusPillText }}</span>
         </span>
       </div>
       <div class="session-card__right">
@@ -179,14 +200,23 @@ function handleDelete() {
              delete confirm is armed, i.e. after the first click. -->
         <span v-if="deleteNote && confirmDelete" class="session-card__delete-note">{{ deleteNote }}</span>
         <span v-if="displayTime" v-tooltip="timeTooltip || ''" class="session-card__time">{{ displayTime }}</span>
-        <!-- Inline actions revealed on card hover: [note] [time] [resume] [delete].
+        <!-- Inline actions revealed on card hover: [note] [time] [mark-read] [resume] [delete].
              Icon-only; labels show via v-tooltip. -->
         <div
-          v-if="resumable || deletable"
+          v-if="resumable || deletable || unread"
           class="session-card__actions"
           :class="{ 'session-card__actions--armed': confirmDelete }"
           @click.stop
         >
+          <button
+            v-if="unread"
+            v-tooltip="t('session_monitor.mark_read')"
+            class="session-card__icon-btn session-card__mark-read"
+            :aria-label="t('session_monitor.mark_read')"
+            @click="emit('read')"
+          >
+            <Check :size="13" />
+          </button>
           <button
             v-if="resumable"
             v-tooltip="t('session.resume')"
@@ -210,16 +240,8 @@ function handleDelete() {
       </div>
     </div>
 
-    <span
-      v-if="unread"
-      v-tooltip="t('session_monitor.unread')"
-      class="session-card__unread"
-      role="img"
-      :aria-label="t('session_monitor.unread')"
-    />
-
-    <h3 v-if="title" v-tooltip="title" class="ah-session-card__title session-card__title truncate">{{ title }}</h3>
-    <div v-if="subtitle" v-tooltip="subtitle" class="ah-session-card__path">{{ subtitle }}</div>
+    <h3 v-if="title" v-tooltip.clamp="title" class="ah-session-card__title session-card__title truncate">{{ title }}</h3>
+    <div v-if="subtitle" v-tooltip.clamp="subtitle" class="ah-session-card__path">{{ subtitle }}</div>
 
     <slot />
 
@@ -243,6 +265,7 @@ function handleDelete() {
 .session-card {
   position: relative;
   padding: 9px 12px;
+  overflow: hidden;
 }
 .session-card--selectable {
   user-select: none;
@@ -312,9 +335,7 @@ function handleDelete() {
   /* Gap only appears once actions expand on hover — keeps time flush-right. */
   gap: 0;
   flex: none;
-}
-.session-card--unread .session-card__right {
-  padding-right: 16px;
+  transition: gap var(--dur-fast) var(--ease-soft);
 }
 .session-card:hover .session-card__right:has(.session-card__actions),
 .session-card__right:has(.session-card__actions:focus-within),
@@ -327,16 +348,6 @@ function handleDelete() {
   color: var(--danger);
   opacity: 0.75;
   white-space: nowrap;
-}
-.session-card__unread {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  z-index: 1;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--signal-red);
 }
 .session-card__time {
   flex: none;
@@ -366,7 +377,7 @@ function handleDelete() {
   max-width: 12rem;
   gap: 4px;
   opacity: 1;
-  overflow: visible;
+  overflow: hidden;
   pointer-events: auto;
 }
 .session-card__title {
@@ -380,27 +391,77 @@ function handleDelete() {
 .session-status {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 14px;
+  gap: 4.5px;
   height: 18px;
+  padding: 0 6.5px;
+  border-radius: var(--radius-pill);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1;
   white-space: nowrap;
+  border: 1px solid transparent;
+  user-select: none;
+  transition: all var(--dur-fast) var(--ease-soft);
 }
 .session-status__dot {
-  width: 7px;
-  height: 7px;
+  width: 5px;
+  height: 5px;
   border-radius: 999px;
   background: currentColor;
+  flex: none;
+  transition: transform var(--dur-fast) var(--ease-soft), box-shadow var(--dur-fast) var(--ease-soft);
 }
-.session-status--running { color: var(--signal-green); }
-.session-status--waiting { color: var(--signal-yellow); }
-.session-status--failed { color: var(--signal-red); }
-.session-status--ended { color: var(--ink-4); }
+.session-status__text {
+  line-height: 1;
+}
+.session-status--running {
+  background: color-mix(in srgb, var(--signal-green) 10%, transparent);
+  border-color: color-mix(in srgb, var(--signal-green) 22%, transparent);
+  color: var(--signal-green);
+}
+.session-status--running .session-status__dot {
+  box-shadow: 0 0 4px color-mix(in srgb, var(--signal-green) 60%, transparent);
+}
+.session-status--waiting {
+  background: color-mix(in srgb, var(--signal-yellow) 12%, transparent);
+  border-color: color-mix(in srgb, var(--signal-yellow) 26%, transparent);
+  color: var(--signal-yellow);
+}
+.session-status--waiting .session-status__dot {
+  box-shadow: 0 0 4px color-mix(in srgb, var(--signal-yellow) 60%, transparent);
+}
+.session-status--unread {
+  background: color-mix(in srgb, var(--signal-red) 10%, transparent);
+  border-color: color-mix(in srgb, var(--signal-red) 25%, transparent);
+  color: var(--signal-red);
+}
+.session-status--unread .session-status__dot {
+  box-shadow: 0 0 4px color-mix(in srgb, var(--signal-red) 60%, transparent);
+}
+.session-status--ended {
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+  border-color: var(--hairline);
+  color: var(--ink-4);
+}
+.session-status--clickable {
+  cursor: pointer;
+}
+.session-status--clickable:hover {
+  background: color-mix(in srgb, var(--signal-red) 18%, transparent);
+  border-color: color-mix(in srgb, var(--signal-red) 45%, transparent);
+  transform: translateY(-0.5px);
+}
+.session-status--clickable:hover .session-status__dot {
+  transform: scale(1.2);
+  box-shadow: 0 0 6px var(--signal-red);
+}
 .session-card__icon-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   height: 24px;
   width: 24px;
+  flex: none;
   padding: 0;
   color: var(--ink-4);
   background: var(--surface);
@@ -416,6 +477,11 @@ function handleDelete() {
   color: var(--accent);
   background: var(--accent-soft);
   border-color: var(--accent-mid);
+}
+.session-card__mark-read:hover {
+  color: var(--signal-green);
+  background: var(--surface-2);
+  border-color: var(--signal-green);
 }
 /* Delete: quiet icon by default, turns into a red confirm chip on first click. */
 .session-card__delete:hover {

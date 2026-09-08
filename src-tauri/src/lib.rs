@@ -48,8 +48,19 @@ fn attach_main_window_lifecycle(window: &WebviewWindow) {
 /// Build a replacement `main` window matching `tauri.conf.json` when the
 /// previous one was destroyed (older builds, or any path that skipped hide).
 fn recreate_main_window(app: &AppHandle) -> Option<WebviewWindow> {
+    let title = app
+        .try_state::<std::sync::Mutex<crate::state::AppState>>()
+        .and_then(|state| state.lock().ok().map(|s| s.locale.tag().to_string()))
+        .map(|tag| {
+            if tag.to_ascii_lowercase().starts_with("zh") {
+                "智能体中枢"
+            } else {
+                "Agent Hub"
+            }
+        })
+        .unwrap_or("智能体中枢");
     let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-        .title("Agent Hub")
+        .title(title)
         .inner_size(1024.0, 768.0)
         .min_inner_size(800.0, 600.0)
         .resizable(true)
@@ -131,6 +142,19 @@ pub fn run() {
             // traffic lights stay native. Windows has no equivalent, so drop
             // the native frame and let the toolbar render its own controls.
             if let Some(window) = app.get_webview_window("main") {
+                let initial_title = app
+                    .try_state::<std::sync::Mutex<crate::state::AppState>>()
+                    .and_then(|state| state.lock().ok().map(|s| s.locale.tag().to_string()))
+                    .map(|tag| {
+                        if tag.to_ascii_lowercase().starts_with("zh") {
+                            "智能体中枢"
+                        } else {
+                            "Agent Hub"
+                        }
+                    })
+                    .unwrap_or("智能体中枢");
+                let _ = window.set_title(initial_title);
+
                 #[cfg(target_os = "windows")]
                 {
                     let _ = window.set_decorations(false);
@@ -144,6 +168,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_platforms,
+            commands::get_supported_agents,
+            commands::set_enabled_agents,
             commands::get_platform_skills,
             commands::get_skill_detail,
             commands::open_skill_folder,
@@ -271,8 +297,10 @@ pub fn run() {
             switch::commands::get_usage_provider_availability,
             switch::deepseek::get_deepseek_settings,
             switch::deepseek::get_deepseek_usage,
+            switch::kiro::get_kiro_usage,
             switch::monitor_settings::get_usage_monitor_settings,
             switch::monitor_settings::set_usage_refresh_minutes,
+            switch::monitor_settings::set_usage_monitor_limit,
             switch::monitor_settings::set_usage_selected_agent,
             switch::monitor_settings::set_usage_agent_listening,
             tray::resize_usage_tray,

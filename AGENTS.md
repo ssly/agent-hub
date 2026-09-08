@@ -4,7 +4,7 @@ Agent Hub 的项目上下文文档，供 AI Agent 和开发者快速了解项目
 
 ## 项目概述
 
-Agent Hub 是一个基于 Tauri 2.x 的桌面应用，用于统一管理本地多个 AI Agent 平台的插件（Skill、MCP Server、Claude Code 原生插件）、会话和账号。当前版本 **0.26.0**。
+Agent Hub 是一个基于 Tauri 2.x 的桌面应用，用于统一管理本地多个 AI Agent 平台的插件（Skill、MCP Server、Claude Code 原生插件）、会话和账号。当前版本 **0.27.0**。
 
 ## 架构
 
@@ -34,6 +34,7 @@ src/
     skills/               # SkillListView, SkillDetailView
     mcp/                  # McpListView
     sessions/             # SessionListView + 会话/监听共用组件（SessionCard、SessionMessagesModal、SessionResumeModal，仅组件共用、数据不共用）
+    settings/             # SettingsModal（支持的 Agent 列表与全局文件夹检测、启停勾选、用量刷新与监控面板条数设置；Shared 为公共技能池而非独立 Agent，始终保持启用且不在设置列表中展示）
     switch/               # SwitchView（含各平台用量面板）
     tray/                 # 托盘监控面板：CodexTrayView + UsageOrb（泡泡水 + 圆环可视化）+ TrayWaveLoader（查询中水波 loading）+ useTrayDock.ts（边缘吸附 composable）；左上角控件（不透明度滑块 / 刷新间隔滑块（后端内存共享，非 localStorage）/ 隐藏使用量 / 隐藏监听 / mini（按钮已隐藏、代码保留，SHOW_MINI_TOGGLE 常量控制），localStorage 持久化；两区不可同时隐藏；mini 仅圆环+短名+恢复正常），区域无内容时展示固定空状态。边缘吸附（macOS Dock 式；判定与动画全在后端 tray.rs；面板无置顶概念——右上角为 X 关闭按钮（close_usage_tray：清 dock 态 + 隐藏），浮动面板失焦自动隐藏，吸附即常驻）：拖动全程窗口在松手时被钳制在屏幕内（X 物理边界并集 / Y 工作区，拖不出桌面）；吸附唯一触发条件是"光标在面板外持续 200ms（前端 mouseenter/mouseleave 经 set_usage_tray_hovered 上报）且窗口贴着显示器外侧左/右/上边缘（上边缘贴工作区顶，不盖菜单栏）"（双屏相接的缝不吸附；拖动中绝不吸附——触发时校验最近 200ms 无移动）；吸附后收成条：左右为 20×72 竖条，顶部为同内容逆时针旋转 90° 的横条（约 72×20），展开从下方滑出、收回向上收到顶边；悬停条滑出面板（expand_usage_tray；macOS 后台悬停靠 core-graphics 光标轮询，弹层打开时经 set_usage_tray_overlay 暂停自动收回）、光标移开 350ms 后收回（collapse_usage_tray，拖动中的 mouseleave 由后端按最近移动时间拦截）；拖着展开的面板远离边缘松手（Moved 停住 190ms 判定）即退出 dock 态、停在边缘则收回条；状态经 `usage-tray-dock-changed` 事件（edge + expanded）推给前端 useTrayDock.ts 镜像，尺寸动画前发 `usage-tray-dock-animating` 让前端隐藏内容、落地再显示；条内容为每个监听会话一个状态点（绿=工作中、黄=等待用户确认、灰=已结束，与监听条同一数据源），点数即会话数，长边按点数动态调整（前端经 resize_usage_tray_dock 推长边尺寸；顶部改宽度、左右改高度）；docked 态失焦不隐藏；点托盘图标/侧栏按钮重开一律是"全新打开"（清 dock、居中、400×120 起始高度，不再用记忆位置）
     diff/                 # DiffView
@@ -98,10 +99,11 @@ src-tauri/src/
     dsh_plugin.rs         # DeepSeek Harness 观察型 Cordis 插件：拷贝到各 profile node_modules + 外科式写入 cordis.patch.yml
     service.rs            # 多 Agent 事件聚合服务（inbox watcher）
     types.rs              # AgentKind、HookEvent、SessionState、MonitorSnapshot
-  switch/                 # 账号切换 + 用量查询（Codex/Claude/Grok/Kimi/DeepSeek）
+  switch/                 # 账号切换 + 用量查询（Codex/Claude/Grok/Kimi/Kiro/DeepSeek）
     model.rs              # AuthProfile, ProfileMeta
-    commands.rs           # Profile CRUD + 切换 + get_codex_usage / get_claude_usage / get_grok_usage / get_kimi_usage
-    monitor_settings.rs   # 用量监听共享设置（仅进程内存）：刷新间隔 1–10 分钟（默认 5）、当前选中 Agent、按 Agent 监听启停；setter 发 usage-monitor-settings-changed 事件，主窗口与托盘双窗口同步
+    commands.rs           # Profile CRUD + 切换 + get_codex_usage / get_claude_usage / get_grok_usage / get_kimi_usage / get_kiro_usage
+    kiro.rs               # Kiro 配额查询：自动读取本地 SQLite/JSON/环境变量凭证，调官方 Get-Usage-Limits（管理接口，0 消耗），支持托盘与账号页
+    monitor_settings.rs   # 用量监听共享设置（写入 usage-monitor.json）：刷新间隔 1–10 分钟（默认 5）、监控面板消息监听个数 6–12 条（默认 6）、当前选中 Agent、按 Agent 监听启停；setter 发 usage-monitor-settings-changed 事件，主窗口与托盘双窗口同步
     deepseek.rs           # DeepSeek 余额查询：Key 自动读取 DeepSeek Harness 凭证（env DEEPSEEK_API_KEY → ~/.dsh/.credentials.yaml 的 refs.DEEPSEEK_API_KEY，兼容预发布扁平顶层键 → ~/.dsh/.env，无手动输入），调官方 /user/balance（管理接口，不消耗 token）；settings 仅上报 has_key；仅在账号页，不进托盘 provider
   monitor/                # Agent 监控（未启用）
 
@@ -139,7 +141,7 @@ npm run version [-- <ver>] # 从 git tag 同步版本号
 
 平台顺序（`platform/registry.rs` 定义顺序即侧边栏顺序，会话/监听/账号子集保持同一相对顺序）：Shared → Codex → Claude Code → Cursor → Antigravity → Grok Build → Kimi Code → Qwen Code → ZCode → WorkBuddy → Kiro → DeepSeek Harness → Oh My Pi。关键约定：
 
-- **Shared（id `shared`，`~/.agents/skills`）**：Codex、Cursor、OpenCode、Kimi Code、Grok Build、ZCode 官方默认读取；Claude Code 与 Antigravity 全局层不读。显示名中英文均为 Shared（侧边栏无中文 Agent 名）。
+- **Shared（id `shared`，`~/.agents/skills`）**：Codex、Cursor、Antigravity（项目级）、Grok Build、Kimi Code、Qwen Code、ZCode、WorkBuddy、DeepSeek Harness 官方默认读取；Claude Code、Kiro、Oh My Pi 仅读自身目录。显示名中英文均为 Shared（侧边栏无中文 Agent 名）。Shared 为公共技能池而非独立 Agent，始终保持启用且不在偏好设置的 Agent 启停列表中展示；Shared 视图顶部展示按官方顺序排列的支持 Agent 交互胶囊；支持 Shared 的双技能 Agent 顶部展示 Shared 技能引导卡片（支持跳转），下方保留专属技能管理。
 - **Codex**：官方用户级 skills 仅 Shared（`~/.codex/skills` 是社区误传），前端显示 Skills 在 Shared 目录下并提供跳转，不渲染自己的 Skills 区块。
 - **Antigravity**（agy CLI / Antigravity 2.0）：共享 `~/.gemini/config/`（skills + mcp_config.json + plugins）；项目级为 `.agents/skills`、`.agents/mcp_config.json`（`workspace_skill_dir` 有特判，不走镜像）。
 - **Grok Build / Kimi Code / Antigravity / Codex 的插件体系**只在前端小字标注（`plugin.notes.*` i18n key），不管理；Claude Code 是唯一可启停管理的插件体系；ZCode 插件市场为只读列表（见下条）。
@@ -169,7 +171,7 @@ Skill 是包含 `SKILL.md` 的目录，SKILL.md 使用 YAML frontmatter（`name`
 
 ### 会话监听（session_monitor）
 
-Monitor 标签页实时展示各 Agent 的进行中/等待确认/已结束会话（用户问题 + 助手回复）。状态来自官方 hook（DSH 为观察型 Cordis 插件写同一 inbox），不旁路扫进程：绿 = 进行中，黄 = 等待用户确认（工具审批等），灰 = 已结束。黄灯只接有「等人确认」观察事件的平台（Codex/Claude/Grok/Kimi/Qwen/ZCode/WorkBuddy/DeepSeek Harness）；Cursor / Kiro / Antigravity 没有该事件，保持绿/灰。红灯（失败）接 StopFailure / Cursor `error` / DSH `agent/request-error`。监听的 Agent 列表按"平台已安装"过滤：`list_available_monitor_agents` 命令遍历 `AgentKind::ALL`，按 `hooks.rs::agent_presence_path`（与 `platform/registry.rs` 的 presence_path 同目录语义）存在性判定，未安装的平台在监听页侧边栏、合并视图、托盘监听区（含 dock 红绿灯）都不显示；前端探测失败时降级为全量显示，不误隐藏。各平台注册的 Hook 事件按官方事件集裁剪（`hooks.rs` 的 `managed_events`）：Codex 为 `UserPromptSubmit` + `Stop` + `PermissionRequest` + `PostToolUse`（其 Hook 系统没有中断/失败事件，Stop 覆盖所有轮次结束；官方另有 SubagentStart/SubagentStop，源码证实子 agent 轮次只发 SubagentStop，无需过滤），Claude Code 为 `UserPromptSubmit` + `Stop` + `StopFailure` + `PermissionRequest` + `PermissionDenied` + `PostToolUse`（官方文档明确 Stop 仅主轮、子 agent 走 SubagentStop，安全），Grok Build 在轮次事件外追加 `SubagentStart` + `SubagentStop`（原因见下）以及 `Notification`（matcher `permission_prompt`，官方无 PermissionRequest）+ `PostToolUse` + `StopCancelled`（拒绝审批/中断时代替 Stop），Kimi Code 追加 `Interrupt` + `StopFailure` + `SubagentStart` + `SubagentStop` + `PermissionRequest` + `PermissionResult`（成对观察审批，不注册 PostToolUse），Qwen Code / WorkBuddy 对齐 Claude（含 PermissionRequest / PermissionDenied / PostToolUse），Cursor 为 `beforeSubmitPrompt` + `afterAgentResponse` + `stop`，ZCode 为 `UserPromptSubmit` + `Stop` + `PermissionRequest` + `PostToolUse`（不使用 matcher）。Hook 进程 stdout 必须为空，避免 PermissionRequest 被当成自动允许/拒绝。旧版本安装（受管 handler 数与当前期望不符）会在监听页顶部显示升级提示条，引导卸载重装：
+Monitor 标签页实时展示各 Agent 的会话状态（用户问题 + 助手回复）。状态来自官方 hook（DSH 为观察型 Cordis 插件写同一 inbox），统一为 4 种直观状态（默认灰色）：绿 = 进行中（思考/生成/执行），黄 = 被卡住中止（等待用户确认审批，或因错误/中断异常中止），红 = 结束未读（正常完成且未读），灰 = 结束已读（已查看或历史默认）。监听的 Agent 列表按"平台已安装"过滤：`list_available_monitor_agents` 命令遍历 `AgentKind::ALL`，按 `hooks.rs::agent_presence_path`（与 `platform/registry.rs` 的 presence_path 同目录语义）存在性判定，未安装的平台在监听页侧边栏、合并视图、托盘监听区（含 dock 指示点）都不显示；前端探测失败时降级为全量显示，不误隐藏。各平台注册的 Hook 事件按精炼原则裁剪（`hooks.rs` 的 `managed_events`，已剔除高频无效的 `PostToolUse`、`PermissionDenied` 和 Cursor `afterAgentResponse`，消除 90% 以上无效子进程消耗）：Codex 为 `UserPromptSubmit` + `Stop` + `PermissionRequest`，Claude Code 为 `UserPromptSubmit` + `Stop` + `StopFailure` + `PermissionRequest`，Grok Build 为 `UserPromptSubmit` + `Stop` + `StopFailure` + `SubagentStart` + `SubagentStop` + `Notification`（matcher `permission_prompt`）+ `StopCancelled`，Kimi Code 为 `UserPromptSubmit` + `Stop` + `Interrupt` + `StopFailure` + `SubagentStart` + `SubagentStop` + `PermissionRequest` + `PermissionResult`，Qwen Code / WorkBuddy 对齐 Claude，Cursor 为 `beforeSubmitPrompt` + `stop`，ZCode 为 `UserPromptSubmit` + `Stop` + `PermissionRequest`。Hook 进程 stdout 必须为空，避免 PermissionRequest 被当成自动允许/拒绝。旧版本安装（受管 handler 数与当前期望不符）会在监听页顶部显示升级提示条，引导卸载重装：
 
 - **Codex**：向 `~/.codex/hooks.json` 注入 command Hook，调用自身二进制 `--agent-hub-codex-hook` 把 stdin JSON 原子写入 `~/.agent-hub/session-monitor/inbox/`。注意 Codex 有 Hook 信任门：用户级 hooks.json 的 handler 只有在 `~/.codex/config.toml` 的 `hooks.state."<hooks.json路径>:<event>:<组>:<序号>"` 里留下 `trusted_hash` 才会执行（TUI 启动审查 / 桌面端设置 → 钩子 里确认）；安装后未信任时 Hook 静默不触发，`get_hook_status` 会检测这种状态并在 `issue` 中提示（无法复算 Codex 的信任哈希，只查条目存在性）。**Windows**：Codex 不是直接 spawn hook 命令，而是经**会话 shell** 执行（codex-rs `build_hooks_for_config` 取环境检测到的 shell，Windows 默认 PowerShell → `powershell -NoProfile -Command "<command>"`）；裸的引号路径命令（`"C:\…\x.cmd" --arg`）在 PowerShell 里是解析错误（缺少 `&` 调用符），hook 以 exit code 1 失败且我们的二进制根本不会启动。因此 Windows 上 Codex 的 hook 命令必须带 `cmd /c` 前缀（`cmd /c "<shim>" --arg`，见 `hooks.rs::windows_hook_command`）——PowerShell 把它当原生命令调用，cmd 会话 shell 下嵌套 `cmd /c` 也能按 cmd 引号规则正确解析；其他 agent 保持裸引号 shim 形式（Grok 已实测）。来源标记约定：监听行按 Hook originator（`CODEX_INTERNAL_ORIGINATOR_OVERRIDE` 含 desktop/chatgpt）标记为 "ChatGPT 客户端"；会话浏览按 `threads.source` 列映射（`vscode`→chatgpt、`cli`/`codex_cli`→terminal，其余 None 回退 "Codex"），`SessionSummary.source` 透传给前端 badge。
 - **Claude Code**：同一机制，写入 `~/.claude/settings.json` 的 `hooks` 字段（热加载无需重启），Hook 参数为 `--agent-hub-claude-hook`。capture 有来源校验：Claude 载荷必须是 snake_case（`hook_event_name`），纯 camelCase 载荷直接丢弃——因为 Grok CLI 会兼容执行 `~/.claude/settings.json` 里的 hook 并喂自己的 camelCase 载荷（实测），不拦截的话一次 Grok 运行会在 Claude 监听里种出幻影会话。
@@ -194,7 +196,9 @@ Profile 存储在 `~/.agent-hub/switch/<agent-type>/<uuid>/`，按平台稳定�
 
 Claude Code 同时支持官方 `/login` OAuth 订阅账号（meta.json `kind` 为 `token`|`oauth`，老 profile 默认 `token`）：settings.json 无 env token 且凭证存在（macOS keychain `Claude Code-credentials` 或 `<CLAUDE_CONFIG_DIR|~/.claude>/.credentials.json`）即视为 oauth 模式，身份用 `~/.claude.json` 的 `oauthAccount.accountUuid`（回退 email）。oauth profile 的 config.json 存凭证 JSON 原文，切换时写回 keychain（`security add-generic-password -U`，失败回落原子写 `.credentials.json` 0600）并从 settings.json 移除 env token；清除/删除当前账号对 oauth 模式拒绝（须先在 Claude Code 中 /logout）。Token 策略只读不刷新，过期提示用户打开一次 Claude Code。`get_claude_usage` 命令用 OAuth access token 调 `https://api.anthropic.com/api/oauth/usage` 返回 5h/7d 窗口（`UsageProviderAvailability.claude_code` 标记凭证可用）。
 
-**用量监听共享设置**（`switch/monitor_settings.rs`）：主窗口（账号页 + 侧栏版本号旁的设置弹窗）与托盘监控面板是两个独立 webview，共享状态放在后端并写入 `~/.agent-hub/usage-monitor.json`（重启保留）：刷新间隔（1–10 分钟，默认 5）、当前选中 Agent、按 Agent 的监听启停（**缺省=停用**，只有用户在账号页手动打开才自动查询）。setter 返回完整快照、落盘并广播 `usage-monitor-settings-changed`，两端各自监听套用；选中 Agent 双向同步（托盘 tab 点击 ↔ 账号页 selectAgent，事件回环按相等值幂等终止）。启停按钮在账号页用量面板头部（刷新按钮旁，`ListeningToggle.vue`）；停用时面板内容收起为提示行，且账号页进入、托盘打开不再自动查询（手动刷新按钮仍可用）；托盘的 provider tab 直接隐藏被停用的 Agent（选中项被停用时回落到第一个仍启用的 tab，全部停用时显示固定空状态）。自动刷新只在"活跃面板"发生：账号页定时器要求主窗口可见（`document.visibilityState`），托盘定时器要求托盘窗口可见（浮动打开或吸附竖条均可），两侧间隔同为共享值。
+Kiro 配额用量（`switch/kiro.rs`）：纯只读查询官方管理接口 `https://management.us-east-1.kiro.dev/Get-Usage-Limits?origin=KIRO_CLI`（0 token 消耗），自动读取本地凭证（优先 Kiro CLI SQLite `data.sqlite3`，备用 AWS SSO 缓存 JSON 或 Kiro IDE profile），对于 Social 登录过期 Token 支持通过 `refreshToken` 端点静默自动刷新（ODIC 需带 `TokenType: SSO_OIDC`，Social 绝对不带 `TokenType`）。后端缓存 10 分钟。接入账号页（展示计划类型、已用/总 Credits、重置时间及 Free Trial 状态）和托盘 Orb 监控（水波水位与圆环）。
+
+**用量监听共享设置**（`switch/monitor_settings.rs`）：主窗口（账号页 + 侧栏版本号旁的设置弹窗）与托盘监控面板是两个独立 webview，共享状态放在后端并写入 `~/.agent-hub/usage-monitor.json`（重启保留）：刷新间隔（1–10 分钟，默认 5）、监控面板消息监听个数（6–12 条，默认 6）、当前选中 Agent、按 Agent 的监听启停（**缺省=停用**，只有用户在账号页手动打开才自动查询）。setter 返回完整快照、落盘并广播 `usage-monitor-settings-changed`，两端各自监听套用；选中 Agent 双向同步（托盘 tab 点击 ↔ 账号页 selectAgent，事件回环按相等值幂等终止）。启停按钮在账号页用量面板头部（刷新按钮旁，`ListeningToggle.vue`）；停用时面板内容收起为提示行，且账号页进入、托盘打开不再自动查询（手动刷新按钮仍可用）；托盘的 provider tab 直接隐藏被停用的 Agent（选中项被停用时回落到第一个仍启用的 tab，全部停用时显示固定空状态）。自动刷新只在"活跃面板"发生：账号页定时器要求主窗口可见（`document.visibilityState`），托盘定时器要求托盘窗口可见（浮动打开或吸附竖条均可），两侧间隔同为共享值。
 
 ## 测试
 
@@ -212,4 +216,6 @@ cd src-tauri && cargo test
 
 **macOS 主窗口与 Dock**：红灯/关闭主窗口时 `prevent_close` + `hide`（不销毁），进程由菜单栏托盘保活；点 Dock 图标走 `RunEvent::Reopen` → `show_main_window`（先 `app.show()` 解除 Cmd+H 级应用隐藏，再 show/unminimize/focus main；main 已销毁则按 `tauri.conf.json` 参数重建）。调度中心/App Exposé 在主窗口隐藏时看不到应用窗口属预期，重新打开后恢复。
 
-显示名统一为 **Agent Hub**（不分语言）：`tauri.conf.json` 的 `productName` 与主窗口 `title`、`src-tauri/Info.plist` 的 `CFBundleDisplayName`/`CFBundleName`、`src-tauri/macos/{en,zh-Hans}.lproj/InfoPlist.strings`、应用内标题（`app.title` i18n）全部是 "Agent Hub"。文件名统一 **agent-hub** 格式：可执行文件由 Cargo 包名天然产出（`agent-hub`）；release 资产经 tauri-action 的 `releaseAssetNamePattern: agent-hub_[version]_[arch][setup][ext]` 命名（GitHub 会把空格转成点，自定义改名步骤不要按带空格的名字匹配资产）。
+软件底层路径与安装包命名统一为 **Agent Hub** / `agent-hub` 格式：可执行文件由 Cargo 包名天然产出（`agent-hub`）；release 资产经 tauri-action 的 `releaseAssetNamePattern: agent-hub_[version]_[arch][setup][ext]` 命名；macOS Bundle 目录及安装路径统一为 `/Applications/Agent Hub.app`（Hook 命令及内部路径坚决避免全大写 `AGENT HUB` 或中文路径）。
+
+软件显示名称支持中英文区分：中文环境下为 **智能体中枢**（macOS Dock 悬停、系统应用菜单、Finder 显示名经 `zh-Hans.lproj/InfoPlist.strings` 本地化；主窗口标题与 Windows 任务栏、侧边栏品牌名、关于弹窗、导出 HTML 标题等经 UI 国际化显示为「智能体中枢」）；英文或系统底层无法区分语言的场景统一为 **Agent Hub**。

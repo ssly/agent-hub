@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import * as api from '@/lib/api'
-import type { ClaudeUsage, CodexUsage, CodexResetCredits, DeepSeekSettings, DeepSeekUsage, GrokUsage, KimiUsage, UsageMonitorSettings } from '@/lib/api'
+import type { ClaudeUsage, CodexUsage, CodexResetCredits, DeepSeekSettings, DeepSeekUsage, GrokUsage, KimiUsage, KiroUsage, UsageMonitorSettings } from '@/lib/api'
 
 export const useSwitchStore = defineStore('switch', () => {
   const selectedAgent = ref<string | null>(localStorage.getItem('ah-switch-agent'))
@@ -57,6 +57,12 @@ export const useSwitchStore = defineStore('switch', () => {
   const deepseekUsageError = ref<string | null>(null)
   const deepseekUsageLastQuery = ref<number>(0)
 
+  // Kiro / Kiro CLI usage and plan credit limits.
+  const kiroUsage = ref<KiroUsage | null>(null)
+  const kiroUsageLoading = ref(false)
+  const kiroUsageError = ref<string | null>(null)
+  const kiroUsageLastQuery = ref<number>(0)
+
   // Edit modal state
   const editModalOpen = ref(false)
   const editingProfileId = ref<string | null>(null)
@@ -93,6 +99,7 @@ export const useSwitchStore = defineStore('switch', () => {
   // the tray popup). Absent listening key = paused; user must turn it on. --
   const monitorSettings = ref<UsageMonitorSettings | null>(null)
   const refreshMinutes = computed(() => monitorSettings.value?.refreshMinutes ?? 5)
+  const monitorLimit = computed(() => monitorSettings.value?.monitorLimit ?? 6)
   /** Absent key = paused (default off). */
   function isAgentListened(agent: string) {
     return monitorSettings.value?.listening?.[agent] ?? false
@@ -104,6 +111,9 @@ export const useSwitchStore = defineStore('switch', () => {
   }
   async function updateRefreshMinutes(minutes: number) {
     monitorSettings.value = await api.setUsageRefreshMinutes(minutes)
+  }
+  async function updateMonitorLimit(limit: number) {
+    monitorSettings.value = await api.setUsageMonitorLimit(limit)
   }
   async function setAgentListening(agent: string, enabled: boolean) {
     monitorSettings.value = await api.setUsageAgentListening(agent, enabled)
@@ -213,6 +223,22 @@ export const useSwitchStore = defineStore('switch', () => {
     }
   }
 
+  async function refreshKiroUsage(force = false) {
+    if (selectedAgent.value !== 'kiro' || kiroUsageLoading.value) return
+    kiroUsageLoading.value = true
+    kiroUsageError.value = null
+    try {
+      kiroUsage.value = await api.getKiroUsage(force)
+      kiroUsageLastQuery.value = (kiroUsage.value.fetched_at || Math.floor(Date.now() / 1000)) * 1000
+    } catch (reason: any) {
+      kiroUsageError.value = String(reason?.message || reason)
+      kiroUsage.value = null
+      kiroUsageLastQuery.value = 0
+    } finally {
+      kiroUsageLoading.value = false
+    }
+  }
+
   // The tray popup emits `usage-refreshed` after a successful query; re-pull
   // the shared backend cache (force=false, already fresh) so an open Accounts
   // view shows the same numbers. Refreshers no-op for non-selected agents.
@@ -227,6 +253,7 @@ export const useSwitchStore = defineStore('switch', () => {
         if (event.payload.provider === 'grok-build') void refreshGrokUsage(false)
         if (event.payload.provider === 'kimi-code') void refreshKimiUsage(false)
         if (event.payload.provider === 'claude-code') void refreshClaudeUsage(false)
+        if (event.payload.provider === 'kiro') void refreshKiroUsage(false)
       })
       // Tray-side settings changes (interval slider, provider tabs) land here.
       await listen<UsageMonitorSettings>('usage-monitor-settings-changed', event => {
@@ -242,12 +269,13 @@ export const useSwitchStore = defineStore('switch', () => {
 
   async function loadProfiles() {
     if (!selectedAgent.value) return
-    // Codex, Grok Build, Kimi Code, and DeepSeek are read-only: one current
+    // Codex, Grok Build, Kimi Code, Kiro, and DeepSeek are read-only: one current
     // CLI account (or a single locally-stored API key), no profile pool.
     if (
       selectedAgent.value === 'codex'
       || selectedAgent.value === 'grok-build'
       || selectedAgent.value === 'kimi-code'
+      || selectedAgent.value === 'kiro'
       || selectedAgent.value === 'deepseek'
     ) {
       profiles.value = []
@@ -278,6 +306,7 @@ export const useSwitchStore = defineStore('switch', () => {
     if (agent === 'grok-build') await refreshGrokUsage(false)
     if (agent === 'kimi-code') await refreshKimiUsage(false)
     if (agent === 'claude-code') await refreshClaudeUsage(false)
+    if (agent === 'kiro') await refreshKiroUsage(false)
     if (agent === 'deepseek') {
       await loadDeepseekSettings()
       await refreshDeepseekUsage(false)
@@ -362,10 +391,11 @@ export const useSwitchStore = defineStore('switch', () => {
     kimiUsage, kimiUsageLoading, kimiUsageError, kimiUsageLastQuery,
     claudeUsage, claudeUsageLoading, claudeUsageError, claudeUsageLastQuery, claudeUsageAvailable,
     deepseekSettings, deepseekUsage, deepseekUsageLoading, deepseekUsageError, deepseekUsageLastQuery,
-    monitorSettings, refreshMinutes, isAgentListened,
-    loadMonitorSettings, updateRefreshMinutes, setAgentListening,
+    kiroUsage, kiroUsageLoading, kiroUsageError, kiroUsageLastQuery,
+    monitorSettings, refreshMinutes, monitorLimit, isAgentListened,
+    loadMonitorSettings, updateRefreshMinutes, updateMonitorLimit, setAgentListening,
     selectAgent, loadProfiles, loadSelectedAgent, openEditModal, closeEditModal, resetState,
-    refreshCodexUsage, refreshGrokUsage, refreshKimiUsage, refreshClaudeUsage,
+    refreshCodexUsage, refreshGrokUsage, refreshKimiUsage, refreshClaudeUsage, refreshKiroUsage,
     loadDeepseekSettings, refreshDeepseekUsage,
     openClearActiveModal, closeClearActiveModal, deleteActiveAuth,
   }

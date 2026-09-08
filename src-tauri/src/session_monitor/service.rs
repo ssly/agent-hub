@@ -281,8 +281,7 @@ fn apply_event(snapshot: &mut MonitorSnapshot, event: HookEvent) {
     let status = match event.hook_event_name.as_str() {
         "UserPromptSubmit" => RuntimeStatus::Running,
         "Stop" => RuntimeStatus::Ended,
-        "StopFailure" => RuntimeStatus::Failed,
-        "Interrupted" => RuntimeStatus::Ended,
+        "StopFailure" | "Interrupted" => RuntimeStatus::Waiting,
         "PermissionRequest" => RuntimeStatus::Waiting,
         "PermissionResult" | "PermissionDenied" | "PostToolUse" => match index {
             Some(index) if snapshot.sessions[index].status == RuntimeStatus::Waiting => {
@@ -531,7 +530,7 @@ mod tests {
             event("UserPromptSubmit", Some("question"), None),
         );
         apply_event(&mut snapshot, event("StopFailure", None, None));
-        assert_eq!(snapshot.sessions[0].status, RuntimeStatus::Failed);
+        assert_eq!(snapshot.sessions[0].status, RuntimeStatus::Waiting);
         assert!(!snapshot.sessions[0].unread);
     }
 
@@ -799,7 +798,7 @@ mod tests {
                     session_id: "failed".to_string(),
                     turn_id: "turn-2".to_string(),
                     source: SessionSource::Terminal,
-                    status: RuntimeStatus::Failed,
+                    status: RuntimeStatus::Waiting,
                     cwd: None,
                     user_prompt: None,
                     assistant_reply: None,

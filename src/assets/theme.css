@@ -1703,17 +1703,13 @@ mark.ah-search-match--current {
   pointer-events: none;
   transition: opacity var(--dur-fast) var(--ease-soft);
 }
-/* Optional 3-line clamp (v-tooltip.clamp). Avoid pre-wrap here — WebKit
-   line-clamp + pre-wrap leaks a ghost 4th line. */
+/* Clamped tooltip (v-tooltip.clamp or maxLines).
+   Truncation with ellipsis is computed in JS (tooltip.ts).
+   The CSS max-height acts as a rendering guard. */
 .ah-tooltip.is-clamped {
-  white-space: normal;
   overflow: hidden;
   overflow-wrap: anywhere;
   word-break: break-word;
-  /* Guard only. The actual 3-line truncation happens in JS (tooltip.ts):
-     CSS line-clamp paints a partial ghost 4th line into the padding area in
-     WebKit/Blink, and no max-height value both keeps line 3 whole and hides
-     the ghost. Cap = 3 lines + vertical padding (7px × 2, border-box). */
-  max-height: calc(12px * 1.45 * 3 + 14px);
+  max-height: calc(12px * 1.45 * var(--tooltip-max-lines, 12) + 14px + 2px);
 }
 .ah-tooltip.is-visible { opacity: 0.96; }

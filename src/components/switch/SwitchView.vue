@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useSwitchStore } from '@/stores/switch'
 import { useToast } from '@/composables/useToast'
 import * as api from '@/lib/api'
+import type { UsageWindow } from '@/lib/api'
 import AppModal from '@/components/ui/AppModal.vue'
 import AccountUsagePanel, { type UsageWindowRow } from '@/components/switch/AccountUsagePanel.vue'
 import ListeningToggle from '@/components/switch/ListeningToggle.vue'
@@ -18,6 +19,7 @@ const AGENT_DISPLAY_NAMES: Record<string, string> = {
   'claude-code': 'Claude Code',
   'grok-build': 'Grok Build',
   'kimi-code': 'Kimi Code',
+  kiro: 'Kiro',
   deepseek: 'DeepSeek Harness',
 }
 const agentName = computed(
@@ -28,6 +30,7 @@ const isCodex = computed(() => store.selectedAgent === 'codex')
 const isGrokBuild = computed(() => store.selectedAgent === 'grok-build')
 const isKimiCode = computed(() => store.selectedAgent === 'kimi-code')
 const isClaudeCode = computed(() => store.selectedAgent === 'claude-code')
+const isKiro = computed(() => store.selectedAgent === 'kiro')
 const isDeepSeek = computed(() => store.selectedAgent === 'deepseek')
 
 // Absolute timestamp formatted as "YYYY-MM-DD HH:mm:ss" in the user's local
@@ -123,12 +126,12 @@ const codexPlanBadge = computed(() => {
 const codexWindows = computed<UsageWindowRow[]>(() => {
   const u = store.codexUsage
   if (!u) return []
-  const fallback = [u.primary_window, u.secondary_window]
-    .filter((window): window is import('@/lib/api').UsageWindow => Boolean(window?.window_seconds))
-  const windows = (u.usage_windows?.length ? u.usage_windows : fallback)
-    .filter(window => window.window_seconds > 0)
-    .sort((left, right) => left.window_seconds - right.window_seconds)
-    .filter((window, index, all) => index === 0 || window.window_seconds !== all[index - 1].window_seconds)
+  const fallback: UsageWindow[] = [u.primary_window, u.secondary_window]
+    .filter((window): window is UsageWindow => Boolean(window?.window_seconds))
+  const windows: UsageWindow[] = (u.usage_windows?.length ? u.usage_windows : fallback)
+    .filter((window: UsageWindow) => window.window_seconds > 0)
+    .sort((left: UsageWindow, right: UsageWindow) => left.window_seconds - right.window_seconds)
+    .filter((window: UsageWindow, index: number, all: UsageWindow[]) => index === 0 || window.window_seconds !== all[index - 1].window_seconds)
 
   return windows.map(window => ({
     key: String(window.window_seconds),
@@ -271,6 +274,38 @@ async function handleRefreshClaude() {
   await store.refreshClaudeUsage(true)
   if (store.claudeUsageError) showToast(t('switch.usage_failed'), 'error')
   else if (store.claudeUsageAvailable === false) showToast(t('switch.claude_usage_login_required'), 'info')
+  else showToast(t('switch.usage_refresh_toast'), 'success')
+}
+
+// --- Kiro (plan limits and credit usage via official control plane API) ---
+const kiroAccountName = computed(
+  () => store.kiroUsage?.account_name || t('switch.kiro_default_account'),
+)
+const kiroPlanBadge = computed(() => {
+  return store.kiroUsage?.plan_type || 'KIRO FREE'
+})
+const kiroWindows = computed<UsageWindowRow[]>(() => {
+  if (!store.kiroUsage) return []
+  const u = store.kiroUsage
+  const w = u.usage_window
+  return [
+    {
+      key: 'credits',
+      label: t('switch.kiro_credits'),
+      remainingPercent: w.remaining_percent,
+      detail: t('switch.kiro_credits_detail', {
+        used: u.credits_used,
+        limit: u.credits_limit,
+        reset: fmtReset(w.reset_after_seconds, w.reset_at),
+      }),
+    },
+  ]
+})
+
+async function handleRefreshKiro() {
+  if (store.kiroUsageLoading) return
+  await store.refreshKiroUsage(true)
+  if (store.kiroUsageError) showToast(t('switch.usage_failed'), 'error')
   else showToast(t('switch.usage_refresh_toast'), 'success')
 }
 
@@ -594,6 +629,44 @@ async function handleConfirmClear() {
             @refresh="handleRefreshClaude"
           >
             <template #headerActions><ListeningToggle /></template>
+          </AccountUsagePanel>
+
+          <AccountUsagePanel
+            v-else-if="isKiro"
+            :account-name="kiroAccountName"
+            :account-hint="t('switch.kiro_account_hint')"
+            :account-status-label="t('switch.kiro_read_only')"
+            :usage-title="t('switch.kiro_usage_title', { name: kiroAccountName })"
+            :loading="store.kiroUsageLoading && !store.kiroUsage"
+            :refreshing="store.kiroUsageLoading"
+            :loading-text="t('switch.kiro_usage_loading')"
+            :error="store.kiroUsageError"
+            :badges="store.kiroUsage ? [kiroPlanBadge] : []"
+            :windows="kiroWindows"
+            :last-query-text="store.kiroUsageLastQuery ? fmtQueryTime(store.kiroUsageLastQuery) : null"
+            :paused="!listened"
+            @refresh="handleRefreshKiro"
+          >
+            <template #headerActions><ListeningToggle /></template>
+            <template v-if="store.kiroUsage?.free_trial || store.kiroUsage?.add_on_credits?.length" #extra>
+              <div
+                v-if="store.kiroUsage?.free_trial"
+                class="p-3 rounded-lg"
+                style="background: var(--sunken)"
+              >
+                <div class="flex justify-between items-center gap-2">
+                  <span class="font-medium" style="color: var(--ink)">
+                    {{ t('switch.kiro_free_trial') }}
+                  </span>
+                  <span class="text-xs px-2 py-0.5 rounded-full" style="background: var(--accent-soft); color: var(--accent)">
+                    {{ store.kiroUsage.free_trial.status }}
+                  </span>
+                </div>
+                <div class="text-xs mt-1" style="color: var(--ink-3)">
+                  {{ t('switch.kiro_free_trial_usage', { used: store.kiroUsage.free_trial.current_usage, limit: store.kiroUsage.free_trial.usage_limit }) }}
+                </div>
+              </div>
+            </template>
           </AccountUsagePanel>
 
           <!-- DeepSeek Harness: same AccountUsagePanel as the other read-only

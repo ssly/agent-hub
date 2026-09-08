@@ -13,16 +13,19 @@ pub struct Config {
     pub monitor: crate::monitor::types::MonitorConfig,
 }
 
-#[derive(Debug, Deserialize, serde::Serialize)]
+#[derive(Debug, Deserialize, serde::Serialize, Clone)]
 pub struct GeneralConfig {
     #[serde(default)]
     pub language: String,
+    #[serde(default)]
+    pub enabled_platforms: Option<Vec<String>>,
 }
 
 impl Default for GeneralConfig {
     fn default() -> Self {
         Self {
             language: "auto".to_string(),
+            enabled_platforms: None,
         }
     }
 }

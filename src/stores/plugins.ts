@@ -84,6 +84,12 @@ export const usePluginsStore = defineStore('plugins', () => {
     }
   })
 
+  const sharedSkillDir = computed(() => {
+    const shared = platforms.value.find(item => item.id === 'shared')
+    if (!shared) return ''
+    return isGlobalScope.value ? shared.skill_dir : workspaceSkillPath('shared')
+  })
+
   async function loadPlatform(id: string) {
     selectedPlatformId.value = id
     localStorage.setItem('ah-plugin-platform', id)
@@ -160,6 +166,7 @@ export const usePluginsStore = defineStore('plugins', () => {
     platforms,
     selectedPlatformId,
     selectedPlatform,
+    sharedSkillDir,
     workspaceDirectory,
     isGlobalScope,
     isLoading,

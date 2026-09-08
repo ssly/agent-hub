@@ -21,6 +21,11 @@ pub const SETTINGS_CHANGED_EVENT: &str = "usage-monitor-settings-changed";
 pub const MIN_REFRESH_MINUTES: u32 = 1;
 pub const MAX_REFRESH_MINUTES: u32 = 10;
 const DEFAULT_REFRESH_MINUTES: u32 = 5;
+
+pub const MIN_MONITOR_LIMIT: u32 = 6;
+pub const MAX_MONITOR_LIMIT: u32 = 12;
+const DEFAULT_MONITOR_LIMIT: u32 = 6;
+
 const SETTINGS_FILE: &str = "usage-monitor.json";
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -28,6 +33,8 @@ const SETTINGS_FILE: &str = "usage-monitor.json";
 pub struct UsageMonitorSettings {
     #[serde(default = "default_refresh_minutes")]
     pub refresh_minutes: u32,
+    #[serde(default = "default_monitor_limit")]
+    pub monitor_limit: u32,
     /// The agent selected in Accounts / tray provider tabs. `None` until the
     /// user picks one; frontends fall back to their localStorage preference.
     #[serde(default)]
@@ -42,10 +49,15 @@ fn default_refresh_minutes() -> u32 {
     DEFAULT_REFRESH_MINUTES
 }
 
+fn default_monitor_limit() -> u32 {
+    DEFAULT_MONITOR_LIMIT
+}
+
 impl Default for UsageMonitorSettings {
     fn default() -> Self {
         Self {
             refresh_minutes: DEFAULT_REFRESH_MINUTES,
+            monitor_limit: DEFAULT_MONITOR_LIMIT,
             selected_agent: None,
             listening: HashMap::new(),
         }
@@ -75,6 +87,9 @@ fn load_from_path(path: &Path) -> UsageMonitorSettings {
     settings.refresh_minutes = settings
         .refresh_minutes
         .clamp(MIN_REFRESH_MINUTES, MAX_REFRESH_MINUTES);
+    settings.monitor_limit = settings
+        .monitor_limit
+        .clamp(MIN_MONITOR_LIMIT, MAX_MONITOR_LIMIT);
     if let Some(agent) = settings.selected_agent.as_ref() {
         if agent.trim().is_empty() {
             settings.selected_agent = None;
@@ -131,6 +146,15 @@ pub fn set_usage_refresh_minutes(app: AppHandle, minutes: u32) -> UsageMonitorSe
 }
 
 #[tauri::command]
+pub fn set_usage_monitor_limit(app: AppHandle, limit: u32) -> UsageMonitorSettings {
+    let snapshot = with_settings_mut(|settings| {
+        settings.monitor_limit = limit.clamp(MIN_MONITOR_LIMIT, MAX_MONITOR_LIMIT);
+    });
+    emit_settings(&app, &snapshot);
+    snapshot
+}
+
+#[tauri::command]
 pub fn set_usage_selected_agent(app: AppHandle, agent: Option<String>) -> UsageMonitorSettings {
     let snapshot = with_settings_mut(|settings| {
         settings.selected_agent = agent.filter(|value| !value.trim().is_empty());
@@ -166,6 +190,16 @@ mod tests {
     }
 
     #[test]
+    fn monitor_limit_is_clamped_to_the_supported_range() {
+        let mut settings = UsageMonitorSettings::default();
+        assert_eq!(settings.monitor_limit, 6);
+        settings.monitor_limit = 0u32.clamp(MIN_MONITOR_LIMIT, MAX_MONITOR_LIMIT);
+        assert_eq!(settings.monitor_limit, 6);
+        settings.monitor_limit = 99u32.clamp(MIN_MONITOR_LIMIT, MAX_MONITOR_LIMIT);
+        assert_eq!(settings.monitor_limit, 12);
+    }
+
+    #[test]
     fn listening_defaults_to_disabled_for_untouched_agents() {
         let settings = UsageMonitorSettings::default();
         assert!(!settings.listening.get("codex").copied().unwrap_or(false));
@@ -177,12 +211,14 @@ mod tests {
         let path = dir.path().join("usage-monitor.json");
         let mut original = UsageMonitorSettings::default();
         original.refresh_minutes = 3;
+        original.monitor_limit = 10;
         original.selected_agent = Some("codex".to_string());
         original.listening.insert("codex".to_string(), true);
         original.listening.insert("grok-build".to_string(), false);
         save_to_path(&path, &original).expect("save");
         let loaded = load_from_path(&path);
         assert_eq!(loaded.refresh_minutes, 3);
+        assert_eq!(loaded.monitor_limit, 10);
         assert_eq!(loaded.selected_agent.as_deref(), Some("codex"));
         assert_eq!(loaded.listening.get("codex").copied(), Some(true));
         assert_eq!(loaded.listening.get("grok-build").copied(), Some(false));
@@ -195,12 +231,14 @@ mod tests {
         let missing = dir.path().join("nope.json");
         let missing_loaded = load_from_path(&missing);
         assert_eq!(missing_loaded.refresh_minutes, DEFAULT_REFRESH_MINUTES);
+        assert_eq!(missing_loaded.monitor_limit, DEFAULT_MONITOR_LIMIT);
         assert!(missing_loaded.listening.is_empty());
 
         let junk = dir.path().join("junk.json");
         fs::write(&junk, "{not json").expect("write");
         let junk_loaded = load_from_path(&junk);
         assert_eq!(junk_loaded.refresh_minutes, DEFAULT_REFRESH_MINUTES);
+        assert_eq!(junk_loaded.monitor_limit, DEFAULT_MONITOR_LIMIT);
         assert!(junk_loaded.selected_agent.is_none());
     }
 }

@@ -139,6 +139,11 @@ fn build_html(platform_id: &str, locale: &str, conversations: &[ExportConversati
     } else {
         "en"
     };
+    let brand_name = if locale_tag == "zh-CN" {
+        "智能体中枢"
+    } else {
+        "Agent Hub"
+    };
     let total_messages = conversations
         .iter()
         .map(|conversation| conversation.messages.len())
@@ -291,12 +296,13 @@ fn build_html(platform_id: &str, locale: &str, conversations: &[ExportConversati
 <body>
 <div class="layout">
   <aside class="sidebar">
-    <p class="brand">Agent Hub</p>
+    <p class="brand">{brand_name}</p>
     <h1>{title}</h1>
     <p class="summary">{platform} · {count} {exported_count} · {messages} {message_label}</p>
     <input id="search" class="search" type="search" placeholder="{search_placeholder}" autocomplete="off">
     <nav id="session-nav" class="session-nav" aria-label="Sessions">
 "#,
+        brand_name = escape_html(brand_name),
         title = escape_html(labels.document_title),
         platform = escape_html(platform_name),
         count = conversations.len(),

@@ -22,7 +22,18 @@ pub fn discover_platforms(config: &Config) -> Vec<Platform> {
     }
 
     defs.into_iter()
-        .filter(|d| d.presence_path.exists())
+        .filter(|d| {
+            // "shared" is the shared skill directory across agents, not a
+            // toggleable agent platform. It is always enabled.
+            if d.id == "shared" {
+                return true;
+            }
+            if let Some(ref enabled) = config.general.enabled_platforms {
+                enabled.contains(&d.id)
+            } else {
+                d.presence_path.exists()
+            }
+        })
         .map(|d| Platform {
             id: d.id,
             display_name: d.display_name,
@@ -71,5 +82,24 @@ fn shellexpand_home(path: &str) -> std::path::PathBuf {
     } else {
         // A literal path (possibly already containing native separators).
         std::path::PathBuf::from(path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discover_platforms_always_includes_shared() {
+        let mut config = Config::default();
+        // Even when enabled_platforms is explicitly empty, "shared" is kept.
+        config.general.enabled_platforms = Some(vec![]);
+        let platforms = discover_platforms(&config);
+        assert!(platforms.iter().any(|p| p.id == "shared"));
+
+        // When enabled_platforms is Some with specific agents, "shared" is still kept.
+        config.general.enabled_platforms = Some(vec!["codex".into()]);
+        let platforms = discover_platforms(&config);
+        assert!(platforms.iter().any(|p| p.id == "shared"));
     }
 }

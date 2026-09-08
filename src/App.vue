@@ -371,8 +371,16 @@ watch(() => appStore.aboutModalOpen, (isOpen) => {
   }
 })
 
-watch(() => appStore.locale, (newVal) => {
+watch(() => appStore.locale, async (newVal) => {
   locale.value = newVal
+  const title = newVal === 'zh-CN' ? '智能体中枢' : 'Agent Hub'
+  document.title = title
+  if (isTauri) {
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window')
+      await getCurrentWindow().setTitle(title)
+    } catch {}
+  }
 }, { immediate: true })
 
 // Unlisten handles for tray → main-window events.
@@ -584,7 +592,7 @@ onBeforeUnmount(() => {
         <div class="about-head">
           <div class="about-head__text">
             <div class="about-head__title-row">
-              <h2 class="about-name">Agent Hub</h2>
+              <h2 class="about-name">{{ t('ui.title') }}</h2>
               <span class="about-version font-mono">v{{ appStore.appVersion }}</span>
             </div>
             <p class="about-tagline">{{ t('about.tagline') }}</p>

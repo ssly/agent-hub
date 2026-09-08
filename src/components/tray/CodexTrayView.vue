@@ -18,6 +18,7 @@ import {
   getKimiSessionMonitorSnapshot,
   getKimiUsage,
   getKiroSessionMonitorSnapshot,
+  getKiroUsage,
   markSessionMonitorSessionRead,
   getQwenSessionMonitorSnapshot,
   getWorkbuddySessionMonitorSnapshot,
@@ -39,6 +40,7 @@ import type {
   CodexTraySnapshot,
   GrokUsage,
   KimiUsage,
+  KiroUsage,
   ResetCreditEntry,
   UsageMonitorSettings,
   UsageProviderAvailability,
@@ -54,13 +56,14 @@ import { useTrayDock } from './useTrayDock'
 
 const { t, locale } = useI18n()
 const { showToast } = useToast()
-type UsageProvider = 'codex' | 'claude-code' | 'grok-build' | 'kimi-code'
+type UsageProvider = 'codex' | 'claude-code' | 'grok-build' | 'kimi-code' | 'kiro'
 const selectedProvider = ref<UsageProvider>(preferredProviderFromAccounts())
 const availability = ref<UsageProviderAvailability | null>(null)
 const snapshot = ref<CodexTraySnapshot | null>(null)
 const grokUsage = ref<GrokUsage | null>(null)
 const kimiUsage = ref<KimiUsage | null>(null)
 const claudeUsage = ref<ClaudeUsage | null>(null)
+const kiroUsage = ref<KiroUsage | null>(null)
 // The real tray window starts hidden and compact. Defaulting to loading avoids
 // a flash of the empty-state layout before the first tray-click event arrives.
 const loading = ref(import.meta.env.MODE !== 'web')
@@ -70,6 +73,7 @@ const providerErrors = ref<Record<UsageProvider, string | null>>({
   'claude-code': null,
   'grok-build': null,
   'kimi-code': null,
+  kiro: null,
 })
 const error = computed(() => providerErrors.value[selectedProvider.value])
 // Last successful query time for the visible provider, shown in the top band
@@ -78,6 +82,7 @@ const lastQueryAt = computed(() => {
   if (selectedProvider.value === 'codex') return snapshot.value?.last_query_at ?? null
   if (selectedProvider.value === 'kimi-code') return kimiUsage.value?.fetched_at ?? null
   if (selectedProvider.value === 'claude-code') return claudeUsage.value?.fetched_at ?? null
+  if (selectedProvider.value === 'kiro') return kiroUsage.value?.fetched_at ?? null
   return grokUsage.value?.fetched_at ?? null
 })
 const loginUnavailable = ref(false)
@@ -86,6 +91,7 @@ const queriedProviders = ref<Record<UsageProvider, boolean>>({
   'claude-code': false,
   'grok-build': false,
   'kimi-code': false,
+  kiro: false,
 })
 const unlisteners: UnlistenFn[] = []
 const initialLoading = computed(() => compactLoading.value)
@@ -179,22 +185,25 @@ async function loadMonitorAvailability() {
   }
 }
 
+// --- Shared usage-monitor settings (backend file + event) ------------------
+// The same snapshot drives the Accounts view and its sidebar settings modal;
+// `usage-monitor-settings-changed` keeps this popup in sync live.
+const monitorSettings = ref<UsageMonitorSettings | null>(null)
+const refreshMinutes = computed(() => monitorSettings.value?.refreshMinutes ?? 5)
+const monitorLimit = computed(() => monitorSettings.value?.monitorLimit ?? 6)
+
 // Merged like the Monitor tab's "all" view: running first, newest activity
 // first within each group, capped so the strip never dominates the panel.
-/** Tray strip shows at most 6 sessions; tip placement splits at the midpoint. */
-const MONITOR_STRIP_LIMIT = 6
-const MONITOR_TIP_SPLIT = 3
-
+/** Tray strip shows at most monitorLimit (6-12) sessions; tip placement splits at the midpoint. */
 const monitorRows = computed<AgentSessionState[]>(() =>
   visibleMonitorAgents.value
     .flatMap(agent => monitorSnapshots.value[agent].sessions.map(session => ({ ...session, agent })))
     .sort((a, b) => {
-      if (a.unread !== b.unread) return a.unread ? -1 : 1
-      const rank = monitorStatusRank(a.status) - monitorStatusRank(b.status)
+      const rank = monitorStatusRank(a.status, a.unread) - monitorStatusRank(b.status, b.unread)
       if (rank !== 0) return rank
       return b.updatedAt - a.updatedAt
     })
-    .slice(0, MONITOR_STRIP_LIMIT),
+    .slice(0, monitorLimit.value),
 )
 
 // --- Edge dock (吸附) -------------------------------------------------------
@@ -296,9 +305,9 @@ const STRIP_BAR_HEIGHT = 48
 const STRIP_THICK_PX = 20
 const STRIP_UNREAD_PILL_LONG_PX = 16
 
-/** Top 3 rows: tip below; bottom 3: tip above — keeps long prompts inside the panel. */
+/** Upper half rows: tip below; lower half: tip above — keeps long prompts inside the panel. */
 function monitorTipPlacement(index: number): 'top' | 'bottom' {
-  return index < MONITOR_TIP_SPLIT ? 'bottom' : 'top'
+  return index < Math.ceil(monitorLimit.value / 2) ? 'bottom' : 'top'
 }
 
 /** Full-mode text label (mini uses icons only).
@@ -360,24 +369,25 @@ async function loadMonitorSnapshots() {
   })
 }
 
-// --- Status-transition pulse ----------------------------------------------
-// When a visible session flips running↔waiting↔ended, a large dot blooms at
-// the panel center, shrinks to row-dot size, then glides along a soft arc to
-// the row it belongs to — running green, waiting yellow, ended gray.
-interface MonitorPulse { id: number; key: string; status: RuntimeStatus }
-const pulses = ref<MonitorPulse[]>([])
-const knownMonitorStatus = new Map<string, string>()
-// The first watcher pass only seeds statuses — everything already on screen
-// at panel (re)open must not animate.
-let monitorStatusSeeded = false
-const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
-let pulseSeq = 0
+type EffectiveStatus = 'running' | 'waiting' | 'unread' | 'ended'
 
-// Row identity for transition detection and DOM targeting. Deliberately
-// session-scoped, NOT turn-scoped: the backend keeps one record per session
-// and mutates its turn_id on every new turn (for Kimi the fallback turn_id
-// even changes per event), so including turn_id would make every flip look
-// like a brand-new row and the pulse would never fire.
+function rowEffectiveStatus(row: AgentSessionState): EffectiveStatus {
+  if (row.status === 'running') return 'running'
+  if (row.status === 'waiting') return 'waiting'
+  if (row.status === 'ended' && row.unread) return 'unread'
+  return 'ended'
+}
+
+function monitorStatusLabel(row: AgentSessionState): string {
+  const status = rowEffectiveStatus(row)
+  if (status === 'running') return t('session_monitor.status_running')
+  if (status === 'waiting') return t('session_monitor.status_waiting')
+  if (status === 'unread') return t('session_monitor.status_unread')
+  return t('session_monitor.status_ended')
+}
+
+// Row identity for hover detection and row tracking. Deliberately
+// session-scoped, NOT turn-scoped.
 function monitorRowKey(row: AgentSessionState) {
   return `${row.agent}:${row.sessionId}`
 }
@@ -391,17 +401,10 @@ interface NativeTrayHoverPayload {
 
 // macOS supplies this only while the docked tray is expanded but unfocused.
 // A brief dwell keeps an expanding panel from acknowledging a row that merely
-// appeared beneath a stationary cursor.
-const NATIVE_HOVER_READ_DELAY_MS = 260
-let nativeHoverReadTimer: ReturnType<typeof window.setTimeout> | undefined
 let nativeHoveredMonitorRowKey: string | null = null
 let nativeHoverPoint: NativeTrayHoverPayload | null = null
 
 function clearNativeMonitorHover() {
-  if (nativeHoverReadTimer != null) {
-    window.clearTimeout(nativeHoverReadTimer)
-    nativeHoverReadTimer = undefined
-  }
   const key = nativeHoveredMonitorRowKey
   nativeHoveredMonitorRowKey = null
   nativeHoverPoint = null
@@ -433,17 +436,7 @@ function syncNativeMonitorHover() {
   if (!row || !key) return
 
   nativeHoveredMonitorRowKey = key
-  nativeHoverReadTimer = window.setTimeout(() => {
-    nativeHoverReadTimer = undefined
-    if (nativeHoveredMonitorRowKey !== key) return
-    const latest = monitorRows.value.find(item => monitorRowKey(item) === key)
-    if (!latest) {
-      clearNativeMonitorHover()
-      return
-    }
-    hoveredMonitorRowKey.value = key
-    if (latest.unread) markMonitorRowRead(latest)
-  }, NATIVE_HOVER_READ_DELAY_MS)
+  hoveredMonitorRowKey.value = key
 }
 
 function handleNativeTrayHover(payload: NativeTrayHoverPayload) {
@@ -452,7 +445,6 @@ function handleNativeTrayHover(payload: NativeTrayHoverPayload) {
 }
 
 function markMonitorRowRead(row: AgentSessionState) {
-  hoveredMonitorRowKey.value = monitorRowKey(row)
   if (!row.unread) return
   const observedUpdatedAt = row.updatedAt
   void markSessionMonitorSessionRead(row.agent, row.sessionId, observedUpdatedAt)
@@ -475,90 +467,24 @@ function markMonitorRowRead(row: AgentSessionState) {
     })
 }
 
+function markAllMonitorRowsRead() {
+  for (const agent of visibleMonitorAgents.value) {
+    const snapshot = monitorSnapshots.value[agent]
+    for (const session of snapshot.sessions) {
+      if (session.unread) {
+        markMonitorRowRead({ ...session, agent })
+      }
+    }
+  }
+}
+
 function clearHoveredMonitorRow(row: AgentSessionState) {
   if (hoveredMonitorRowKey.value === monitorRowKey(row)) {
     hoveredMonitorRowKey.value = null
   }
 }
 
-watch(monitorRows, rows => {
-  const firstSeeding = !monitorStatusSeeded
-  monitorStatusSeeded = true
-  const visible = new Set<string>()
-  for (const row of rows) {
-    const key = monitorRowKey(row)
-    visible.add(key)
-    const previous = knownMonitorStatus.get(key)
-    if (!firstSeeding && !reduceMotion && !monitorHidden.value) {
-      // Two cases animate: an existing row flipping status, and a brand-new
-      // session appearing already-running (e.g. a fresh ChatGPT desktop
-      // thread — it has no prior "ended" row to flip from).
-      const flipped = previous !== undefined && previous !== row.status
-      const appearedLive = previous === undefined && row.status !== 'ended'
-      if (flipped || appearedLive) {
-        void spawnPulse(key, row.status)
-      }
-    }
-    knownMonitorStatus.set(key, row.status)
-  }
-  // Forget sessions that scrolled out of the strip so re-appearing rows are
-  // treated as fresh (no pulse) instead of stale comparisons.
-  for (const key of [...knownMonitorStatus.keys()]) {
-    if (!visible.has(key)) knownMonitorStatus.delete(key)
-  }
-  const hovered = rows.find(row => monitorRowKey(row) === hoveredMonitorRowKey.value)
-  if (hovered?.unread) markMonitorRowRead(hovered)
-})
 
-async function spawnPulse(key: string, status: MonitorPulse['status']) {
-  const id = ++pulseSeq
-  pulses.value.push({ id, key, status })
-  await nextTick()
-  const panel = panelRef.value
-  const dotEl = panel?.querySelector<HTMLElement>(`[data-pulse-id="${id}"]`)
-  if (!panel || !dotEl) {
-    pulses.value = pulses.value.filter(pulse => pulse.id !== id)
-    return
-  }
-  const panelRect = panel.getBoundingClientRect()
-  const startX = panelRect.width / 2
-  const startY = panelRect.height / 2
-  const target = panel.querySelector<HTMLElement>(`[data-session-dot="${CSS.escape(key)}"]`)
-  let endX = startX
-  let endY = startY
-  if (target) {
-    const rect = target.getBoundingClientRect()
-    endX = rect.left - panelRect.left + rect.width / 2
-    endY = rect.top - panelRect.top + rect.height / 2
-  }
-  // Midpoint lifted upward (with a slight lateral bend) turns the straight
-  // slide into a soft arc.
-  const midX = (startX + endX) / 2 + (endX - startX) * 0.08
-  const midY = Math.min(startY, endY) - Math.max(18, Math.abs(endY - startY) * 0.18)
-  const finalScale = 8 / 56 // row dots are ~7-8px; the pulse element is 56px
-  const frame = (x: number, y: number, scale: number, opacity: number) => ({
-    transform: `translate(${x}px, ${y}px) translate(-50%, -50%) scale(${scale})`,
-    opacity,
-  })
-  const animation = dotEl.animate(
-    [
-      { ...frame(startX, startY, 0.25, 0), offset: 0 },
-      { ...frame(startX, startY, 1, 1), offset: 0.22 },
-      { ...frame(startX, startY, finalScale, 1), offset: 0.45 },
-      { ...frame(midX, midY, finalScale, 1), offset: 0.7 },
-      { ...frame(endX, endY, finalScale, 1), offset: 0.96 },
-      { ...frame(endX, endY, finalScale, 0), offset: 1 },
-    ],
-    { duration: 950, easing: 'cubic-bezier(.4, 0, .2, 1)', fill: 'forwards' },
-  )
-  try { await animation.finished } catch { /* cancelled on unmount */ }
-  pulses.value = pulses.value.filter(pulse => pulse.id !== id)
-  // Landing beat: briefly enlarge the row dot so the eye connects the two.
-  target?.animate(
-    [{ transform: 'scale(1.7)' }, { transform: 'scale(1)' }],
-    { duration: 260, easing: 'ease-out' },
-  )
-}
 
 // --- Top-left controls (opacity / hide usage / hide monitor / mini) ---------
 // Opacity: compact slider (normal mode only). Usage / monitor: whole-section
@@ -578,7 +504,7 @@ const USAGE_HIDDEN_KEY = 'ah-tray-usage-hidden'
 const MONITOR_HIDDEN_KEY = 'ah-tray-monitor-hidden'
 // Declared above the computeds that reference it: watch() eagerly evaluates
 // its source on creation, so a later const would hit the TDZ at setup time.
-const PROVIDER_ORDER: UsageProvider[] = ['codex', 'claude-code', 'grok-build', 'kimi-code']
+const PROVIDER_ORDER: UsageProvider[] = ['codex', 'claude-code', 'grok-build', 'kimi-code', 'kiro']
 
 function loadUsageHidden(): boolean {
   const flag = localStorage.getItem(USAGE_HIDDEN_KEY)
@@ -651,11 +577,6 @@ function persistOpacity() {
   localStorage.setItem(OPACITY_STORAGE_KEY, String(panelOpacity.value))
 }
 
-// --- Shared usage-monitor settings (backend file + event) ------------------
-// The same snapshot drives the Accounts view and its sidebar settings modal;
-// `usage-monitor-settings-changed` keeps this popup in sync live.
-const monitorSettings = ref<UsageMonitorSettings | null>(null)
-const refreshMinutes = computed(() => monitorSettings.value?.refreshMinutes ?? 5)
 /** Absent key = paused (default off). */
 function isListened(provider: UsageProvider) {
   return monitorSettings.value?.listening?.[provider] ?? false
@@ -768,6 +689,7 @@ function preferredProviderFromAccounts(): UsageProvider {
   if (stored === 'grok-build') return 'grok-build'
   if (stored === 'kimi-code') return 'kimi-code'
   if (stored === 'claude-code') return 'claude-code'
+  if (stored === 'kiro') return 'kiro'
   return 'codex'
 }
 
@@ -775,7 +697,8 @@ function providerAvailable(provider: UsageProvider, status: UsageProviderAvailab
   if (provider === 'codex') return status.codex
   if (provider === 'claude-code') return status.claude_code
   if (provider === 'grok-build') return status.grok_build
-  return status.kimi_code
+  if (provider === 'kimi-code') return status.kimi_code
+  return Boolean(status.kiro)
 }
 
 const PROVIDER_LABELS: Record<UsageProvider, string> = {
@@ -783,6 +706,7 @@ const PROVIDER_LABELS: Record<UsageProvider, string> = {
   'claude-code': 'Claude Code',
   'grok-build': 'Grok Build',
   'kimi-code': 'Kimi Code',
+  kiro: 'Kiro',
 }
 function providerLabel(provider: UsageProvider) {
   return PROVIDER_LABELS[provider]
@@ -901,6 +825,21 @@ const grokWindows = computed<TrayUsageWindow[]>(() => {
   }]
 })
 
+// Kiro exposes monthly credits via usage_windows.
+const kiroWindows = computed<TrayUsageWindow[]>(() => {
+  const windows = (kiroUsage.value?.usage_windows ?? [])
+    .filter(window => window.window_seconds > 0)
+    .sort((left, right) => left.window_seconds - right.window_seconds)
+    .filter((window, index, all) => index === 0 || window.window_seconds !== all[index - 1].window_seconds)
+
+  return windows.map(window => ({
+    key: String(window.window_seconds),
+    label: windowLabel(window.window_seconds),
+    tone: windowTone(window.window_seconds),
+    window,
+  }))
+})
+
 /** Docked strip usage bars: up to two smallest quota windows of the visible
  *  provider (5h first, then 7d), drawn as slim vertical bars side by side —
  *  first bar tank-green like the orb's water, second accent-blue like the
@@ -912,7 +851,9 @@ const stripUsageBars = computed<{ percent: number }[]>(() => {
       ? kimiWindows.value
       : selectedProvider.value === 'claude-code'
         ? claudeWindows.value
-        : grokWindows.value
+        : selectedProvider.value === 'kiro'
+          ? kiroWindows.value
+          : grokWindows.value
   return windows.slice(0, 2).map(entry => ({
     percent: Math.min(100, Math.max(0, entry.window.remaining_percent)),
   }))
@@ -1109,6 +1050,7 @@ async function refresh(compact = false, syncWithAccounts = false, force = false)
       grokUsage.value = null
       kimiUsage.value = null
       claudeUsage.value = null
+      kiroUsage.value = null
       loginUnavailable.value = true
       return
     }
@@ -1131,6 +1073,10 @@ async function refresh(compact = false, syncWithAccounts = false, force = false)
       const result = await getClaudeUsage(force)
       if (sequence !== refreshSequence) return
       claudeUsage.value = result
+    } else if (provider === 'kiro') {
+      const result = await getKiroUsage(force)
+      if (sequence !== refreshSequence) return
+      kiroUsage.value = result
     } else {
       const result = await getGrokUsage(force)
       if (sequence !== refreshSequence) return
@@ -1191,7 +1137,11 @@ async function handleTrayOpened() {
     ? snapshot.value !== null
     : available === 'kimi-code'
       ? kimiUsage.value !== null
-      : grokUsage.value !== null
+      : available === 'claude-code'
+        ? claudeUsage.value !== null
+        : available === 'kiro'
+          ? kiroUsage.value !== null
+          : grokUsage.value !== null
 
   await refresh(!hasLocal, false, false)
 }
@@ -1314,9 +1264,9 @@ onBeforeUnmount(() => {
               :key="monitorRowKey(row)"
               class="tray-dock-dot"
               :class="{
-                'tray-dock-dot--running': row.status === 'running',
-                'tray-dock-dot--waiting': row.status === 'waiting',
-                'tray-dock-dot--failed': row.status === 'failed',
+                'tray-dock-dot--running': rowEffectiveStatus(row) === 'running',
+                'tray-dock-dot--waiting': rowEffectiveStatus(row) === 'waiting',
+                'tray-dock-dot--unread': rowEffectiveStatus(row) === 'unread',
               }"
             />
           </template>
@@ -1582,6 +1532,31 @@ onBeforeUnmount(() => {
                 />
               </div>
             </template>
+
+            <template v-else-if="selectedProvider === 'kiro'">
+              <div class="quota-wrap" :class="{ 'is-loading': loading, 'is-mini': miniMode }">
+                <UsageOrb
+                  v-if="kiroWindows.length"
+                  :windows="kiroWindows"
+                  :mini="miniMode"
+                />
+                <UsageOrbPlaceholder
+                  v-else-if="error"
+                  kind="error"
+                  :mini="miniMode"
+                  :title="t('tray.failed')"
+                  :message="t('tray.failed_hint')"
+                />
+                <TrayWaveLoader v-else-if="loading">{{ t('tray.query_wait') }}</TrayWaveLoader>
+                <UsageOrbPlaceholder
+                  v-else
+                  kind="empty"
+                  :mini="miniMode"
+                  :title="t('tray.no_usage_title')"
+                  :message="t('tray.no_usage')"
+                />
+              </div>
+            </template>
           </template>
         </template>
 
@@ -1591,9 +1566,11 @@ onBeforeUnmount(() => {
             <span>{{ t('ui.monitor_tab') }}</span>
             <span
               v-if="totalMonitorUnread > 0"
-              v-tooltip="t('session_monitor.unread_count', { count: totalMonitorUnread })"
-              class="monitor-strip__unread-total"
-              :aria-label="t('session_monitor.unread_count', { count: totalMonitorUnread })"
+              v-tooltip="t('session_monitor.mark_all_read')"
+              class="monitor-strip__unread-total monitor-strip__unread-total--clickable"
+              role="button"
+              :aria-label="t('session_monitor.mark_all_read')"
+              @click.stop="markAllMonitorRowsRead"
             >{{ monitorUnreadBadge }}</span>
           </div>
           <div v-if="!monitorRows.length" class="monitor-empty" role="status">
@@ -1606,15 +1583,15 @@ onBeforeUnmount(() => {
             v-for="(row, index) in monitorRows"
             :key="`${row.agent}-${row.sessionId}-${row.turnId}`"
             class="monitor-row"
+            :class="{ 'monitor-row--unread': row.unread }"
             :data-monitor-row-key="monitorRowKey(row)"
-            @mouseenter="markMonitorRowRead(row)"
+            @click="row.unread && markMonitorRowRead(row)"
             @mouseleave="clearHoveredMonitorRow(row)"
           >
             <span
-              v-tooltip:[monitorTipPlacement(index)]="miniMode ? '' : t(`session_monitor.status_${row.status}`)"
+              v-tooltip:[monitorTipPlacement(index)]="miniMode ? '' : monitorStatusLabel(row)"
               class="monitor-dot"
-              :class="`is-${row.status}`"
-              :data-session-dot="monitorRowKey(row)"
+              :class="`is-${rowEffectiveStatus(row)}`"
             />
             <!-- Mini: icon only (tooltip = full name). Full: icon + label. -->
             <span
@@ -1639,7 +1616,7 @@ onBeforeUnmount(() => {
               <span
                 v-tooltip="miniMode ? '' : {
                   text: row.userPrompt || t('session_monitor.no_prompt'),
-                  clamp: true,
+                  clamp: 3,
                   placement: monitorTipPlacement(index),
                 }"
               >
@@ -1653,24 +1630,17 @@ onBeforeUnmount(() => {
             >{{ formatMonitorRelative(row.updatedAt) }}</span>
             <span
               v-if="row.unread"
-              v-tooltip="t('session_monitor.unread')"
-              class="monitor-row__unread"
-              role="img"
-              :aria-label="t('session_monitor.unread')"
+              v-tooltip="t('session_monitor.mark_read')"
+              class="monitor-row__unread monitor-row__unread--clickable"
+              role="button"
+              :aria-label="t('session_monitor.mark_read')"
+              @click.stop="markMonitorRowRead(row)"
             />
           </div>
         </div>
       </template>
 
-      <!-- Transition pulses: a session flipping running↔ended blooms here
-           (panel center), shrinks, then arcs to its monitor row. -->
-      <span
-        v-for="pulse in pulses"
-        :key="pulse.id"
-        :data-pulse-id="pulse.id"
-        class="monitor-pulse"
-        :class="`is-${pulse.status}`"
-      />
+
     </section>
     <AppToast />
   </main>
@@ -1851,7 +1821,7 @@ onBeforeUnmount(() => {
   background: var(--tray-signal-yellow);
   box-shadow: 0 0 4px var(--tray-signal-yellow);
 }
-.tray-dock-dot--failed {
+.tray-dock-dot--unread {
   background: var(--tray-signal-red);
   box-shadow: 0 0 4px var(--tray-signal-red);
 }
@@ -2325,12 +2295,31 @@ onBeforeUnmount(() => {
   text-transform: none;
   white-space: nowrap;
 }
+.monitor-strip__unread-total--clickable {
+  cursor: pointer;
+  transition: transform var(--dur-fast) var(--ease-soft), filter var(--dur-fast) var(--ease-soft);
+}
+.monitor-strip__unread-total--clickable:hover {
+  transform: scale(1.15);
+  filter: brightness(1.15);
+}
 .monitor-row__unread {
   flex: 0 0 7px;
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background: var(--tray-signal-red);
+}
+.monitor-row__unread--clickable {
+  cursor: pointer;
+  transition: transform var(--dur-fast) var(--ease-soft), box-shadow var(--dur-fast) var(--ease-soft);
+}
+.monitor-row__unread--clickable:hover {
+  transform: scale(1.4);
+  box-shadow: 0 0 6px var(--tray-signal-red);
+}
+.monitor-row--unread {
+  cursor: pointer;
 }
 .monitor-row {
   display: flex;
@@ -2348,39 +2337,10 @@ onBeforeUnmount(() => {
 }
 .monitor-dot.is-running { background: var(--tray-signal-green); }
 .monitor-dot.is-waiting { background: var(--tray-signal-yellow); }
-.monitor-dot.is-failed { background: var(--tray-signal-red); }
+.monitor-dot.is-unread { background: var(--tray-signal-red); }
 .monitor-dot.is-ended { background: var(--tray-ink-4); }
 
-/* Status-transition pulse: blooms at the panel center at full size, then the
-   JS-driven WAAPI animation shrinks it and arcs it to its monitor row.
-   Positioning is entirely transform-based (see spawnPulse). */
-.monitor-pulse {
-  position: absolute;
-  left: 0;
-  top: 0;
-  z-index: 30;
-  width: 56px;
-  height: 56px;
-  border-radius: 999px;
-  pointer-events: none;
-  opacity: 0;
-}
-.monitor-pulse.is-running {
-  background: var(--tray-signal-green);
-  box-shadow: 0 0 26px color-mix(in srgb, var(--tray-signal-green) 55%, transparent);
-}
-.monitor-pulse.is-waiting {
-  background: var(--tray-signal-yellow);
-  box-shadow: 0 0 26px color-mix(in srgb, var(--tray-signal-yellow) 55%, transparent);
-}
-.monitor-pulse.is-failed {
-  background: var(--tray-signal-red);
-  box-shadow: 0 0 26px color-mix(in srgb, var(--tray-signal-red) 55%, transparent);
-}
-.monitor-pulse.is-ended {
-  background: var(--tray-ink-4);
-  box-shadow: 0 0 20px color-mix(in srgb, var(--tray-ink-4) 45%, transparent);
-}
+
 .monitor-agent {
   flex: 0 0 auto;
   display: inline-flex;
