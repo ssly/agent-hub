@@ -260,9 +260,59 @@ fn parse_auth_json(raw_json: &str, fallback_method: Option<&str>) -> Option<Kiro
     })
 }
 
+/// Read profile ARN from the `state` table in SQLite (e.g. `api.codewhisperer.profile`).
+fn read_sqlite_profile_arn(conn: &Connection) -> Option<String> {
+    let priority_keys = [
+        "api.codewhisperer.profile",
+        "api.kiro.profile",
+        "kiro.profile",
+    ];
+
+    for key in priority_keys {
+        if let Ok(mut stmt) = conn.prepare("SELECT value FROM state WHERE key = ?1") {
+            if let Ok(val) = stmt.query_row([key], |row| row.get::<_, String>(0)) {
+                if let Ok(doc) = serde_json::from_str::<serde_json::Value>(&val) {
+                    if let Some(arn) = doc
+                        .get("arn")
+                        .or_else(|| doc.get("profileArn"))
+                        .and_then(|v| v.as_str())
+                    {
+                        let trimmed = arn.trim();
+                        if !trimmed.is_empty() {
+                            return Some(trimmed.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if let Ok(mut stmt) = conn.prepare("SELECT value FROM state WHERE key LIKE '%profile%'") {
+        if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
+            for val in rows.flatten() {
+                if let Ok(doc) = serde_json::from_str::<serde_json::Value>(&val) {
+                    if let Some(arn) = doc
+                        .get("arn")
+                        .or_else(|| doc.get("profileArn"))
+                        .and_then(|v| v.as_str())
+                    {
+                        let trimmed = arn.trim();
+                        if !trimmed.is_empty() {
+                            return Some(trimmed.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
 /// Read Kiro auth credentials from SQLite `auth_kv`.
 fn read_sqlite_auth(db_path: &Path) -> Option<KiroAuth> {
     let conn = open_sqlite_safely(db_path)?;
+    let state_profile_arn = read_sqlite_profile_arn(&conn);
 
     // 1. Priority known keys
     let priority_keys = [
@@ -279,7 +329,10 @@ fn read_sqlite_auth(db_path: &Path) -> Option<KiroAuth> {
     for (key, method) in priority_keys {
         if let Ok(mut stmt) = conn.prepare("SELECT value FROM auth_kv WHERE key = ?1") {
             if let Ok(raw_json) = stmt.query_row([key], |row| row.get::<_, String>(0)) {
-                if let Some(auth) = parse_auth_json(&raw_json, Some(method)) {
+                if let Some(mut auth) = parse_auth_json(&raw_json, Some(method)) {
+                    if auth.profile_arn.as_deref().unwrap_or("").trim().is_empty() {
+                        auth.profile_arn = state_profile_arn.clone();
+                    }
                     return Some(auth);
                 }
             }
@@ -302,7 +355,10 @@ fn read_sqlite_auth(db_path: &Path) -> Option<KiroAuth> {
                 } else {
                     "odic"
                 };
-                if let Some(auth) = parse_auth_json(&v, Some(fallback_method)) {
+                if let Some(mut auth) = parse_auth_json(&v, Some(fallback_method)) {
+                    if auth.profile_arn.as_deref().unwrap_or("").trim().is_empty() {
+                        auth.profile_arn = state_profile_arn.clone();
+                    }
                     return Some(auth);
                 }
             }
@@ -402,6 +458,80 @@ fn read_file_auth() -> Option<KiroAuth> {
                 auth_method: "api_key".to_string(),
                 user_id: None,
             });
+        }
+    }
+
+    None
+}
+
+/// Fallback: read profile ARN from IDE profile JSON files (e.g. `profile.json`).
+fn read_file_profile_arn() -> Option<String> {
+    let home = home_dir();
+    let mut candidates = vec![
+        home.join("Library")
+            .join("Application Support")
+            .join("Kiro")
+            .join("User")
+            .join("globalStorage")
+            .join("kiro.kiroagent")
+            .join("profile.json"),
+        home.join(".config")
+            .join("Kiro")
+            .join("User")
+            .join("globalStorage")
+            .join("kiro.kiroagent")
+            .join("profile.json"),
+        home.join(".kiro").join("profile.json"),
+    ];
+
+    if let Some(app_data) = dirs::data_dir() {
+        candidates.push(
+            app_data
+                .join("Kiro")
+                .join("User")
+                .join("globalStorage")
+                .join("kiro.kiroagent")
+                .join("profile.json"),
+        );
+    }
+    if let Ok(app_data) = std::env::var("APPDATA") {
+        candidates.push(
+            PathBuf::from(app_data)
+                .join("Kiro")
+                .join("User")
+                .join("globalStorage")
+                .join("kiro.kiroagent")
+                .join("profile.json"),
+        );
+    }
+    if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+        candidates.push(
+            PathBuf::from(local_app_data)
+                .join("Kiro")
+                .join("User")
+                .join("globalStorage")
+                .join("kiro.kiroagent")
+                .join("profile.json"),
+        );
+    }
+
+    for path in candidates {
+        if !path.exists() {
+            continue;
+        }
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(doc) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(arn) = doc
+                    .get("arn")
+                    .or_else(|| doc.get("profileArn"))
+                    .and_then(|v| v.as_str())
+                {
+                    let trimmed = arn.trim();
+                    if !trimmed.is_empty() {
+                        return Some(trimmed.to_string());
+                    }
+                }
+            }
         }
     }
 
@@ -602,6 +732,47 @@ pub fn map_kiro_usage(raw: &serde_json::Value, account_label: Option<String>, no
     }
 }
 
+/// Query AWS management endpoint for active profile ARN if missing locally.
+async fn fetch_profile_arn_remote(client: &reqwest::Client, auth: &KiroAuth) -> Option<String> {
+    let mut req = client
+        .post("https://management.us-east-1.kiro.dev/List-Available-Profiles")
+        .header("Authorization", format!("Bearer {}", auth.access_token))
+        .header("x-amzn-kiro-client-attribution", "KiroCLI")
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/json");
+
+    let method_lower = auth.auth_method.to_lowercase();
+    if method_lower.contains("odic")
+        || method_lower.contains("idc")
+        || method_lower.contains("builder")
+        || method_lower.contains("sso")
+    {
+        req = req.header("TokenType", "SSO_OIDC");
+    } else if method_lower.contains("idp") || method_lower.contains("external") {
+        req = req.header("TokenType", "EXTERNAL_IDP");
+    } else if method_lower.contains("api_key") || method_lower == "key" {
+        req = req.header("TokenType", "API_KEY");
+    } else if method_lower.contains("machine") {
+        req = req.header("TokenType", "KIRO_MACHINE_TOKEN");
+    }
+
+    let resp = req.json(&serde_json::json!({})).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let data: serde_json::Value = resp.json().await.ok()?;
+    let profiles = data.get("profiles")?.as_array()?;
+    for p in profiles {
+        if let Some(arn) = p.get("arn").and_then(|v| v.as_str()) {
+            let trimmed = arn.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// Fetch live usage from Kiro control plane endpoint.
 async fn fetch_kiro_usage() -> Result<KiroUsageResponse, String> {
     let now = usage_unix_now();
@@ -624,7 +795,9 @@ async fn fetch_kiro_usage() -> Result<KiroUsageResponse, String> {
                         auth.refresh_token = Some(r);
                     }
                     if let Some(p) = profile_arn {
-                        auth.profile_arn = Some(p);
+                        if !p.trim().is_empty() {
+                            auth.profile_arn = Some(p);
+                        }
                     }
                 }
             }
@@ -636,10 +809,28 @@ async fn fetch_kiro_usage() -> Result<KiroUsageResponse, String> {
         .build()
         .map_err(|e| format!("构建 Kiro 客户端失败: {e}"))?;
 
-    let mut query_params = vec![("origin", "KIRO_CLI")];
-    if let Some(ref arn) = auth.profile_arn {
-        query_params.push(("profileArn", arn.as_str()));
+    // If profileArn is still missing locally, query List-Available-Profiles
+    if auth.profile_arn.as_deref().unwrap_or("").trim().is_empty() {
+        if let Some(arn) = fetch_profile_arn_remote(&client, &auth).await {
+            auth.profile_arn = Some(arn);
+        }
     }
+
+    // If still missing, check profile.json from disk
+    if auth.profile_arn.as_deref().unwrap_or("").trim().is_empty() {
+        if let Some(arn) = read_file_profile_arn() {
+            auth.profile_arn = Some(arn);
+        }
+    }
+
+    let profile_arn = match auth.profile_arn.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(p) => p,
+        None => {
+            return Err("未找到有效的 Kiro Profile ARN（ProfileArn 为空）。请在终端运行 kiro 并尝试至少一次对话后重试。".to_string());
+        }
+    };
+
+    let query_params = [("origin", "KIRO_CLI"), ("profileArn", profile_arn)];
 
     let mut request = client
         .get(KIRO_USAGE_URL)
@@ -673,7 +864,21 @@ async fn fetch_kiro_usage() -> Result<KiroUsageResponse, String> {
         return Err(format!("Kiro 认证失败或 Token 已过期（HTTP {status}）。请在终端运行 kiro-cli 重新登录。"));
     }
     if !status.is_success() {
-        return Err(format!("Kiro 用量接口返回错误: HTTP {status}"));
+        let err_body = response.text().await.unwrap_or_default();
+        let detail = if let Ok(doc) = serde_json::from_str::<serde_json::Value>(&err_body) {
+            doc.get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&err_body)
+                .to_string()
+        } else {
+            err_body
+        };
+        let detail_clean = detail.trim();
+        if !detail_clean.is_empty() {
+            return Err(format!("Kiro 用量接口返回错误: HTTP {status} ({detail_clean})"));
+        } else {
+            return Err(format!("Kiro 用量接口返回错误: HTTP {status}"));
+        }
     }
 
     let raw: serde_json::Value = response
@@ -758,5 +963,14 @@ mod tests {
         assert_eq!(mapped.usage_window.remaining_percent, 80);
         assert_eq!(mapped.account_name.as_deref(), Some("user-test-123"));
         assert!(mapped.free_trial.is_some());
+    }
+
+    #[test]
+    #[ignore]
+    fn kiro_live_usage_query() {
+        let usage = tauri::async_runtime::block_on(fetch_kiro_usage()).unwrap();
+        println!("Live fetch_kiro_usage: {:?}", usage);
+        assert_eq!(usage.plan_type, "KIRO FREE");
+        assert!(usage.credits_limit > 0.0);
     }
 }
