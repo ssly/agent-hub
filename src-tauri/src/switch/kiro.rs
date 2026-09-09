@@ -74,6 +74,20 @@ fn kiro_sqlite_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
     let home = home_dir();
 
+    // Environment variable overrides
+    if let Ok(path) = std::env::var("KIRO_CLI_DB_FILE") {
+        let p = PathBuf::from(path);
+        if !p.as_os_str().is_empty() {
+            paths.push(p);
+        }
+    }
+    if let Ok(dir) = std::env::var("KIRO_CLI_DATA_PATH") {
+        let p = PathBuf::from(dir);
+        if !p.as_os_str().is_empty() {
+            paths.push(p.join("data.sqlite3"));
+        }
+    }
+
     // macOS
     paths.push(
         home.join("Library")
@@ -81,18 +95,60 @@ fn kiro_sqlite_paths() -> Vec<PathBuf> {
             .join("kiro-cli")
             .join("data.sqlite3"),
     );
-    // Linux
+    paths.push(
+        home.join("Library")
+            .join("Application Support")
+            .join("kiro")
+            .join("data.sqlite3"),
+    );
+
+    // Linux / generic XDG
     paths.push(
         home.join(".local")
             .join("share")
             .join("kiro-cli")
             .join("data.sqlite3"),
     );
+    paths.push(
+        home.join(".local")
+            .join("share")
+            .join("kiro")
+            .join("data.sqlite3"),
+    );
     paths.push(home.join(".config").join("kiro-cli").join("data.sqlite3"));
+    paths.push(home.join(".config").join("kiro").join("data.sqlite3"));
+
+    // User home directory fallback (.kiro, .kiro-cli)
+    paths.push(home.join(".kiro").join("data.sqlite3"));
+    paths.push(home.join(".kiro-cli").join("data.sqlite3"));
 
     // Windows / generic dirs fallback
     if let Some(app_data) = dirs::data_dir() {
         paths.push(app_data.join("kiro-cli").join("data.sqlite3"));
+        paths.push(app_data.join("kiro").join("data.sqlite3"));
+    }
+    if let Some(local_data) = dirs::data_local_dir() {
+        paths.push(local_data.join("kiro-cli").join("data.sqlite3"));
+        paths.push(local_data.join("kiro").join("data.sqlite3"));
+    }
+
+    // Windows environment variables directly
+    if let Ok(app_data) = std::env::var("APPDATA") {
+        let p = PathBuf::from(app_data);
+        paths.push(p.join("kiro-cli").join("data.sqlite3"));
+        paths.push(p.join("kiro").join("data.sqlite3"));
+    }
+    if let Ok(local_data) = std::env::var("LOCALAPPDATA") {
+        let p = PathBuf::from(local_data);
+        paths.push(p.join("kiro-cli").join("data.sqlite3"));
+        paths.push(p.join("kiro").join("data.sqlite3"));
+    }
+    if let Ok(user_profile) = std::env::var("USERPROFILE") {
+        let p = PathBuf::from(user_profile);
+        paths.push(p.join(".kiro").join("data.sqlite3"));
+        paths.push(p.join(".kiro-cli").join("data.sqlite3"));
+        paths.push(p.join("AppData").join("Roaming").join("kiro-cli").join("data.sqlite3"));
+        paths.push(p.join("AppData").join("Local").join("kiro-cli").join("data.sqlite3"));
     }
 
     paths
@@ -116,62 +172,139 @@ fn parse_expiry_timestamp(val: &serde_json::Value) -> Option<u64> {
     None
 }
 
+/// Safely open a SQLite database file, handling WAL mode and Windows file locks.
+fn open_sqlite_safely(db_path: &Path) -> Option<Connection> {
+    // 1. Try standard read-only first
+    if let Ok(conn) = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        return Some(conn);
+    }
+
+    // 2. Try URI read-only with immutable=1 (bypasses Windows lock & WAL -shm file requirement)
+    let path_str = db_path.to_string_lossy();
+    let uri_path = if cfg!(windows) {
+        path_str.replace('\\', "/")
+    } else {
+        path_str.to_string()
+    };
+    let uri = format!("file:{}?immutable=1", uri_path);
+    if let Ok(conn) = Connection::open_with_flags(
+        &uri,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+    ) {
+        return Some(conn);
+    }
+
+    // 3. Try copy to temp directory (handles Windows sharing violations when Kiro CLI is running)
+    let temp_name = format!("ah_kiro_{}.sqlite3", std::process::id());
+    let temp_copy = std::env::temp_dir().join(temp_name);
+    if std::fs::copy(db_path, &temp_copy).is_ok() {
+        let res = Connection::open_with_flags(&temp_copy, OpenFlags::SQLITE_OPEN_READ_ONLY).ok();
+        let _ = std::fs::remove_file(&temp_copy);
+        if let Some(conn) = res {
+            return Some(conn);
+        }
+    }
+
+    None
+}
+
+/// Parse a Kiro JSON auth payload.
+fn parse_auth_json(raw_json: &str, fallback_method: Option<&str>) -> Option<KiroAuth> {
+    let doc: serde_json::Value = serde_json::from_str(raw_json).ok()?;
+
+    let access_token = doc
+        .get("access_token")
+        .or_else(|| doc.get("accessToken"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+
+    let refresh_token = doc
+        .get("refresh_token")
+        .or_else(|| doc.get("refreshToken"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+
+    let expires_at = doc
+        .get("expires_at")
+        .or_else(|| doc.get("expiresAt"))
+        .and_then(parse_expiry_timestamp);
+
+    let profile_arn = doc
+        .get("profile_arn")
+        .or_else(|| doc.get("profileArn"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+
+    let user_id = doc
+        .get("user_id")
+        .or_else(|| doc.get("userId"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+
+    let auth_method = doc
+        .get("auth_method")
+        .or_else(|| doc.get("authMethod"))
+        .and_then(|v| v.as_str())
+        .or(fallback_method)
+        .unwrap_or("social")
+        .to_string();
+
+    Some(KiroAuth {
+        access_token: access_token.to_string(),
+        refresh_token,
+        expires_at,
+        profile_arn,
+        auth_method,
+        user_id,
+    })
+}
+
 /// Read Kiro auth credentials from SQLite `auth_kv`.
 fn read_sqlite_auth(db_path: &Path) -> Option<KiroAuth> {
-    let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    let conn = open_sqlite_safely(db_path)?;
 
-    // Preferred key order: social token -> odic (Builder ID) -> external idp
-    let keys = [
+    // 1. Priority known keys
+    let priority_keys = [
         ("kirocli:social:token", "social"),
         ("kirocli:odic:token", "odic"),
+        ("codewhisperer:odic:token", "odic"),
+        ("kiro:odic:token", "odic"),
+        ("kiro:social:token", "social"),
+        ("codewhisperer:social:token", "social"),
         ("kirocli:external-idp:token", "external_idp"),
+        ("codewhisperer:external-idp:token", "external_idp"),
     ];
 
-    for (key, method) in keys {
-        let mut stmt = conn
-            .prepare("SELECT value FROM auth_kv WHERE key = ?1")
-            .ok()?;
-        let value_res: Result<String, _> = stmt.query_row([key], |row| row.get(0));
-        if let Ok(raw_json) = value_res {
-            if let Ok(doc) = serde_json::from_str::<serde_json::Value>(&raw_json) {
-                let access_token = doc
-                    .get("access_token")
-                    .or_else(|| doc.get("accessToken"))
-                    .and_then(|v| v.as_str())
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())?;
+    for (key, method) in priority_keys {
+        if let Ok(mut stmt) = conn.prepare("SELECT value FROM auth_kv WHERE key = ?1") {
+            if let Ok(raw_json) = stmt.query_row([key], |row| row.get::<_, String>(0)) {
+                if let Some(auth) = parse_auth_json(&raw_json, Some(method)) {
+                    return Some(auth);
+                }
+            }
+        }
+    }
 
-                let refresh_token = doc
-                    .get("refresh_token")
-                    .or_else(|| doc.get("refreshToken"))
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string);
-
-                let expires_at = doc
-                    .get("expires_at")
-                    .or_else(|| doc.get("expiresAt"))
-                    .and_then(parse_expiry_timestamp);
-
-                let profile_arn = doc
-                    .get("profile_arn")
-                    .or_else(|| doc.get("profileArn"))
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string);
-
-                let user_id = doc
-                    .get("user_id")
-                    .or_else(|| doc.get("userId"))
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string);
-
-                return Some(KiroAuth {
-                    access_token: access_token.to_string(),
-                    refresh_token,
-                    expires_at,
-                    profile_arn,
-                    auth_method: method.to_string(),
-                    user_id,
-                });
+    // 2. Generic fallback: check any key in auth_kv that contains "token"
+    if let Ok(mut stmt) = conn.prepare("SELECT key, value FROM auth_kv WHERE key LIKE '%token%'") {
+        if let Ok(rows) = stmt.query_map([], |row| {
+            let k: String = row.get(0)?;
+            let v: String = row.get(1)?;
+            Ok((k, v))
+        }) {
+            for item in rows.flatten() {
+                let (k, v) = item;
+                let fallback_method = if k.contains("social") {
+                    "social"
+                } else if k.contains("idp") {
+                    "external_idp"
+                } else {
+                    "odic"
+                };
+                if let Some(auth) = parse_auth_json(&v, Some(fallback_method)) {
+                    return Some(auth);
+                }
             }
         }
     }
@@ -179,10 +312,10 @@ fn read_sqlite_auth(db_path: &Path) -> Option<KiroAuth> {
     None
 }
 
-/// Fallback: read cached auth JSON from `~/.aws/sso/cache/`.
+/// Fallback: read cached auth JSON from `~/.aws/sso/cache/` or IDE profile.
 fn read_file_auth() -> Option<KiroAuth> {
     let home = home_dir();
-    let candidates = [
+    let mut candidates = vec![
         home.join(".aws")
             .join("sso")
             .join("cache")
@@ -191,6 +324,21 @@ fn read_file_auth() -> Option<KiroAuth> {
             .join("sso")
             .join("cache")
             .join("kiro-auth-token.json"),
+    ];
+
+    // Check all JSON files in ~/.aws/sso/cache/
+    let sso_cache_dir = home.join(".aws").join("sso").join("cache");
+    if let Ok(entries) = std::fs::read_dir(&sso_cache_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                candidates.push(path);
+            }
+        }
+    }
+
+    // macOS profile.json
+    candidates.push(
         home.join("Library")
             .join("Application Support")
             .join("Kiro")
@@ -198,54 +346,48 @@ fn read_file_auth() -> Option<KiroAuth> {
             .join("globalStorage")
             .join("kiro.kiroagent")
             .join("profile.json"),
-    ];
+    );
+    // Linux profile.json
+    candidates.push(
+        home.join(".config")
+            .join("Kiro")
+            .join("User")
+            .join("globalStorage")
+            .join("kiro.kiroagent")
+            .join("profile.json"),
+    );
+    // Windows profile.json
+    if let Some(app_data) = dirs::data_dir() {
+        candidates.push(
+            app_data
+                .join("Kiro")
+                .join("User")
+                .join("globalStorage")
+                .join("kiro.kiroagent")
+                .join("profile.json"),
+        );
+    }
+    if let Ok(app_data) = std::env::var("APPDATA") {
+        candidates.push(
+            PathBuf::from(app_data)
+                .join("Kiro")
+                .join("User")
+                .join("globalStorage")
+                .join("kiro.kiroagent")
+                .join("profile.json"),
+        );
+    }
 
     for path in candidates {
         if !path.exists() {
             continue;
         }
-        let content = std::fs::read_to_string(&path).ok()?;
-        let doc: serde_json::Value = serde_json::from_str(&content).ok()?;
-
-        let access_token = doc
-            .get("accessToken")
-            .or_else(|| doc.get("access_token"))
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .filter(|s| !s.is_empty())?;
-
-        let refresh_token = doc
-            .get("refreshToken")
-            .or_else(|| doc.get("refresh_token"))
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
-
-        let expires_at = doc
-            .get("expiresAt")
-            .or_else(|| doc.get("expires_at"))
-            .and_then(parse_expiry_timestamp);
-
-        let profile_arn = doc
-            .get("profileArn")
-            .or_else(|| doc.get("profile_arn"))
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
-
-        let auth_method = doc
-            .get("authMethod")
-            .or_else(|| doc.get("auth_method"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("social")
-            .to_string();
-
-        return Some(KiroAuth {
-            access_token: access_token.to_string(),
-            refresh_token,
-            expires_at,
-            profile_arn,
-            auth_method,
-            user_id: None,
-        });
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if let Some(auth) = parse_auth_json(&content, None) {
+            return Some(auth);
+        }
     }
 
     // Fallback: check environment variable
@@ -280,7 +422,7 @@ fn resolve_kiro_auth() -> Result<KiroAuth, String> {
         return Ok(auth);
     }
 
-    Err("未找到 Kiro 认证凭证。请先在终端运行 kiro-cli 登录。".to_string())
+    Err("未找到 Kiro 登录凭据。请先在终端运行 kiro（或 kiro-cli）并登录账号，然后再刷新。".to_string())
 }
 
 /// Check if Kiro credentials are present.
@@ -506,8 +648,19 @@ async fn fetch_kiro_usage() -> Result<KiroUsageResponse, String> {
         .header("x-amzn-kiro-client-attribution", "KiroCLI")
         .header("Accept", "application/json");
 
-    if auth.auth_method == "odic" || auth.auth_method == "IdC" {
+    let method_lower = auth.auth_method.to_lowercase();
+    if method_lower.contains("odic")
+        || method_lower.contains("idc")
+        || method_lower.contains("builder")
+        || method_lower.contains("sso")
+    {
         request = request.header("TokenType", "SSO_OIDC");
+    } else if method_lower.contains("idp") || method_lower.contains("external") {
+        request = request.header("TokenType", "EXTERNAL_IDP");
+    } else if method_lower.contains("api_key") || method_lower == "key" {
+        request = request.header("TokenType", "API_KEY");
+    } else if method_lower.contains("machine") {
+        request = request.header("TokenType", "KIRO_MACHINE_TOKEN");
     }
 
     let response = request

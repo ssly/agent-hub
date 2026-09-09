@@ -124,7 +124,7 @@ const showEmpty = computed(
         </div>
       </div>
 
-      <div v-if="paused" class="text-sm py-2" style="color: var(--ink-4)">
+      <div v-if="paused && !loading && !error && !windows.length" class="text-sm py-2" style="color: var(--ink-4)">
         {{ pausedText || t('switch.listening_off_hint') }}
       </div>
 

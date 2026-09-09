@@ -304,8 +304,11 @@ const kiroWindows = computed<UsageWindowRow[]>(() => {
 
 async function handleRefreshKiro() {
   if (store.kiroUsageLoading) return
+  if (!listened.value && store.selectedAgent) {
+    await store.setAgentListening(store.selectedAgent, true)
+  }
   await store.refreshKiroUsage(true)
-  if (store.kiroUsageError) showToast(t('switch.usage_failed'), 'error')
+  if (store.kiroUsageError) showToast(store.kiroUsageError, 'error')
   else showToast(t('switch.usage_refresh_toast'), 'success')
 }
 
@@ -380,6 +383,7 @@ function startAutoTimer() {
     else if (agent === 'grok-build') void store.refreshGrokUsage(true)
     else if (agent === 'kimi-code') void store.refreshKimiUsage(true)
     else if (agent === 'claude-code') void store.refreshClaudeUsage(true)
+    else if (agent === 'kiro') void store.refreshKiroUsage(true)
     else if (agent === 'deepseek') void store.refreshDeepseekUsage(true)
   }, store.refreshMinutes * 60_000)
 }
