@@ -483,8 +483,6 @@ export async function getCodexResetCredits() {
 // In-memory mock cache mirrors the real 10-minute backend TTL.
 const MOCK_USAGE_TTL_MS = 10 * 60 * 1000
 let mockCodexTray: { at: number; data: any } | null = null
-let mockGrokUsage: { at: number; data: any } | null = null
-let mockKimiUsage: { at: number; data: any } | null = null
 
 function mockCacheFresh(entry: { at: number } | null) {
   return Boolean(entry && Date.now() - entry.at < MOCK_USAGE_TTL_MS)
@@ -525,36 +523,8 @@ export async function getCodexTrayUsage(force = false) {
   mockCodexTray = { at: Date.now(), data: payload }
   return structuredClone(payload)
 }
-export async function getGrokUsage(force = false) {
-  if (!force && mockCacheFresh(mockGrokUsage)) {
-    return structuredClone(mockGrokUsage!.data)
-  }
-  await delay()
-  const now = Math.floor(Date.now() / 1000)
-  const payload = {
-    account_name: 'default@grok.build',
-    plan_type: 'SuperGrok',
-    period_type: 'weekly',
-    usage_window: {
-      used_percent: 4,
-      remaining_percent: 96,
-      reset_after_seconds: 345600,
-      reset_at: now + 345600,
-      window_seconds: 604800,
-    },
-    limit_value: null,
-    used_value: null,
-    prepaid_balance: 0,
-    on_demand_cap: 0,
-    on_demand_used: 0,
-    on_demand_enabled: false,
-    fetched_at: now,
-  }
-  mockGrokUsage = { at: Date.now(), data: payload }
-  return structuredClone(payload)
-}
 export async function getUsageProviderAvailability() {
-  return { codex: true, grok_build: true, kimi_code: true, claude_code: true, kiro: true }
+  return { codex: true, claude_code: true, kiro: true }
 }
 export async function resizeUsageTray() {}
 export async function closeUsageTray() {}
@@ -651,39 +621,6 @@ export async function getClaudeUsage(force = false) {
   return structuredClone(payload)
 }
 
-export async function getKimiUsage(force = false) {
-  if (!force && mockCacheFresh(mockKimiUsage)) {
-    return structuredClone(mockKimiUsage!.data)
-  }
-  await delay()
-  const now = Math.floor(Date.now() / 1000)
-  const window5h = {
-    used_percent: 40,
-    remaining_percent: 60,
-    reset_after_seconds: 3_600 * 3,
-    reset_at: now + 3_600 * 3,
-    window_seconds: 18_000,
-  }
-  const windowWeekly = {
-    used_percent: 43,
-    remaining_percent: 57,
-    reset_after_seconds: 86_400 * 4,
-    reset_at: now + 86_400 * 4,
-    window_seconds: 604_800,
-  }
-  const payload = {
-    account_name: 'demo@kimi.com',
-    auth_method: 'METHOD_API_KEY',
-    window_5h: window5h,
-    window_weekly: windowWeekly,
-    weekly_limit: 100,
-    weekly_used: 43,
-    usage_windows: [window5h, windowWeekly],
-    fetched_at: now,
-  }
-  mockKimiUsage = { at: Date.now(), data: payload }
-  return structuredClone(payload)
-}
 
 // DeepSeek: key comes from DeepSeek Harness's own credential layering
 // (env / ~/.dsh/.credentials.yaml / ~/.dsh/.env); web-debug pretends the

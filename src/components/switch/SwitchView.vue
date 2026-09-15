@@ -17,8 +17,6 @@ const { showToast } = useToast()
 const AGENT_DISPLAY_NAMES: Record<string, string> = {
   codex: 'Codex',
   'claude-code': 'Claude Code',
-  'grok-build': 'Grok Build',
-  'kimi-code': 'Kimi Code',
   kiro: 'Kiro',
   deepseek: 'DeepSeek Harness',
 }
@@ -27,8 +25,6 @@ const agentName = computed(
 )
 
 const isCodex = computed(() => store.selectedAgent === 'codex')
-const isGrokBuild = computed(() => store.selectedAgent === 'grok-build')
-const isKimiCode = computed(() => store.selectedAgent === 'kimi-code')
 const isClaudeCode = computed(() => store.selectedAgent === 'claude-code')
 const isKiro = computed(() => store.selectedAgent === 'kiro')
 const isDeepSeek = computed(() => store.selectedAgent === 'deepseek')
@@ -108,11 +104,6 @@ function fmtQueryTime(value: number): string {
   })
 }
 
-function fmtGrokValue(value: number): string {
-  return new Intl.NumberFormat(locale.value === 'zh-CN' ? 'zh-CN' : 'en-US', {
-    maximumFractionDigits: 2,
-  }).format(value)
-}
 
 // --- Codex ---
 const codexAccountName = computed(
@@ -144,75 +135,6 @@ const codexWindows = computed<UsageWindowRow[]>(() => {
   }))
 })
 
-// --- Grok ---
-const grokAccountName = computed(
-  () => store.grokUsage?.account_name || t('switch.grok_default_account'),
-)
-const grokPlanBadge = computed(() =>
-  t('switch.usage_plan_badge', { plan: store.grokUsage?.plan_type || 'Grok' }),
-)
-const grokWindows = computed<UsageWindowRow[]>(() => {
-  const u = store.grokUsage
-  if (!u) return []
-  const label = u.period_type === 'monthly'
-    ? t('switch.grok_monthly_window')
-    : t('switch.grok_weekly_window')
-  const detail = u.used_value != null && u.limit_value != null
-    ? t('switch.grok_used_limit_reset', {
-        used: fmtGrokValue(u.used_value),
-        limit: fmtGrokValue(u.limit_value),
-        reset: fmtReset(u.usage_window.reset_after_seconds, u.usage_window.reset_at),
-      })
-    : t('switch.usage_used_reset', {
-        used: u.usage_window.used_percent,
-        reset: fmtReset(u.usage_window.reset_after_seconds, u.usage_window.reset_at),
-      })
-  return [{
-    key: 'period',
-    label,
-    remainingPercent: u.usage_window.remaining_percent,
-    detail,
-  }]
-})
-
-// --- Kimi ---
-const kimiAccountName = computed(
-  () => store.kimiUsage?.account_name || t('switch.kimi_default_account'),
-)
-const kimiAuthBadge = computed(() => {
-  const method = store.kimiUsage?.auth_method
-  if (method === 'METHOD_API_KEY') return t('switch.kimi_auth_api_key')
-  if (method === 'METHOD_OAUTH') return t('switch.kimi_auth_oauth')
-  return method || t('switch.kimi_auth_api_key')
-})
-const kimiWindows = computed<UsageWindowRow[]>(() => {
-  const rows: UsageWindowRow[] = []
-  const w5 = store.kimiUsage?.window_5h
-  const wWeek = store.kimiUsage?.window_weekly
-  if (w5) {
-    rows.push({
-      key: '5h',
-      label: t('switch.kimi_5h_window'),
-      remainingPercent: w5.remaining_percent,
-      detail: t('switch.kimi_used_reset', {
-        used: w5.used_percent,
-        reset: fmtReset(w5.reset_after_seconds, w5.reset_at),
-      }),
-    })
-  }
-  if (wWeek) {
-    rows.push({
-      key: 'weekly',
-      label: t('switch.kimi_weekly_window'),
-      remainingPercent: wWeek.remaining_percent,
-      detail: t('switch.kimi_used_reset', {
-        used: wWeek.used_percent,
-        reset: fmtReset(wWeek.reset_after_seconds, wWeek.reset_at),
-      }),
-    })
-  }
-  return rows
-})
 
 // --- Claude ---
 const claudeAccountName = computed(
@@ -225,9 +147,9 @@ const claudeWindows = computed<UsageWindowRow[]>(() => {
   if (w5) {
     rows.push({
       key: '5h',
-      label: t('switch.kimi_5h_window'),
+      label: windowLabel(w5.window_seconds),
       remainingPercent: w5.remaining_percent,
-      detail: t('switch.kimi_used_reset', {
+      detail: t('switch.usage_used_reset', {
         used: w5.used_percent,
         reset: fmtReset(w5.reset_after_seconds, w5.reset_at),
       }),
@@ -236,9 +158,9 @@ const claudeWindows = computed<UsageWindowRow[]>(() => {
   if (wWeek) {
     rows.push({
       key: 'weekly',
-      label: t('switch.kimi_weekly_window'),
+      label: windowLabel(wWeek.window_seconds),
       remainingPercent: wWeek.remaining_percent,
-      detail: t('switch.kimi_used_reset', {
+      detail: t('switch.usage_used_reset', {
         used: wWeek.used_percent,
         reset: fmtReset(wWeek.reset_after_seconds, wWeek.reset_at),
       }),
@@ -254,20 +176,6 @@ async function handleRefreshCodex() {
   else showToast(t('switch.usage_refresh_toast'), 'success')
 }
 
-async function handleRefreshGrok() {
-  if (store.grokUsageLoading) return
-  await store.refreshGrokUsage(true)
-  if (store.grokUsageError && !store.grokUsage) showToast(t('switch.usage_failed'), 'error')
-  else if (!store.grokUsageError) showToast(t('switch.usage_refresh_toast'), 'success')
-  else showToast(t('switch.usage_failed'), 'error')
-}
-
-async function handleRefreshKimi() {
-  if (store.kimiUsageLoading) return
-  await store.refreshKimiUsage(true)
-  if (store.kimiUsageError) showToast(t('switch.usage_failed'), 'error')
-  else showToast(t('switch.usage_refresh_toast'), 'success')
-}
 
 async function handleRefreshClaude() {
   if (store.claudeUsageLoading) return
@@ -380,8 +288,6 @@ function startAutoTimer() {
     const agent = store.selectedAgent
     if (!agent || !store.isAgentListened(agent)) return
     if (agent === 'codex') void store.refreshCodexUsage(true)
-    else if (agent === 'grok-build') void store.refreshGrokUsage(true)
-    else if (agent === 'kimi-code') void store.refreshKimiUsage(true)
     else if (agent === 'claude-code') void store.refreshClaudeUsage(true)
     else if (agent === 'kiro') void store.refreshKiroUsage(true)
     else if (agent === 'deepseek') void store.refreshDeepseekUsage(true)
@@ -506,7 +412,7 @@ async function handleConfirmClear() {
 
       <template v-else>
         <div class="max-w-2xl mx-auto space-y-6">
-          <!-- Codex / Grok / Kimi / Claude share one account+usage shell. -->
+          <!-- Codex / Claude share one account+usage shell. -->
           <AccountUsagePanel
             v-if="isCodex"
             :account-name="codexAccountName"
@@ -575,44 +481,6 @@ async function handleConfirmClear() {
             </template>
           </AccountUsagePanel>
 
-          <AccountUsagePanel
-            v-else-if="isGrokBuild"
-            :account-name="grokAccountName"
-            :account-hint="t('switch.grok_default_account_hint')"
-            :account-status-label="t('switch.grok_read_only')"
-            :usage-title="t('switch.grok_usage_title', { name: grokAccountName })"
-            :loading="store.grokUsageLoading && !store.grokUsage"
-            :refreshing="store.grokUsageLoading"
-            :loading-text="t('switch.grok_usage_loading')"
-            :error="store.grokUsageError"
-            :badges="store.grokUsage ? [grokPlanBadge] : []"
-            :windows="grokWindows"
-            :last-query-text="store.grokUsageLastQuery ? fmtQueryTime(store.grokUsageLastQuery) : null"
-            :paused="!listened"
-            @refresh="handleRefreshGrok"
-          >
-            <template #headerActions><ListeningToggle /></template>
-          </AccountUsagePanel>
-
-          <AccountUsagePanel
-            v-else-if="isKimiCode"
-            :account-name="kimiAccountName"
-            :account-hint="t('switch.kimi_default_account_hint')"
-            :account-status-label="t('switch.kimi_read_only')"
-            :usage-title="t('switch.kimi_usage_title', { name: kimiAccountName })"
-            :loading="store.kimiUsageLoading && !store.kimiUsage"
-            :refreshing="store.kimiUsageLoading"
-            :loading-text="t('switch.kimi_usage_loading')"
-            :error="store.kimiUsageError"
-            :tip="t('switch.kimi_usage_api_only_hint')"
-            :badges="store.kimiUsage ? [kimiAuthBadge] : []"
-            :windows="kimiWindows"
-            :last-query-text="store.kimiUsageLastQuery ? fmtQueryTime(store.kimiUsageLastQuery) : null"
-            :paused="!listened"
-            @refresh="handleRefreshKimi"
-          >
-            <template #headerActions><ListeningToggle /></template>
-          </AccountUsagePanel>
 
           <AccountUsagePanel
             v-else-if="isClaudeCode"

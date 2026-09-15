@@ -291,8 +291,6 @@ pub fn run() {
             switch::commands::get_codex_usage,
             switch::commands::get_codex_reset_credits,
             switch::commands::get_codex_tray_usage,
-            switch::commands::get_grok_usage,
-            switch::commands::get_kimi_usage,
             switch::commands::get_claude_usage,
             switch::commands::get_usage_provider_availability,
             switch::deepseek::get_deepseek_settings,

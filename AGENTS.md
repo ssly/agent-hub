@@ -4,7 +4,7 @@ Agent Hub 的项目上下文文档，供 AI Agent 和开发者快速了解项目
 
 ## 项目概述
 
-Agent Hub 是一个基于 Tauri 2.x 的桌面应用，用于统一管理本地多个 AI Agent 平台的插件（Skill、MCP Server、Claude Code 原生插件）、会话和账号。当前版本 **0.27.2**。
+Agent Hub 是一个基于 Tauri 2.x 的桌面应用，用于统一管理本地多个 AI Agent 平台的插件（Skill、MCP Server、Claude Code 原生插件）、会话和账号。当前版本 **0.27.3**。
 
 ## 架构
 
@@ -48,7 +48,7 @@ src/
     zcode-plugins.ts      # ZCode 插件市场（只读）
     qwen-plugins.ts       # Qwen Code 扩展（只读）
     sessions.ts           # 会话浏览与 HTML 导出
-    switch.ts             # 账号切换 + 各平台用量（Codex/Claude/Grok/Kimi/DeepSeek）
+    switch.ts             # 账号切换 + 各平台用量（Codex/Claude/Kiro/DeepSeek）
   composables/
     useToast.ts           # 全局 toast
   directives/
@@ -99,9 +99,9 @@ src-tauri/src/
     dsh_plugin.rs         # DeepSeek Harness 观察型 Cordis 插件：拷贝到各 profile node_modules + 外科式写入 cordis.patch.yml
     service.rs            # 多 Agent 事件聚合服务（inbox watcher）
     types.rs              # AgentKind、HookEvent、SessionState、MonitorSnapshot
-  switch/                 # 账号切换 + 用量查询（Codex/Claude/Grok/Kimi/Kiro/DeepSeek）
+  switch/                 # 账号切换 + 用量查询（Codex/Claude/Kiro/DeepSeek）
     model.rs              # AuthProfile, ProfileMeta
-    commands.rs           # Profile CRUD + 切换 + get_codex_usage / get_claude_usage / get_grok_usage / get_kimi_usage / get_kiro_usage
+    commands.rs           # Profile CRUD + 切换 + get_codex_usage / get_claude_usage / get_kiro_usage
     kiro.rs               # Kiro 配额查询：自动读取本地 SQLite/JSON/环境变量凭证，调官方 Get-Usage-Limits（管理接口，0 消耗），支持托盘与账号页
     monitor_settings.rs   # 用量监听共享设置（写入 usage-monitor.json）：刷新间隔 1–10 分钟（默认 5）、监控面板消息监听个数 6–12 条（默认 6）、当前选中 Agent、按 Agent 监听启停；setter 发 usage-monitor-settings-changed 事件，主窗口与托盘双窗口同步
     deepseek.rs           # DeepSeek 余额查询：Key 自动读取 DeepSeek Harness 凭证（env DEEPSEEK_API_KEY → ~/.dsh/.credentials.yaml 的 refs.DEEPSEEK_API_KEY，兼容预发布扁平顶层键 → ~/.dsh/.env，无手动输入），调官方 /user/balance（管理接口，不消耗 token）；settings 仅上报 has_key；仅在账号页，不进托盘 provider

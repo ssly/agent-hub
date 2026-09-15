@@ -1,10 +1,15 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import * as api from '@/lib/api'
-import type { ClaudeUsage, CodexUsage, CodexResetCredits, DeepSeekSettings, DeepSeekUsage, GrokUsage, KimiUsage, KiroUsage, UsageMonitorSettings } from '@/lib/api'
+import type { ClaudeUsage, CodexUsage, CodexResetCredits, DeepSeekSettings, DeepSeekUsage, KiroUsage, UsageMonitorSettings } from '@/lib/api'
+
+export const VALID_SWITCH_AGENTS = ['codex', 'claude-code', 'kiro', 'deepseek']
 
 export const useSwitchStore = defineStore('switch', () => {
-  const selectedAgent = ref<string | null>(localStorage.getItem('ah-switch-agent'))
+  const initialAgent = localStorage.getItem('ah-switch-agent')
+  const selectedAgent = ref<string | null>(
+    initialAgent && VALID_SWITCH_AGENTS.includes(initialAgent) ? initialAgent : 'codex',
+  )
   const profiles = ref<any[]>([])
   const currentKey = ref<string | null>(null)
   const addFormOpen = ref(false)
@@ -22,21 +27,6 @@ export const useSwitchStore = defineStore('switch', () => {
   // Codex rate-limit reset credits + their validity period. Fetched in the
   // same snapshot as usage; failure here must NOT blank out the usage data.
   const codexResetCredits = ref<CodexResetCredits | null>(null)
-
-  // Grok Build is deliberately read-only: one current CLI account and its
-  // billing snapshot, with no profile pool or credential mutations.
-  const grokUsage = ref<GrokUsage | null>(null)
-  const grokUsageLoading = ref(false)
-  const grokUsageError = ref<string | null>(null)
-  const grokUsageLastQuery = ref<number>(0)
-
-  // Kimi Code follows the same read-only model as Grok Build: we read the
-  // CLI's current OAuth login from the keychain/credential file and never
-  // switch accounts from Agent Hub.
-  const kimiUsage = ref<KimiUsage | null>(null)
-  const kimiUsageLoading = ref(false)
-  const kimiUsageError = ref<string | null>(null)
-  const kimiUsageLastQuery = ref<number>(0)
 
   // Claude Code official-login (OAuth subscription) usage. Independent of the
   // switchable custom-token pool: this always reflects the official /login
@@ -139,39 +129,6 @@ export const useSwitchStore = defineStore('switch', () => {
     }
   }
 
-  async function refreshGrokUsage(force = false) {
-    if (selectedAgent.value !== 'grok-build' || grokUsageLoading.value) return
-    grokUsageLoading.value = true
-    grokUsageError.value = null
-    try {
-      const next = await api.getGrokUsage(force)
-      grokUsage.value = next
-      grokUsageLastQuery.value = (next.fetched_at || Math.floor(Date.now() / 1000)) * 1000
-    } catch (reason: any) {
-      // Keep the last successful numbers on transport/parse failure; only
-      // surface the error banner when there is nothing left to show.
-      grokUsageError.value = String(reason?.message || reason)
-      if (!grokUsage.value) grokUsageLastQuery.value = 0
-    } finally {
-      grokUsageLoading.value = false
-    }
-  }
-
-  async function refreshKimiUsage(force = false) {
-    if (selectedAgent.value !== 'kimi-code' || kimiUsageLoading.value) return
-    kimiUsageLoading.value = true
-    kimiUsageError.value = null
-    try {
-      kimiUsage.value = await api.getKimiUsage(force)
-      kimiUsageLastQuery.value = (kimiUsage.value.fetched_at || Math.floor(Date.now() / 1000)) * 1000
-    } catch (reason: any) {
-      kimiUsageError.value = String(reason?.message || reason)
-      kimiUsage.value = null
-      kimiUsageLastQuery.value = 0
-    } finally {
-      kimiUsageLoading.value = false
-    }
-  }
 
   async function refreshClaudeUsage(force = false) {
     if (selectedAgent.value !== 'claude-code' || claudeUsageLoading.value) return
@@ -250,8 +207,6 @@ export const useSwitchStore = defineStore('switch', () => {
       const { listen } = await import('@tauri-apps/api/event')
       await listen<{ provider: string }>('usage-refreshed', event => {
         if (event.payload.provider === 'codex') void refreshCodexUsage(false)
-        if (event.payload.provider === 'grok-build') void refreshGrokUsage(false)
-        if (event.payload.provider === 'kimi-code') void refreshKimiUsage(false)
         if (event.payload.provider === 'claude-code') void refreshClaudeUsage(false)
         if (event.payload.provider === 'kiro') void refreshKiroUsage(false)
       })
@@ -269,12 +224,10 @@ export const useSwitchStore = defineStore('switch', () => {
 
   async function loadProfiles() {
     if (!selectedAgent.value) return
-    // Codex, Grok Build, Kimi Code, Kiro, and DeepSeek are read-only: one current
+    // Codex, Kiro, and DeepSeek are read-only: one current
     // CLI account (or a single locally-stored API key), no profile pool.
     if (
       selectedAgent.value === 'codex'
-      || selectedAgent.value === 'grok-build'
-      || selectedAgent.value === 'kimi-code'
       || selectedAgent.value === 'kiro'
       || selectedAgent.value === 'deepseek'
     ) {
@@ -303,8 +256,6 @@ export const useSwitchStore = defineStore('switch', () => {
     const agent = selectedAgent.value
     if (!agent || !isAgentListened(agent)) return
     if (agent === 'codex') await refreshCodexUsage(false)
-    if (agent === 'grok-build') await refreshGrokUsage(false)
-    if (agent === 'kimi-code') await refreshKimiUsage(false)
     if (agent === 'claude-code') await refreshClaudeUsage(false)
     if (agent === 'kiro') await refreshKiroUsage(false)
     if (agent === 'deepseek') {
@@ -387,15 +338,13 @@ export const useSwitchStore = defineStore('switch', () => {
     editModalOpen, editingProfileId, editNote, editContent, editContentLoading, editSaving, deleteArmed,
     clearActiveModalOpen, clearActiveLoading,
     codexUsage, codexUsageLoading, codexUsageError, codexUsageLastQuery, codexResetCredits,
-    grokUsage, grokUsageLoading, grokUsageError, grokUsageLastQuery,
-    kimiUsage, kimiUsageLoading, kimiUsageError, kimiUsageLastQuery,
     claudeUsage, claudeUsageLoading, claudeUsageError, claudeUsageLastQuery, claudeUsageAvailable,
     deepseekSettings, deepseekUsage, deepseekUsageLoading, deepseekUsageError, deepseekUsageLastQuery,
     kiroUsage, kiroUsageLoading, kiroUsageError, kiroUsageLastQuery,
     monitorSettings, refreshMinutes, monitorLimit, isAgentListened,
     loadMonitorSettings, updateRefreshMinutes, updateMonitorLimit, setAgentListening,
     selectAgent, loadProfiles, loadSelectedAgent, openEditModal, closeEditModal, resetState,
-    refreshCodexUsage, refreshGrokUsage, refreshKimiUsage, refreshClaudeUsage, refreshKiroUsage,
+    refreshCodexUsage, refreshClaudeUsage, refreshKiroUsage,
     loadDeepseekSettings, refreshDeepseekUsage,
     openClearActiveModal, closeClearActiveModal, deleteActiveAuth,
   }

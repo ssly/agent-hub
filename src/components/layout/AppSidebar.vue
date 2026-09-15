@@ -122,8 +122,10 @@ async function handleTabClick(tabId: typeof tabs[number]['id']) {
       sessionsStore.isLoading = false
     })
   } else if (tabId === 'accounts') {
-    if (!switchStore.selectedAgent) {
-      await switchStore.selectAgent(localStorage.getItem('ah-switch-agent') || 'codex')
+    const validAgents = ['codex', 'claude-code', 'kiro', 'deepseek']
+    const stored = localStorage.getItem('ah-switch-agent')
+    if (!switchStore.selectedAgent || !validAgents.includes(switchStore.selectedAgent)) {
+      await switchStore.selectAgent((stored && validAgents.includes(stored)) ? stored : 'codex')
     } else {
       // Entering Accounts reloads profiles and, for Codex, performs a fresh
       // quota query through the same snapshot command as the tray popup.
@@ -158,8 +160,6 @@ function getSidebarItems() {
   if (appStore.currentTab === 'accounts') return [
     { id: 'codex', display_name: 'Codex' },
     { id: 'claude-code', display_name: 'Claude Code' },
-    { id: 'grok-build', display_name: 'Grok Build' },
-    { id: 'kimi-code', display_name: 'Kimi Code' },
     { id: 'kiro', display_name: 'Kiro' },
     { id: 'deepseek', display_name: 'DeepSeek Harness' },
   ]
@@ -207,9 +207,9 @@ function getAgentLatestSession(agentId: string): SessionState | undefined {
 function getAgentLatestStatus(agentId: string): 'running' | 'waiting' | 'unread' | 'ended' | null {
   const session = getAgentLatestSession(agentId)
   if (!session) return null
-  if (session.status === 'running') return 'running'
-  if (session.status === 'waiting') return 'waiting'
   if (session.status === 'ended' && session.unread) return 'unread'
+  if (session.status === 'waiting') return 'waiting'
+  if (session.status === 'running') return 'running'
   return 'ended'
 }
 

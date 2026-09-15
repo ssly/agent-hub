@@ -403,46 +403,6 @@ export const setUsageTrayOverlay = (open: boolean) =>
   invoke<void>('set_usage_tray_overlay', { open })
 export const openUsageTray = () => invoke<void>('open_usage_tray')
 
-// Grok Build uses only the CLI's current/default account. Agent Hub does not
-// manage or switch Grok credentials; this endpoint is read-only and only
-// returns live /v1/billing data (no CLI-log fallback).
-// Backend reuses a short in-process TTL unless `force` is true (manual refresh).
-export interface GrokUsage {
-  account_name: string | null
-  plan_type: string
-  period_type: 'monthly' | 'weekly'
-  usage_window: UsageWindow
-  limit_value: number | null
-  used_value: number | null
-  prepaid_balance: number | null
-  on_demand_cap: number | null
-  on_demand_used: number | null
-  on_demand_enabled: boolean | null
-  fetched_at: number
-}
-export const getGrokUsage = (force = false) =>
-  invoke<GrokUsage>('get_grok_usage', { force })
-
-// Kimi Code uses the CLI's `sk-kimi-…` API key from ~/.kimi-code/config.toml.
-// We never touch OAuth tokens (those are scoped to the kimi CLI itself).
-// Backend caches for 10 minutes unless `force` is true (manual refresh).
-export interface KimiUsage {
-  account_name: string | null
-  // `METHOD_API_KEY` for the long-lived Coding Plan key, `METHOD_OAUTH` for CLI.
-  auth_method: string
-  // The 5-hour rolling rate-limit window.
-  window_5h: UsageWindow | null
-  // The weekly quota window (resets every 7 days from subscription date).
-  window_weekly: UsageWindow | null
-  // Raw weekly limit/used values for "used / limit" display.
-  weekly_limit: number | null
-  weekly_used: number | null
-  // Windows in ascending order, for generic iteration.
-  usage_windows: UsageWindow[]
-  fetched_at: number
-}
-export const getKimiUsage = (force = false) =>
-  invoke<KimiUsage>('get_kimi_usage', { force })
 
 // Claude Code official-login (OAuth subscription) usage. The backend reads
 // the CLI's own credentials read-only (CLAUDE_CODE_OAUTH_TOKEN env → macOS
@@ -518,8 +478,6 @@ export const getKiroUsage = (force = false) =>
 
 export interface UsageProviderAvailability {
   codex: boolean
-  grok_build: boolean
-  kimi_code: boolean
   claude_code: boolean
   kiro?: boolean
 }

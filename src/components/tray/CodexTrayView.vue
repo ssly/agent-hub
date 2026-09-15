@@ -14,9 +14,7 @@ import {
   getCursorSessionMonitorSnapshot,
   getGrokSessionMonitorSnapshot,
   getOmpSessionMonitorSnapshot,
-  getGrokUsage,
   getKimiSessionMonitorSnapshot,
-  getKimiUsage,
   getKiroSessionMonitorSnapshot,
   getKiroUsage,
   markSessionMonitorSessionRead,
@@ -38,8 +36,6 @@ import {
 import type {
   ClaudeUsage,
   CodexTraySnapshot,
-  GrokUsage,
-  KimiUsage,
   KiroUsage,
   ResetCreditEntry,
   UsageMonitorSettings,
@@ -56,12 +52,10 @@ import { useTrayDock } from './useTrayDock'
 
 const { t, locale } = useI18n()
 const { showToast } = useToast()
-type UsageProvider = 'codex' | 'claude-code' | 'grok-build' | 'kimi-code' | 'kiro'
+type UsageProvider = 'codex' | 'claude-code' | 'kiro'
 const selectedProvider = ref<UsageProvider>(preferredProviderFromAccounts())
 const availability = ref<UsageProviderAvailability | null>(null)
 const snapshot = ref<CodexTraySnapshot | null>(null)
-const grokUsage = ref<GrokUsage | null>(null)
-const kimiUsage = ref<KimiUsage | null>(null)
 const claudeUsage = ref<ClaudeUsage | null>(null)
 const kiroUsage = ref<KiroUsage | null>(null)
 // The real tray window starts hidden and compact. Defaulting to loading avoids
@@ -71,8 +65,6 @@ const compactLoading = ref(import.meta.env.MODE !== 'web')
 const providerErrors = ref<Record<UsageProvider, string | null>>({
   codex: null,
   'claude-code': null,
-  'grok-build': null,
-  'kimi-code': null,
   kiro: null,
 })
 const error = computed(() => providerErrors.value[selectedProvider.value])
@@ -80,17 +72,14 @@ const error = computed(() => providerErrors.value[selectedProvider.value])
 // next to the refresh/pin buttons (no footer row needed).
 const lastQueryAt = computed(() => {
   if (selectedProvider.value === 'codex') return snapshot.value?.last_query_at ?? null
-  if (selectedProvider.value === 'kimi-code') return kimiUsage.value?.fetched_at ?? null
   if (selectedProvider.value === 'claude-code') return claudeUsage.value?.fetched_at ?? null
   if (selectedProvider.value === 'kiro') return kiroUsage.value?.fetched_at ?? null
-  return grokUsage.value?.fetched_at ?? null
+  return null
 })
 const loginUnavailable = ref(false)
 const queriedProviders = ref<Record<UsageProvider, boolean>>({
   codex: false,
   'claude-code': false,
-  'grok-build': false,
-  'kimi-code': false,
   kiro: false,
 })
 const unlisteners: UnlistenFn[] = []
@@ -372,9 +361,9 @@ async function loadMonitorSnapshots() {
 type EffectiveStatus = 'running' | 'waiting' | 'unread' | 'ended'
 
 function rowEffectiveStatus(row: AgentSessionState): EffectiveStatus {
-  if (row.status === 'running') return 'running'
-  if (row.status === 'waiting') return 'waiting'
   if (row.status === 'ended' && row.unread) return 'unread'
+  if (row.status === 'waiting') return 'waiting'
+  if (row.status === 'running') return 'running'
   return 'ended'
 }
 
@@ -468,12 +457,9 @@ function markMonitorRowRead(row: AgentSessionState) {
 }
 
 function markAllMonitorRowsRead() {
-  for (const agent of visibleMonitorAgents.value) {
-    const snapshot = monitorSnapshots.value[agent]
-    for (const session of snapshot.sessions) {
-      if (session.unread) {
-        markMonitorRowRead({ ...session, agent })
-      }
+  for (const row of monitorRows.value) {
+    if (row.unread) {
+      markMonitorRowRead(row)
     }
   }
 }
@@ -502,9 +488,7 @@ const panelOpacity = ref(
 
 const USAGE_HIDDEN_KEY = 'ah-tray-usage-hidden'
 const MONITOR_HIDDEN_KEY = 'ah-tray-monitor-hidden'
-// Declared above the computeds that reference it: watch() eagerly evaluates
-// its source on creation, so a later const would hit the TDZ at setup time.
-const PROVIDER_ORDER: UsageProvider[] = ['codex', 'claude-code', 'grok-build', 'kimi-code', 'kiro']
+const PROVIDER_ORDER: UsageProvider[] = ['codex', 'claude-code', 'kiro']
 
 function loadUsageHidden(): boolean {
   const flag = localStorage.getItem(USAGE_HIDDEN_KEY)
@@ -686,8 +670,6 @@ type TrayUsageWindow = OrbWindow
 
 function preferredProviderFromAccounts(): UsageProvider {
   const stored = localStorage.getItem('ah-switch-agent')
-  if (stored === 'grok-build') return 'grok-build'
-  if (stored === 'kimi-code') return 'kimi-code'
   if (stored === 'claude-code') return 'claude-code'
   if (stored === 'kiro') return 'kiro'
   return 'codex'
@@ -696,16 +678,12 @@ function preferredProviderFromAccounts(): UsageProvider {
 function providerAvailable(provider: UsageProvider, status: UsageProviderAvailability) {
   if (provider === 'codex') return status.codex
   if (provider === 'claude-code') return status.claude_code
-  if (provider === 'grok-build') return status.grok_build
-  if (provider === 'kimi-code') return status.kimi_code
   return Boolean(status.kiro)
 }
 
 const PROVIDER_LABELS: Record<UsageProvider, string> = {
   codex: 'Codex',
   'claude-code': 'Claude Code',
-  'grok-build': 'Grok Build',
-  'kimi-code': 'Kimi Code',
   kiro: 'Kiro',
 }
 function providerLabel(provider: UsageProvider) {
@@ -761,22 +739,6 @@ const usageWindows = computed<TrayUsageWindow[]>(() => {
   }))
 })
 
-// Kimi exposes the same multi-window shape as Codex (5h primary + weekly), so
-// we reuse the same windowing logic, just sourced from kimiUsage.
-const kimiWindows = computed<TrayUsageWindow[]>(() => {
-  const windows = (kimiUsage.value?.usage_windows ?? [])
-    .filter(window => window.window_seconds > 0)
-    .sort((left, right) => left.window_seconds - right.window_seconds)
-    .filter((window, index, all) => index === 0 || window.window_seconds !== all[index - 1].window_seconds)
-
-  return windows.map(window => ({
-    key: String(window.window_seconds),
-    label: windowLabel(window.window_seconds),
-    tone: windowTone(window.window_seconds),
-    window,
-  }))
-})
-
 // Claude's OAuth usage endpoint returns the same 5h + weekly window pair.
 const claudeWindows = computed<TrayUsageWindow[]>(() => {
   const windows = (claudeUsage.value?.usage_windows ?? [])
@@ -813,18 +775,6 @@ const resetCards = computed<ResetCreditEntry[]>(() => {  const detailed = snapsh
   }))
 })
 
-// Grok exposes a single window, rendered by the orb as a lone bubble tank.
-const grokWindows = computed<TrayUsageWindow[]>(() => {
-  const window = grokUsage.value?.usage_window
-  if (!window) return []
-  return [{
-    key: 'grok',
-    label: windowLabel(window.window_seconds),
-    tone: windowTone(window.window_seconds),
-    window,
-  }]
-})
-
 // Kiro exposes monthly credits via usage_windows.
 const kiroWindows = computed<TrayUsageWindow[]>(() => {
   const windows = (kiroUsage.value?.usage_windows ?? [])
@@ -847,23 +797,16 @@ const kiroWindows = computed<TrayUsageWindow[]>(() => {
 const stripUsageBars = computed<{ percent: number }[]>(() => {
   const windows = selectedProvider.value === 'codex'
     ? usageWindows.value
-    : selectedProvider.value === 'kimi-code'
-      ? kimiWindows.value
-      : selectedProvider.value === 'claude-code'
-        ? claudeWindows.value
-        : selectedProvider.value === 'kiro'
-          ? kiroWindows.value
-          : grokWindows.value
+    : selectedProvider.value === 'claude-code'
+      ? claudeWindows.value
+      : kiroWindows.value
   return windows.slice(0, 2).map(entry => ({
     percent: Math.min(100, Math.max(0, entry.window.remaining_percent)),
   }))
 })
 
 const totalMonitorUnread = computed(() =>
-  visibleMonitorAgents.value.reduce(
-    (total, agent) => total + monitorSnapshots.value[agent].sessions.filter(session => session.unread).length,
-    0,
-  ),
+  monitorRows.value.filter(session => session.unread).length,
 )
 const monitorUnreadBadge = computed(() => totalMonitorUnread.value > 9 ? '…' : String(totalMonitorUnread.value))
 const dockUnreadCount = computed(() => monitorHidden.value ? 0 : totalMonitorUnread.value)
@@ -941,7 +884,7 @@ async function applyContentHeight() {
 // timing. This covers cached tab switches as well as the moment fresh data
 // replaces the compact loading view.
 watch(
-  [selectedProvider, snapshot, grokUsage, kimiUsage, claudeUsage, error, loginUnavailable, compactLoading],
+  [selectedProvider, snapshot, claudeUsage, kiroUsage, error, loginUnavailable, compactLoading],
   () => {
     if (!compactLoading.value) void applyContentHeight()
   },
@@ -1047,8 +990,6 @@ async function refresh(compact = false, syncWithAccounts = false, force = false)
     const available = availableProvider(preferred, status)
     if (!available) {
       snapshot.value = null
-      grokUsage.value = null
-      kimiUsage.value = null
       claudeUsage.value = null
       kiroUsage.value = null
       loginUnavailable.value = true
@@ -1065,10 +1006,6 @@ async function refresh(compact = false, syncWithAccounts = false, force = false)
       const result = await getCodexTrayUsage(force)
       if (sequence !== refreshSequence) return
       snapshot.value = result
-    } else if (provider === 'kimi-code') {
-      const result = await getKimiUsage(force)
-      if (sequence !== refreshSequence) return
-      kimiUsage.value = result
     } else if (provider === 'claude-code') {
       const result = await getClaudeUsage(force)
       if (sequence !== refreshSequence) return
@@ -1077,10 +1014,6 @@ async function refresh(compact = false, syncWithAccounts = false, force = false)
       const result = await getKiroUsage(force)
       if (sequence !== refreshSequence) return
       kiroUsage.value = result
-    } else {
-      const result = await getGrokUsage(force)
-      if (sequence !== refreshSequence) return
-      grokUsage.value = result
     }
     void broadcastUsageRefreshed(provider)
   } catch (reason: any) {
@@ -1135,13 +1068,9 @@ async function handleTrayOpened() {
   // stay current without a full loading flash.
   const hasLocal = available === 'codex'
     ? snapshot.value !== null
-    : available === 'kimi-code'
-      ? kimiUsage.value !== null
-      : available === 'claude-code'
-        ? claudeUsage.value !== null
-        : available === 'kiro'
-          ? kiroUsage.value !== null
-          : grokUsage.value !== null
+    : available === 'claude-code'
+      ? claudeUsage.value !== null
+      : kiroUsage.value !== null
 
   await refresh(!hasLocal, false, false)
 }
@@ -1466,26 +1395,6 @@ onBeforeUnmount(() => {
               </div>
             </template>
 
-            <template v-else-if="selectedProvider === 'kimi-code'">
-              <div class="quota-wrap" :class="{ 'is-loading': loading, 'is-mini': miniMode }">
-                <UsageOrb v-if="kimiWindows.length" :windows="kimiWindows" :mini="miniMode" />
-                <UsageOrbPlaceholder
-                  v-else-if="error"
-                  kind="error"
-                  :mini="miniMode"
-                  :title="t('tray.failed')"
-                  :message="t('tray.failed_hint')"
-                />
-                <TrayWaveLoader v-else-if="loading">{{ t('tray.query_wait') }}</TrayWaveLoader>
-                <UsageOrbPlaceholder
-                  v-else
-                  kind="empty"
-                  :mini="miniMode"
-                  :title="t('tray.no_usage_title')"
-                  :message="t('tray.no_usage')"
-                />
-              </div>
-            </template>
 
             <template v-else-if="selectedProvider === 'claude-code'">
               <div class="quota-wrap" :class="{ 'is-loading': loading, 'is-mini': miniMode }">
@@ -1508,30 +1417,6 @@ onBeforeUnmount(() => {
               </div>
             </template>
 
-            <template v-else-if="selectedProvider === 'grok-build'">
-              <div class="quota-wrap" :class="{ 'is-loading': loading, 'is-mini': miniMode }">
-                <UsageOrb
-                  v-if="grokWindows.length"
-                  :windows="grokWindows"
-                  :mini="miniMode"
-                />
-                <UsageOrbPlaceholder
-                  v-else-if="error"
-                  kind="error"
-                  :mini="miniMode"
-                  :title="t('tray.failed')"
-                  :message="t('tray.failed_hint')"
-                />
-                <TrayWaveLoader v-else-if="loading">{{ t('tray.query_wait') }}</TrayWaveLoader>
-                <UsageOrbPlaceholder
-                  v-else
-                  kind="empty"
-                  :mini="miniMode"
-                  :title="t('tray.no_usage_title')"
-                  :message="t('tray.no_usage')"
-                />
-              </div>
-            </template>
 
             <template v-else-if="selectedProvider === 'kiro'">
               <div class="quota-wrap" :class="{ 'is-loading': loading, 'is-mini': miniMode }">

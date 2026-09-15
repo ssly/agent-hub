@@ -16,11 +16,11 @@ export type SessionSource =
   | 'antigravity-ide'
 export type RuntimeStatus = 'running' | 'waiting' | 'ended'
 
-/** Sort key: waiting (needs attention), working, ended unread (new result), ended read. */
+/** Sort key: ended unread (new result), waiting (needs attention), working, ended read. */
 export function monitorStatusRank(status: RuntimeStatus, unread?: boolean): number {
-  if (status === 'waiting') return 0
-  if (status === 'running') return 1
-  if (status === 'ended' && unread) return 2
+  if (status === 'ended' && unread) return 0
+  if (status === 'waiting') return 1
+  if (status === 'running') return 2
   return 3
 }
 export type MonitorAgent =
