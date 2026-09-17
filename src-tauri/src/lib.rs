@@ -37,11 +37,36 @@ pub fn try_handle_hook_event() -> bool {
 /// back.
 fn attach_main_window_lifecycle(window: &WebviewWindow) {
     let win = window.clone();
-    window.on_window_event(move |event| {
-        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+    window.on_window_event(move |event| match event {
+        tauri::WindowEvent::CloseRequested { api, .. } => {
             api.prevent_close();
             let _ = win.hide();
         }
+        tauri::WindowEvent::Focused(false) => {
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            {
+                let app = win.app_handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(120));
+                    if crate::tray::is_tray_blur_suppressed() {
+                        return;
+                    }
+                    use tauri::Manager;
+                    if let Some(usage) = app.get_webview_window("codex-usage") {
+                        if usage.is_focused().unwrap_or(false) {
+                            return;
+                        }
+                        if crate::tray::tray_docked() {
+                            return;
+                        }
+                        use tauri::Emitter;
+                        let _ = usage.emit("usage-tray-closed", ());
+                        let _ = usage.hide();
+                    }
+                });
+            }
+        }
+        _ => {}
     });
 }
 
@@ -278,6 +303,8 @@ pub fn run() {
             claude_plugin::set_claude_plugin_enabled,
             commands::get_zcode_plugins,
             commands::get_qwen_plugins,
+            commands::locate_monitor_session,
+            commands::take_pending_locate_session,
             switch::commands::list_switch_profiles,
             switch::commands::save_current_auth_profile,
             switch::commands::add_auth_profile,

@@ -22,6 +22,7 @@ import {
   getWorkbuddySessionMonitorSnapshot,
   getDshSessionMonitorSnapshot,
   getUsageProviderAvailability,
+  locateMonitorSession,
   getUsageMonitorSettings,
   getZCodeSessionMonitorSnapshot,
   listAvailableMonitorAgents,
@@ -461,6 +462,17 @@ function markAllMonitorRowsRead() {
     if (row.unread) {
       markMonitorRowRead(row)
     }
+  }
+}
+
+async function handleMonitorRowClick(row: AgentSessionState) {
+  if (row.unread) {
+    markMonitorRowRead(row)
+  }
+  try {
+    await locateMonitorSession(row.agent, row.sessionId, row.turnId)
+  } catch (err) {
+    console.error('[tray] failed to locate monitor session', err)
   }
 }
 
@@ -1470,7 +1482,7 @@ onBeforeUnmount(() => {
             class="monitor-row"
             :class="{ 'monitor-row--unread': row.unread }"
             :data-monitor-row-key="monitorRowKey(row)"
-            @click="row.unread && markMonitorRowRead(row)"
+            @click="handleMonitorRowClick(row)"
             @mouseleave="clearHoveredMonitorRow(row)"
           >
             <span
@@ -2203,9 +2215,6 @@ onBeforeUnmount(() => {
   transform: scale(1.4);
   box-shadow: 0 0 6px var(--tray-signal-red);
 }
-.monitor-row--unread {
-  cursor: pointer;
-}
 .monitor-row {
   display: flex;
   align-items: center;
@@ -2213,6 +2222,14 @@ onBeforeUnmount(() => {
   min-width: 0;
   font-size: 11px;
   line-height: 1.5;
+  cursor: pointer;
+  padding: 1px 4px;
+  margin: 0 -4px;
+  border-radius: 4px;
+  transition: background-color var(--dur-fast, 150ms) ease;
+}
+.monitor-row:hover {
+  background: var(--tray-hover);
 }
 .monitor-dot {
   flex: 0 0 auto;

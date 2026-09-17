@@ -1427,5 +1427,18 @@ export async function listAvailableMonitorAgents() {
   return ['codex', 'claude', 'cursor', 'antigravity', 'grok', 'kimi', 'qwen', 'zcode', 'workbuddy', 'kiro', 'dsh', 'omp']
 }
 
+let mockPendingLocateSession: any = null
+
+export async function locateMonitorSession(agent: string, sessionId: string, turnId?: string | null) {
+  mockPendingLocateSession = { agent, sessionId, turnId }
+}
+
+export async function takePendingLocateSession() {
+  const pending = mockPendingLocateSession
+  mockPendingLocateSession = null
+  return pending
+}
+
 // App
 export async function getAppVersion() { return '0.9.3-dev' }
+

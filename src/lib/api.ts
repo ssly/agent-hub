@@ -313,6 +313,19 @@ export const stopDshWeb = () => invoke<DshWebStatus>('stop_dsh_web')
 /** Monitor tab filter: ids of agents whose platform presence directory exists. */
 export const listAvailableMonitorAgents = () => invoke<string[]>('list_available_monitor_agents')
 
+export interface LocateSessionPayload {
+  agent: string
+  sessionId: string
+  turnId?: string
+}
+
+export const locateMonitorSession = (agent: string, sessionId: string, turnId?: string | null) =>
+  invoke<void>('locate_monitor_session', { agent, sessionId, turnId })
+
+export const takePendingLocateSession = () =>
+  invoke<LocateSessionPayload | null>('take_pending_locate_session')
+
+
 // Switch
 export const listSwitchProfiles = (agentType: string) => invoke<any>('list_switch_profiles', { agentType })
 export const saveCurrentAuthProfile = (agentType: string, note: string) =>

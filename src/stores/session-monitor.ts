@@ -636,6 +636,17 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
   const modalSession = ref<AgentSessionState | null>(null)
   const resumeSession = ref<AgentSessionState | null>(null)
 
+  // Target session to scroll to and highlight when jumping from tray or external navigation
+  const pendingLocateSession = ref<{ agent: MonitorAgent; sessionId: string; turnId?: string } | null>(null)
+  const highlightedSessionKey = ref<string | null>(null)
+
+  function setPendingLocate(target: { agent: MonitorAgent; sessionId: string; turnId?: string }) {
+    if (activeAgent.value !== 'all' && activeAgent.value !== target.agent) {
+      activeAgent.value = target.agent
+    }
+    pendingLocateSession.value = target
+  }
+
   function openMessages(session: AgentSessionState) {
     if (session.unread) {
       void markSessionRead(session)
@@ -648,6 +659,7 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     resumeSession.value = session
     resumeModalOpen.value = true
   }
+
 
   return {
     activeAgent,
@@ -691,6 +703,9 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     resumeModalOpen,
     modalSession,
     resumeSession,
+    pendingLocateSession,
+    highlightedSessionKey,
+    setPendingLocate,
     openMessages,
     openResume,
   }

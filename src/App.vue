@@ -5,6 +5,8 @@ import { invoke, Channel } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useAppStore } from '@/stores/app'
 import { useSkillsStore } from '@/stores/skills'
+import { useSessionMonitorStore } from '@/stores/session-monitor'
+import { takePendingLocateSession, type LocateSessionPayload } from '@/lib/api'
 import { useToast } from '@/composables/useToast'
 import { useHoverResetId, useHoverResetBool } from '@/composables/useHoverReset'
 import { formatInt, formatSessionTime } from '@/lib/utils'
@@ -27,6 +29,7 @@ const isTauri = typeof window !== 'undefined' && !!(window as any).__TAURI_INTER
 
 const appStore = useAppStore()
 const skillsStore = useSkillsStore()
+const sessionMonitorStore = useSessionMonitorStore()
 const { showToast } = useToast()
 const { t, locale } = useI18n()
 
@@ -385,6 +388,16 @@ watch(() => appStore.locale, async (newVal) => {
 
 // Unlisten handles for tray → main-window events.
 let trayUnlisten: UnlistenFn | null = null
+let locateUnlisten: UnlistenFn | null = null
+
+function handleLocateSession(payload: LocateSessionPayload) {
+  if (!payload?.agent || !payload?.sessionId) return
+  if (appStore.currentTab !== 'monitor') {
+    sessionMonitorStore.beginEnter()
+    appStore.switchTab('monitor')
+  }
+  sessionMonitorStore.setPendingLocate(payload as any)
+}
 
 onMounted(async () => {
   await appStore.init()
@@ -402,6 +415,23 @@ onMounted(async () => {
     } catch (e) {
       console.warn('[tray] failed to listen for tray-check-updates', e)
     }
+
+    try {
+      locateUnlisten = await listen<LocateSessionPayload>('locate-monitor-session', event => {
+        handleLocateSession(event.payload)
+      })
+    } catch (e) {
+      console.warn('[tray] failed to listen for locate-monitor-session', e)
+    }
+
+    try {
+      const pending = await takePendingLocateSession()
+      if (pending) {
+        handleLocateSession(pending)
+      }
+    } catch (e) {
+      console.warn('[tray] failed to take pending locate session', e)
+    }
   }
 
   // Perform a silent background update check shortly after launch.
@@ -415,6 +445,8 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   trayUnlisten?.()
   trayUnlisten = null
+  locateUnlisten?.()
+  locateUnlisten = null
 })
 </script>
 

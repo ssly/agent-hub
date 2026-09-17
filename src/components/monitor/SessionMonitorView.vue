@@ -282,6 +282,52 @@ function markSessionRead(session: AgentSessionState) {
   void store.markSessionRead(session)
 }
 
+let highlightTimer: ReturnType<typeof setTimeout> | null = null
+
+function tryLocatePendingSession() {
+  const target = store.pendingLocateSession
+  if (!target) return
+  const targetKey = `${target.agent}-${target.sessionId}`
+  const exists = store.displaySessions.some(s => monitorSessionKey(s) === targetKey)
+  if (!exists) {
+    if (!store.loading) {
+      if (store.activeAgent !== target.agent && store.activeAgent !== 'all') {
+        store.activeAgent = target.agent
+        return
+      }
+      store.pendingLocateSession = null
+    }
+    return
+  }
+
+  void nextTick(() => {
+    requestAnimationFrame(() => {
+      const el = document.querySelector(`[data-monitor-session-key="${targetKey}"]`) as HTMLElement | null
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        store.highlightedSessionKey = targetKey
+        if (highlightTimer) clearTimeout(highlightTimer)
+        highlightTimer = setTimeout(() => {
+          if (store.highlightedSessionKey === targetKey) {
+            store.highlightedSessionKey = null
+          }
+        }, 2500)
+        store.pendingLocateSession = null
+      }
+    })
+  })
+}
+
+watch(
+  [() => store.pendingLocateSession, () => store.displaySessions, () => store.loading],
+  () => {
+    if (store.pendingLocateSession) {
+      tryLocatePendingSession()
+    }
+  },
+  { immediate: true },
+)
+
 const hasUnreadSessions = computed(() => store.displaySessions.some(session => session.unread))
 
 async function handleMarkAllRead() {
@@ -382,6 +428,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  if (highlightTimer) clearTimeout(highlightTimer)
   stopDshPoll()
   if (relativeClock != null) window.clearInterval(relativeClock)
 })
@@ -495,6 +542,8 @@ onUnmounted(() => {
         <SessionCard
           v-for="session in store.displaySessions"
           :key="monitorSessionKey(session)"
+          :data-monitor-session-key="monitorSessionKey(session)"
+          :class="{ 'session-card--located': store.highlightedSessionKey === monitorSessionKey(session) }"
           :badge="agentBadgeLabel(session)"
           :badge-agent-id="agentBadgeAgentId(session)"
           :badge-icon="agentBadgeIcon(session)"
@@ -644,6 +693,31 @@ onUnmounted(() => {
 .hook-diff__added { color: var(--success); background: color-mix(in srgb, var(--success) 8%, transparent); }
 .hook-diff__removed { color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent); }
 .hook-diff__context { color: var(--ink-3); }
+
+:deep(.session-card--located) {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  box-shadow: 0 0 16px var(--accent-mid, rgba(58, 107, 140, 0.25)) !important;
+  animation: session-locate-pulse 2.5s ease-out forwards;
+}
+
+@keyframes session-locate-pulse {
+  0% {
+    transform: scale(1.015);
+  }
+  20% {
+    transform: scale(1);
+  }
+  70% {
+    outline-color: var(--accent);
+    box-shadow: 0 0 16px var(--accent-mid, rgba(58, 107, 140, 0.25));
+  }
+  100% {
+    outline-color: transparent;
+    box-shadow: none;
+  }
+}
+
 @media (max-width: 760px) {
   .session-monitor-page { padding: 20px; }
   .hook-card { align-items: flex-start; flex-direction: column; }

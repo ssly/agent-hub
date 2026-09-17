@@ -2239,3 +2239,41 @@ pub fn get_zcode_plugins() -> Vec<crate::zcode_plugin::ZCodePluginView> {
 pub fn get_qwen_plugins() -> Vec<crate::qwen_plugin::QwenPluginView> {
     crate::qwen_plugin::list_qwen_plugins()
 }
+
+/// Locate a monitored session: pop up the main window and navigate to the session row.
+#[tauri::command]
+pub fn locate_monitor_session(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SafeState>,
+    agent: String,
+    session_id: String,
+    turn_id: Option<String>,
+) {
+    use tauri::{Emitter, Manager};
+
+    let payload = serde_json::json!({
+        "agent": agent,
+        "sessionId": session_id,
+        "turnId": turn_id,
+    });
+
+    if let Ok(mut s) = state.lock() {
+        s.pending_locate_session = Some(payload.clone());
+    }
+
+    crate::tray::suppress_tray_blur(std::time::Duration::from_millis(2000));
+    crate::show_main_window(&app);
+
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.emit("locate-monitor-session", payload);
+    }
+}
+
+/// Retrieve and clear any pending locate session target (e.g. from cold start).
+#[tauri::command]
+pub fn take_pending_locate_session(
+    state: tauri::State<'_, SafeState>,
+) -> Option<serde_json::Value> {
+    state.lock().ok().and_then(|mut s| s.pending_locate_session.take())
+}
+

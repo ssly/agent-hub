@@ -8,6 +8,7 @@ pub struct AppState {
     pub config: Config,
     pub locale: Locale,
     pub platforms: Vec<Platform>,
+    pub pending_locate_session: Option<serde_json::Value>,
 }
 
 impl AppState {
@@ -19,6 +20,7 @@ impl AppState {
             config,
             locale,
             platforms,
+            pending_locate_session: None,
         }
     }
 }

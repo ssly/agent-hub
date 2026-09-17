@@ -361,8 +361,42 @@ pub fn collapse_usage_tray(app: AppHandle) {
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-fn tray_docked() -> bool {
+pub fn tray_docked() -> bool {
     TRAY_DOCKED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub fn tray_docked() -> bool {
+    false
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+static TRAY_SUPPRESS_BLUR_UNTIL: std::sync::Mutex<Option<std::time::Instant>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub fn suppress_tray_blur(duration: std::time::Duration) {
+    if let Ok(mut lock) = TRAY_SUPPRESS_BLUR_UNTIL.lock() {
+        *lock = Some(std::time::Instant::now() + duration);
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub fn suppress_tray_blur(_duration: std::time::Duration) {}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub fn is_tray_blur_suppressed() -> bool {
+    if let Ok(lock) = TRAY_SUPPRESS_BLUR_UNTIL.lock() {
+        if let Some(until) = *lock {
+            return std::time::Instant::now() < until;
+        }
+    }
+    false
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub fn is_tray_blur_suppressed() -> bool {
+    false
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -1344,6 +1378,21 @@ fn setup_desktop(app: &mut App) -> tauri::Result<()> {
             let window = window_to_hide.clone();
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_millis(80));
+                if is_tray_blur_suppressed() {
+                    return;
+                }
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                {
+                    use tauri::Manager;
+                    let is_main_focused = window
+                        .app_handle()
+                        .get_webview_window("main")
+                        .and_then(|w| w.is_focused().ok())
+                        .unwrap_or(false);
+                    if is_main_focused {
+                        return;
+                    }
+                }
                 // On query failure, err on the side of staying visible.
                 if window.is_focused().unwrap_or(true) {
                     return;
