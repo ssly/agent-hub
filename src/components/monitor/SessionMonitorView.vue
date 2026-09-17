@@ -417,6 +417,7 @@ onMounted(() => {
   if (!store.hydrated) {
     store.beginEnter()
   }
+  window.addEventListener('focus', onWindowFocus)
   void nextTick(() => {
     requestAnimationFrame(() => {
       // One more macrotask so the browser actually commits the loader frame.
@@ -427,7 +428,14 @@ onMounted(() => {
   })
 })
 
+function onWindowFocus() {
+  if (store.pendingLocateSession) {
+    tryLocatePendingSession()
+  }
+}
+
 onUnmounted(() => {
+  window.removeEventListener('focus', onWindowFocus)
   if (highlightTimer) clearTimeout(highlightTimer)
   stopDshPoll()
   if (relativeClock != null) window.clearInterval(relativeClock)

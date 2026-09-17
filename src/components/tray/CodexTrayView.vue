@@ -1458,7 +1458,12 @@ onBeforeUnmount(() => {
         </template>
 
         <!-- Monitor strip: whole block gone when hidden. Mini drops tooltips. -->
-        <div v-if="!monitorHidden" class="monitor-strip" :class="{ 'is-mini': miniMode }">
+        <div
+          v-if="!monitorHidden"
+          class="monitor-strip"
+          :class="{ 'is-mini': miniMode }"
+          data-tauri-drag-region="false"
+        >
           <div v-if="!miniMode" class="monitor-strip__title">
             <span>{{ t('ui.monitor_tab') }}</span>
             <span
@@ -1466,8 +1471,12 @@ onBeforeUnmount(() => {
               v-tooltip="t('session_monitor.mark_all_read')"
               class="monitor-strip__unread-total monitor-strip__unread-total--clickable"
               role="button"
+              tabindex="0"
+              data-tauri-drag-region="false"
               :aria-label="t('session_monitor.mark_all_read')"
               @click.stop="markAllMonitorRowsRead"
+              @keydown.enter.stop="markAllMonitorRowsRead"
+              @keydown.space.stop.prevent="markAllMonitorRowsRead"
             >{{ monitorUnreadBadge }}</span>
           </div>
           <div v-if="!monitorRows.length" class="monitor-empty" role="status">
@@ -1482,7 +1491,12 @@ onBeforeUnmount(() => {
             class="monitor-row"
             :class="{ 'monitor-row--unread': row.unread }"
             :data-monitor-row-key="monitorRowKey(row)"
+            data-tauri-drag-region="false"
+            role="button"
+            tabindex="0"
             @click="handleMonitorRowClick(row)"
+            @keydown.enter="handleMonitorRowClick(row)"
+            @keydown.space.prevent="handleMonitorRowClick(row)"
             @mouseleave="clearHoveredMonitorRow(row)"
           >
             <span
@@ -1530,8 +1544,12 @@ onBeforeUnmount(() => {
               v-tooltip="t('session_monitor.mark_read')"
               class="monitor-row__unread monitor-row__unread--clickable"
               role="button"
+              tabindex="0"
+              data-tauri-drag-region="false"
               :aria-label="t('session_monitor.mark_read')"
               @click.stop="markMonitorRowRead(row)"
+              @keydown.enter.stop="markMonitorRowRead(row)"
+              @keydown.space.stop.prevent="markMonitorRowRead(row)"
             />
           </div>
         </div>
@@ -2226,10 +2244,15 @@ onBeforeUnmount(() => {
   padding: 1px 4px;
   margin: 0 -4px;
   border-radius: 4px;
+  user-select: none;
   transition: background-color var(--dur-fast, 150ms) ease;
 }
 .monitor-row:hover {
   background: var(--tray-hover);
+}
+.monitor-row:focus-visible {
+  outline: 1px solid var(--tray-accent);
+  outline-offset: -1px;
 }
 .monitor-dot {
   flex: 0 0 auto;

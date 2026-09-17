@@ -137,6 +137,18 @@ pub fn show_main_window(app: &AppHandle) {
     let _ = window.show();
     let _ = window.unminimize();
     let _ = window.set_focus();
+
+    #[cfg(target_os = "windows")]
+    {
+        let win = window.clone();
+        std::thread::spawn(move || {
+            // Windows async window state update: retry set_focus after a short delay
+            // in case the window was unminimizing or becoming visible.
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            let _ = win.unminimize();
+            let _ = win.set_focus();
+        });
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
