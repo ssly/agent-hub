@@ -96,7 +96,7 @@ fn recreate_main_window(app: &AppHandle) -> Option<WebviewWindow> {
         builder = builder
             .title_bar_style(tauri::TitleBarStyle::Overlay)
             .hidden_title(true)
-            .traffic_light_position(tauri::LogicalPosition::new(12.0, 23.0));
+            .traffic_light_position(tauri::LogicalPosition::new(12.0, 18.0));
     }
 
     #[cfg(target_os = "windows")]

@@ -200,10 +200,10 @@ async function handleSyncClick() {
   display: flex;
   align-items: stretch;
   align-self: stretch;
-  margin: 0 -18px 0 6px;
+  margin: 0 -16px 0 8px;
 }
 .ah-win-controls__btn {
-  width: 46px;
+  width: 48px;
   display: grid;
   place-items: center;
   border: none;

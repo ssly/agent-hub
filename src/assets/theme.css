@@ -893,12 +893,12 @@
 
 .ah-sidebar__header {
   /* Fixed height shared with .ah-toolbar so the hairlines under both top
-     bars sit on the same line. */
-  height: 45px;
-  padding: 0 12px 0 14px;
+     bars sit on the same line. Strictly follows 4px/8px design grid. */
+  height: 36px;
+  padding: 0 12px 0 16px;
   border-bottom: 1px solid var(--hairline);
   display: flex; align-items: center; justify-content: space-between;
-  gap: 6px;
+  gap: 8px;
 }
 /* macOS overlay title bar: keep the brand clear of the traffic lights. */
 [data-platform="macos"] .ah-sidebar__header { padding-left: 84px; }
@@ -910,6 +910,8 @@
   font-weight: 600;
   color: var(--ink);
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
 }
 
 .ah-sidebar__header-btn {
@@ -919,7 +921,7 @@
   height: 20px;
   min-width: 20px;
   color: var(--ink-3);
-  padding: 0 3px;
+  padding: 0 4px;
   border-radius: var(--radius-xs);
   font-size: 11.5px;
   line-height: 1;
@@ -988,11 +990,11 @@
    ============================================================ */
 .ah-toolbar {
   /* Same fixed height as .ah-sidebar__header: their bottom hairlines align. */
-  height: 45px;
+  height: 36px;
   background: var(--surface);
   border-bottom: 1px solid var(--hairline);
   box-shadow: var(--shadow-mist);
-  padding: 0 18px;
+  padding: 0 16px;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1000,7 +1002,8 @@
 .ah-toolbar__back {
   display: flex; align-items: center; gap: 4px;
   font-size: 13px; color: var(--ink-3);
-  padding: 4px 8px;
+  padding: 0 8px;
+  height: 28px;
   border-radius: var(--radius-sm);
   border: none; background: transparent;
   cursor: pointer;
@@ -1010,6 +1013,13 @@
 .ah-toolbar__breadcrumb {
   font-family: var(--font-serif);
   font-size: 13px; font-weight: 500; color: var(--ink-2);
+  line-height: 20px;
+  display: inline-flex;
+  align-items: center;
+}
+.ah-toolbar .btn-sm {
+  height: 28px;
+  padding: 0 10px;
 }
 
 
