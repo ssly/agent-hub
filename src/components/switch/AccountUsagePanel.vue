@@ -175,7 +175,7 @@ const showEmpty = computed(
         <div
           v-for="win in windows"
           :key="win.key"
-          class="p-3 rounded-lg"
+          class="p-3 rounded"
           style="background: var(--sunken)"
         >
           <div class="flex justify-between items-center gap-2">

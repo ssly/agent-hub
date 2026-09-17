@@ -74,3 +74,8 @@ export function getErrorMessage(error: any): string {
   }
   return String(error)
 }
+
+export function shortenPath(path?: string | null): string {
+  if (!path) return ''
+  return path.replace(/^(\/Users\/[^/]+|C:\\Users\\[^\\]+)/, '~')
+}

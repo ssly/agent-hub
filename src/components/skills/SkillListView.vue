@@ -3,7 +3,8 @@ import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useSkillsStore } from '@/stores/skills'
-import { formatBytes } from '@/lib/utils'
+import { formatBytes, shortenPath } from '@/lib/utils'
+import { Link2 } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import { useHoverResetId } from '@/composables/useHoverReset'
 
@@ -231,6 +232,13 @@ onUnmounted(() => {
                   <div class="ah-row__name-text">
                     <span class="ah-row__skill-name">{{ skill.name }}</span>
                     <span v-if="skill.version" class="ah-version-chip">v{{ skill.version }}</span>
+                    <span
+                      v-if="skill.is_symlink"
+                      class="ah-symlink-icon"
+                      v-tooltip="skill.symlink_target ? t('skill.symlink_to', { target: shortenPath(skill.symlink_target) }) : t('skill.symlink')"
+                    >
+                      <Link2 :size="13" />
+                    </span>
                   </div>
                 </div>
 

@@ -1851,7 +1851,7 @@ onBeforeUnmount(() => {
   height: 22px;
   padding: 0;
   border: 0;
-  border-radius: 4px;
+  border-radius: 2px;
   color: var(--tray-ink-4);
   background: transparent;
   cursor: pointer;
@@ -1875,7 +1875,7 @@ onBeforeUnmount(() => {
   height: 30px;
   padding: 0 10px;
   border: 1px solid var(--tray-border);
-  border-radius: 4px;
+  border-radius: 2px;
   background: var(--tray-surface);
   box-shadow: var(--tray-panel-shadow);
 }
@@ -1949,7 +1949,7 @@ onBeforeUnmount(() => {
   height: 22px;
   padding: 0;
   border: 0;
-  border-radius: 4px;
+  border-radius: 2px;
   color: var(--tray-ink-4);
   background: transparent;
   cursor: pointer;
@@ -1972,7 +1972,7 @@ onBeforeUnmount(() => {
   height: 22px;
   padding: 0;
   border: 0;
-  border-radius: 4px;
+  border-radius: 2px;
   color: var(--tray-ink-4);
   background: transparent;
   cursor: pointer;
@@ -2026,7 +2026,7 @@ onBeforeUnmount(() => {
   grid-auto-columns: 1fr;
   gap: 3px;
   padding: 3px;
-  border-radius: 5px;
+  border-radius: 3px;
   background: var(--tray-inset);
 }
 
@@ -2039,7 +2039,7 @@ onBeforeUnmount(() => {
   min-width: 0;
   overflow: hidden;
   border: 0;
-  border-radius: 4px;
+  border-radius: 2px;
   padding: 0 14px;
   color: var(--tray-ink-2);
   background: transparent;
@@ -2130,7 +2130,7 @@ onBeforeUnmount(() => {
   align-items: center;
   padding: 2px 6px;
   border: 1px solid var(--tray-hairline);
-  border-radius: 3px;
+  border-radius: 2px;
   background: var(--tray-inset);
 }
 /* Full validity floats above the chip on hover; the chip itself stays a
@@ -2149,7 +2149,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 1px;
   padding: 5px 9px;
-  border-radius: 3px;
+  border-radius: 2px;
   background: var(--tray-ink);
   color: var(--tray-canvas);
   font-size: 10px;
@@ -2243,7 +2243,7 @@ onBeforeUnmount(() => {
   cursor: pointer;
   padding: 1px 4px;
   margin: 0 -4px;
-  border-radius: 4px;
+  border-radius: 2px;
   user-select: none;
   transition: background-color var(--dur-fast, 150ms) ease;
 }

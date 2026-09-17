@@ -169,10 +169,10 @@ fn build_html(platform_id: &str, locale: &str, conversations: &[ExportConversati
     .brand {{ margin:0; font-size:12px; font-weight:800; letter-spacing:.18em; color:#9fc5ca; }}
     .sidebar h1 {{ margin:10px 0 6px; font-size:24px; line-height:1.25; }}
     .summary {{ margin:0 0 18px; color:#b9c9cc; font-size:13px; }}
-    .search {{ width:100%; margin-bottom:14px; padding:10px 12px; border:1px solid #45616a; border-radius:10px; outline:none; color:#fff; background:#23434d; }}
+    .search {{ width:100%; margin-bottom:14px; padding:10px 12px; border:1px solid #45616a; border-radius:2px; outline:none; color:#fff; background:#23434d; }}
     .search:focus {{ border-color:#94c3c9; box-shadow:0 0 0 3px rgba(148,195,201,.15); }}
     .session-nav {{ display:flex; flex-direction:column; gap:7px; overflow:auto; padding-right:3px; }}
-    .session-link {{ width:100%; padding:11px 12px; border:0; border-radius:10px; color:#cddadd; background:transparent; text-align:left; cursor:pointer; }}
+    .session-link {{ width:100%; padding:11px 12px; border:0; border-radius:2px; color:#cddadd; background:transparent; text-align:left; cursor:pointer; }}
     .session-link:hover {{ background:#264851; }}
     .session-link.active {{ color:#fff; background:#356f7b; }}
     .session-link strong {{ display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }}
@@ -181,11 +181,11 @@ fn build_html(platform_id: &str, locale: &str, conversations: &[ExportConversati
     .content {{ width:min(1020px,100%); margin:0 auto; padding:42px 44px 80px; }}
     .session-view {{ display:none; }}
     .session-view.active {{ display:block; }}
-    .session-header {{ margin-bottom:28px; padding:26px 28px; border:1px solid var(--line); border-radius:18px; background:var(--panel); box-shadow:var(--shadow); }}
+    .session-header {{ margin-bottom:28px; padding:26px 28px; border:1px solid var(--line); border-radius:4px; background:var(--panel); box-shadow:var(--shadow); }}
     .eyebrow {{ margin:0 0 8px; color:var(--accent); font-size:12px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; }}
     .session-header h2 {{ margin:0 0 14px; font-size:30px; line-height:1.25; overflow-wrap:anywhere; }}
     .meta {{ display:flex; flex-wrap:wrap; gap:8px; }}
-    .meta span {{ padding:5px 9px; border-radius:999px; background:#f0efeb; color:var(--muted); font-size:12px; }}
+    .meta span {{ padding:5px 9px; border-radius:2px; background:#f0efeb; color:var(--muted); font-size:12px; }}
     .conversation {{ display:flex; flex-direction:column; gap:18px; }}
     .message {{ max-width:88%; }}
     .message.user {{ align-self:flex-end; }}
@@ -193,10 +193,10 @@ fn build_html(platform_id: &str, locale: &str, conversations: &[ExportConversati
     .message-head {{ display:flex; align-items:center; gap:8px; margin:0 10px 6px; color:var(--muted); font-size:12px; }}
     .message.user .message-head {{ justify-content:flex-end; }}
     .role {{ font-weight:800; color:var(--ink); }}
-    .bubble {{ padding:18px 20px; border:1px solid var(--line); border-radius:17px; background:var(--assistant); box-shadow:0 8px 24px rgba(30,42,50,.06); overflow-wrap:anywhere; }}
-    .user .bubble {{ background:var(--user); border-top-right-radius:5px; }}
-    .assistant .bubble {{ border-top-left-radius:5px; }}
-    .thinking {{ margin:0 0 12px; padding:8px 10px; border-radius:10px; background:#eef2f2; color:var(--muted); }}
+    .bubble {{ padding:18px 20px; border:1px solid var(--line); border-radius:4px; background:var(--assistant); box-shadow:0 8px 24px rgba(30,42,50,.06); overflow-wrap:anywhere; }}
+    .user .bubble {{ background:var(--user); border-top-right-radius:2px; }}
+    .assistant .bubble {{ border-top-left-radius:2px; }}
+    .thinking {{ margin:0 0 12px; padding:8px 10px; border-radius:2px; background:#eef2f2; color:var(--muted); }}
     .thinking summary {{ cursor:pointer; font-size:12px; font-weight:700; user-select:none; }}
     .thinking pre {{ margin:8px 0 0; padding:0; overflow:visible; border-radius:0; color:var(--muted); background:transparent; font:12.5px/1.65 inherit; white-space:pre-wrap; }}
     
@@ -219,7 +219,7 @@ fn build_html(platform_id: &str, locale: &str, conversations: &[ExportConversati
       font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;
       font-size:0.88em;
       padding:2px 5px;
-      border-radius:4px;
+      border-radius:2px;
       background:rgba(0,0,0,0.06);
       color:#b33917;
     }}
@@ -231,7 +231,7 @@ fn build_html(platform_id: &str, locale: &str, conversations: &[ExportConversati
       margin:0.8em 0;
       padding:14px 16px;
       overflow-x:auto;
-      border-radius:10px;
+      border-radius:4px;
       background:#172b33;
       color:#e8eef0;
       font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;
@@ -257,7 +257,7 @@ fn build_html(platform_id: &str, locale: &str, conversations: &[ExportConversati
       padding:4px 12px;
       border-left:3px solid var(--accent);
       background:rgba(53,111,123,0.06);
-      border-radius:0 4px 4px 0;
+      border-radius:0 2px 2px 0;
       color:var(--muted);
     }}
     .md-body blockquote > *:first-child {{ margin-top:0; }}
@@ -287,7 +287,7 @@ fn build_html(platform_id: &str, locale: &str, conversations: &[ExportConversati
       text-decoration:underline;
       text-underline-offset:2px;
     }}
-    .empty {{ padding:28px; border:1px dashed var(--line); border-radius:14px; color:var(--muted); text-align:center; }}
+    .empty {{ padding:28px; border:1px dashed var(--line); border-radius:4px; color:var(--muted); text-align:center; }}
     [hidden] {{ display:none !important; }}
     @media (max-width:760px) {{ .layout {{ display:block; }} .sidebar {{ position:relative; height:auto; max-height:44vh; }} .content {{ padding:24px 14px 60px; }} .session-header {{ padding:20px; }} .session-header h2 {{ font-size:24px; }} .message {{ max-width:96%; }} }}
     @media print {{ .layout {{ display:block; }} .sidebar {{ display:none; }} .content {{ width:100%; padding:0; }} .session-view {{ display:block !important; page-break-after:always; }} .session-header,.bubble {{ box-shadow:none; }} }}

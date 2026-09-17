@@ -3,9 +3,9 @@ import { ref, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSkillsStore } from '@/stores/skills'
 import { useToast } from '@/composables/useToast'
-import { formatBytes, avatarToneFromName } from '@/lib/utils'
+import { formatBytes, avatarToneFromName, shortenPath } from '@/lib/utils'
 import * as api from '@/lib/api'
-import { FolderOpen } from 'lucide-vue-next'
+import { FolderOpen, Link2 } from 'lucide-vue-next'
 import AppLoading from '@/components/ui/AppLoading.vue'
 
 const { t } = useI18n()
@@ -101,10 +101,22 @@ watch(() => [store.selectedSkillName, store.selectedFolder], loadDetail)
           </button>
         </header>
 
-        <!-- Skill location path + open button -->
+        <!-- Skill location path + symlink target if present -->
         <div class="ah-skill-path">
-          <span class="ah-skill-path__label">{{ t('skill.location') }}</span>
-          <code class="ah-skill-path__value">{{ detail.path }}</code>
+          <div class="ah-skill-path__item">
+            <span class="ah-skill-path__label">{{ t('skill.location') }}</span>
+            <code class="ah-skill-path__value">{{ detail.path }}</code>
+            <span v-if="detail.is_symlink" class="ah-symlink-badge">
+              <Link2 :size="11" />
+              <span>{{ t('skill.symlink') }}</span>
+            </span>
+          </div>
+          <div v-if="detail.is_symlink && detail.symlink_target" class="ah-skill-path__item">
+            <span class="ah-skill-path__label">{{ t('skill.symlink_target') }}</span>
+            <code class="ah-skill-path__value ah-skill-path__value--symlink" v-tooltip="detail.symlink_target">
+              → {{ detail.symlink_target }}
+            </code>
+          </div>
         </div>
 
         <!-- Metadata Row -->
@@ -124,10 +136,6 @@ watch(() => [store.selectedSkillName, store.selectedFolder], loadDetail)
           <article class="ah-meta">
             <p class="ah-meta__label">{{ t('skill.files') }}</p>
             <p class="ah-meta__value">{{ detail.files.length }}</p>
-          </article>
-          <article class="ah-meta">
-            <p class="ah-meta__label">{{ detail.is_symlink ? 'Symlink' : 'Type' }}</p>
-            <p class="ah-meta__value">{{ detail.is_symlink ? '→ ...' : 'Directory' }}</p>
           </article>
         </div>
 

@@ -370,7 +370,7 @@ export async function exportSessionsHtml(
       <p><strong>${isZh ? '用户' : 'User'}：</strong>${id}</p>
       <p><strong>Agent：</strong>${isZh ? '这是浏览器调试模式生成的导出预览。' : 'This export preview was generated in web debug mode.'}</p>
     </section>`).join('')
-  const html = `<!doctype html><html lang="${isZh ? 'zh-CN' : 'en'}"><meta charset="utf-8"><title>${title}</title><style>body{max-width:900px;margin:40px auto;padding:0 20px;font:16px/1.7 system-ui;color:#1e2a32}section{margin:20px 0;padding:20px;border:1px solid #ddd;border-radius:14px;background:#fff}</style><body><h1>${title}</h1><p>${platformId}</p>${sessions}</body></html>`
+  const html = `<!doctype html><html lang="${isZh ? 'zh-CN' : 'en'}"><meta charset="utf-8"><title>${title}</title><style>body{max-width:900px;margin:40px auto;padding:0 20px;font:16px/1.7 system-ui;color:#1e2a32}section{margin:20px 0;padding:20px;border:1px solid #ddd;border-radius:4px;background:#fff}</style><body><h1>${title}</h1><p>${platformId}</p>${sessions}</body></html>`
   if (typeof document !== 'undefined') {
     const url = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }))
     const link = document.createElement('a')

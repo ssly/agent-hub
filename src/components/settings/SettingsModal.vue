@@ -366,7 +366,7 @@ async function persistMonitorLimit() {
 .settings-agent-checkbox__box {
   width: 15px;
   height: 15px;
-  border-radius: 4px;
+  border-radius: 2px;
   border: 1.5px solid var(--border);
   background: var(--surface);
   display: flex;

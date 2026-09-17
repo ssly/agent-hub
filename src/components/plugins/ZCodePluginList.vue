@@ -44,7 +44,6 @@ function componentsLabel(plugin: ZCodePlugin) {
               <span v-if="plugin.version" class="ah-version-chip">v{{ plugin.version }}</span>
               <span
                 :class="['ah-zc-plugin__badge', plugin.installed ? 'is-installed' : 'is-missing']"
-                :title="t('plugin.zcode_installed_hint')"
               >{{ t(plugin.installed ? 'plugin.zcode_installed' : 'plugin.zcode_not_installed') }}</span>
             </div>
             <p v-if="plugin.description" class="ah-zc-plugin__description">{{ plugin.description }}</p>
@@ -56,7 +55,6 @@ function componentsLabel(plugin: ZCodePlugin) {
           </div>
         </article>
       </div>
-      <p class="ah-zc-plugins__note">{{ t('plugin.zcode_readonly_note') }}</p>
     </template>
   </div>
 </template>
@@ -133,12 +131,6 @@ function componentsLabel(plugin: ZCodePlugin) {
   color: var(--ink-4);
   font-family: var(--font-mono);
   font-size: 10.5px;
-}
-.ah-zc-plugins__note {
-  padding: 9px 16px 11px;
-  color: var(--ink-4);
-  font-size: 11.5px;
-  line-height: 1.55;
 }
 
 @media (max-width: 720px) {

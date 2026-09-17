@@ -441,7 +441,7 @@ async function handleConfirmClear() {
               <div
                 v-for="(credit, idx) in store.codexResetCredits?.credits ?? []"
                 :key="idx"
-                class="p-3 rounded-lg"
+                class="p-3 rounded"
                 style="background: var(--sunken)"
               >
                 <div class="flex justify-between items-center gap-2">
@@ -468,7 +468,7 @@ async function handleConfirmClear() {
               </div>
               <div
                 v-if="!store.codexResetCredits?.credits.length && store.codexUsage?.reset_credits"
-                class="p-3 rounded-lg"
+                class="p-3 rounded"
                 style="background: var(--sunken)"
               >
                 <div class="flex justify-between items-center">
@@ -523,7 +523,7 @@ async function handleConfirmClear() {
             <template v-if="store.kiroUsage?.free_trial || store.kiroUsage?.add_on_credits?.length" #extra>
               <div
                 v-if="store.kiroUsage?.free_trial"
-                class="p-3 rounded-lg"
+                class="p-3 rounded"
                 style="background: var(--sunken)"
               >
                 <div class="flex justify-between items-center gap-2">
@@ -565,7 +565,7 @@ async function handleConfirmClear() {
               <div
                 v-for="balance in store.deepseekUsage?.balances || []"
                 :key="balance.currency"
-                class="p-3 rounded-lg"
+                class="p-3 rounded"
                 style="background: var(--sunken)"
               >
                 <div class="flex justify-between items-center gap-2">
@@ -751,7 +751,7 @@ async function handleConfirmClear() {
       <div class="space-y-3 text-sm">
         <p style="color: var(--ink)">{{ t('switch.clear_active_warning_path', { path: clearActivePath }) }}</p>
         <p style="color: var(--ink)">{{ t('switch.clear_active_warning_logout', { agent: clearActiveAgentName }) }}</p>
-        <p class="p-3 rounded-lg" style="background: var(--sunken); color: var(--ink-2)">
+        <p class="p-3 rounded" style="background: var(--sunken); color: var(--ink-2)">
           {{ t('switch.clear_active_warning_pool') }}
         </p>
       </div>
@@ -797,7 +797,7 @@ async function handleConfirmClear() {
   font-size: 11px;
   line-height: 1;
   padding: 3px 8px;
-  border-radius: 999px;
+  border-radius: 2px;
   background: var(--accent-soft);
   color: var(--accent);
   flex-shrink: 0;

@@ -4,7 +4,7 @@ Agent Hub 的项目上下文文档，供 AI Agent 和开发者快速了解项目
 
 ## 项目概述
 
-Agent Hub 是一个基于 Tauri 2.x 的桌面应用，用于统一管理本地多个 AI Agent 平台的插件（Skill、MCP Server、Claude Code 原生插件）、会话和账号。当前版本 **0.27.5**。
+Agent Hub 是一个基于 Tauri 2.x 的桌面应用，用于统一管理本地多个 AI Agent 平台的插件（Skill、MCP Server、Claude Code 原生插件）、会话和账号。当前版本 **0.27.6**。
 
 ## 架构
 
@@ -141,12 +141,12 @@ npm run version [-- <ver>] # 从 git tag 同步版本号
 
 平台顺序（`platform/registry.rs` 定义顺序即侧边栏顺序，会话/监听/账号子集保持同一相对顺序）：Shared → Codex → Claude Code → Cursor → Antigravity → Grok Build → Kimi Code → Qwen Code → ZCode → WorkBuddy → Kiro → DeepSeek Harness → Oh My Pi。关键约定：
 
-- **Shared（id `shared`，`~/.agents/skills`）**：Codex、Cursor、Antigravity（项目级）、Grok Build、Kimi Code、Qwen Code、ZCode、WorkBuddy、DeepSeek Harness 官方默认读取；Claude Code、Kiro、Oh My Pi 仅读自身目录。显示名中英文均为 Shared（侧边栏无中文 Agent 名）。Shared 为公共技能池而非独立 Agent，始终保持启用且不在偏好设置的 Agent 启停列表中展示；Shared 视图顶部展示按官方顺序排列的支持 Agent 交互胶囊；支持 Shared 的双技能 Agent 顶部展示 Shared 技能引导卡片（支持跳转），下方保留专属技能管理。
+- **Shared（id `shared`，`~/.agents/skills`）**：Codex、Cursor、Antigravity（项目级）、Grok Build、Kimi Code、Qwen Code、ZCode、DeepSeek Harness 官方默认读取；Claude Code、WorkBuddy、Kiro、Oh My Pi 仅读自身目录。显示名中英文均为 Shared（侧边栏无中文 Agent 名）。Shared 为公共技能池而非独立 Agent，始终保持启用且不在偏好设置的 Agent 启停列表中展示；Shared 视图顶部展示按官方顺序排列的支持 Agent 交互胶囊；支持 Shared 的双技能 Agent 顶部展示 Shared 技能引导卡片（支持跳转），下方保留专属技能管理。
 - **Codex**：官方用户级 skills 仅 Shared（`~/.codex/skills` 是社区误传），前端显示 Skills 在 Shared 目录下并提供跳转，不渲染自己的 Skills 区块。
 - **Antigravity**（agy CLI / Antigravity 2.0）：共享 `~/.gemini/config/`（skills + mcp_config.json + plugins）；项目级为 `.agents/skills`、`.agents/mcp_config.json`（`workspace_skill_dir` 有特判，不走镜像）。
 - **Grok Build / Kimi Code / Antigravity / Codex 的插件体系**只在前端小字标注（`plugin.notes.*` i18n key），不管理；Claude Code 是唯一可启停管理的插件体系；ZCode 插件市场为只读列表（见下条）。
 - **ZCode**（智谱 Z.ai 官方编程工具）：skills 为 `~/.zcode/skills`（项目级 `.zcode/skills`）并同时读 Shared；MCP 在 `~/.zcode/cli/config.json` 的 `mcp.servers`（嵌套 map，server schema 严格——未知键会被 ZCode 整个丢弃，读写必须经 serde_json::Value 保留未知字段；禁用写 `"enabled": false`）。插件为 Claude Code 风格的市场制，**只读列表**（`get_zcode_plugins`，`zcode_plugin.rs`）：`~/.zcode/cli/plugins/marketplaces/<id>/marketplace.json` 登记插件（`plugins[].cachePath` 为准，登记 version 可能与缓存目录不一致），实体在 `cache/<市场>/<插件>/<版本>/`（manifest 优先 `.zcode-plugin/plugin.json`，回退 `.claude-plugin/plugin.json`）；`installed` 按 `data/<plugin>@<marketplace>/` 目录存在性判定（**推测语义**，官方文档只说启停状态在 config.json 的 plugins 键、本机未见，未证实），不做启停，UI 小字引导去 ZCode 设置操作。
-- **WorkBuddy**（腾讯官方 AI 编码助手，id `workbuddy`）：skills 为 `~/.workbuddy/skills`（项目级 `.workbuddy/skills`）；MCP 在 `~/.workbuddy/mcp.json` 顶层 `mcpServers`（JSON 格式，支持读写管理与启用/禁用）。会话扫描 `~/.workbuddy/sessions`、`~/.workbuddy/projects` 及 `~/.codebuddy/sessions` 下的 JSONL 格式会话，支持消息查看与终端恢复（`codebuddy -r <id>` 或 `workbuddy -r <id>`）；实时监听通过注入 `~/.workbuddy/settings.json` 的 `hooks`（`--agent-hub-workbuddy-hook`）。
+- **WorkBuddy**（腾讯官方 AI 编码助手，id `workbuddy`）：skills 为 `~/.workbuddy/skills`（项目级 `.workbuddy/skills`），官方不支持读取 Shared 目录（.agents/skills）；MCP 在 `~/.workbuddy/mcp.json` 顶层 `mcpServers`（JSON 格式，支持读写管理与启用/禁用）。会话扫描 `~/.workbuddy/sessions`、`~/.workbuddy/projects` 及 `~/.codebuddy/sessions` 下的 JSONL 格式会话，支持消息查看与终端恢复（`codebuddy -r <id>` 或 `workbuddy -r <id>`）；实时监听通过注入 `~/.workbuddy/settings.json` 的 `hooks`（`--agent-hub-workbuddy-hook`）。
 - 各平台的小字标注（notes）全部在前端 i18n（`plugin.notes.<platform-id>`），后端不透传。
 - **Qwen Code**（阿里通义千问编程工具，id `qwen`）：skills 为 `~/.qwen/skills`（项目级 `.qwen/skills`，走默认镜像无特判）；MCP 在 `~/.qwen/settings.json` 顶层 `mcpServers`（JSON，Gemini 风格；settings.json 还承载 hooks/auth 等其他配置，读写走 parser.rs 的外科式 JSON 路径保留未知字段）。扩展为**只读列表**（`get_qwen_plugins`，`qwen_plugin.rs`）：扫 `~/.qwen/extensions/<name>/qwen-extension.json`，统计 mcpServers 键数与 commands/skills/agents 数组长度；启停状态持久化位置未确认，不做启停。会话浏览与会话监听（hooks）已接入，见下文对应章节；账号切换不接入（无多账号概念、无远端用量接口，CLI `/stats` 仅为本地聚合）。
 - **DeepSeek Harness**（dsh CLI / 浏览器界面，id `dsh`）：skills 为 `~/.dsh/skills`（项目级 `.dsh/skills`；同时读 Shared `~/.agents/skills`）。Skill 布局除 SKILL.md 目录外还支持**扁平单文件 Markdown**（`*.md` 直接放 skills 根，frontmatter name 缺省用文件名），扫描器对 dsh 平台启用 `scan_skills_ext(allow_flat_md=true)`。MCP 是 profile 的 cordis 插件实例（`~/.dsh/profiles/<profile>/cordis.patch.yml` 中 `name: '@deepseek-ai/dsh-mcp-client'` 条目，`serverName` 即服务器名，配置含 transport/command/args/url/env），**只读列表**（`McpFormat::DshCordisPatch`），增删改后端一律拒绝，UI 小字引导用 `dsh plugin`。插件体系即 profile 本身（`dsh plugin add`，基于 Koishi/Cordis），Plugins 页不管理；会话监听是例外——Monitor 页一键安装观察型插件 `agent-hub-dsh-monitor`（见 session_monitor）。

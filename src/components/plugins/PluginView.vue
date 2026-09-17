@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { Folder, Copy, ExternalLink } from 'lucide-vue-next'
+import { useToast } from '@/composables/useToast'
 import { usePluginsStore } from '@/stores/plugins'
 import { useSkillsStore } from '@/stores/skills'
 import { useMcpStore } from '@/stores/mcp'
@@ -13,7 +15,8 @@ import ClaudePluginList from '@/components/plugins/ClaudePluginList.vue'
 import ZCodePluginList from '@/components/plugins/ZCodePluginList.vue'
 import QwenPluginList from '@/components/plugins/QwenPluginList.vue'
 
-const { t, te } = useI18n()
+const { t } = useI18n()
+const { showToast } = useToast()
 const pluginsStore = usePluginsStore()
 const skillsStore = useSkillsStore()
 const mcpStore = useMcpStore()
@@ -44,21 +47,12 @@ const SHARED_PLATFORMS: SharedPlatformInfo[] = [
   { id: 'kimi-code', name: 'Kimi Code' },
   { id: 'qwen', name: 'Qwen Code' },
   { id: 'zcode', name: 'ZCode' },
-  { id: 'workbuddy', name: 'WorkBuddy' },
   { id: 'dsh', name: 'DeepSeek Harness' },
 ]
 
 const currentSharedPlatform = computed(() =>
   SHARED_PLATFORMS.find(p => p.id === pluginsStore.selectedPlatformId)
 )
-
-const showSharedSkillsBanner = computed(() => {
-  if (!currentSharedPlatform.value) return false
-  if (isCodex.value) return false
-  // For Antigravity at project scope, its skill dir is already .agents/skills
-  if (currentSharedPlatform.value.projectOnly && !pluginsStore.isGlobalScope) return false
-  return true
-})
 
 const showMcpSection = computed(() => Boolean(pluginsStore.selectedPlatform?.supports_mcp)
   && (pluginsStore.isGlobalScope || serverCount.value > 0))
@@ -72,17 +66,26 @@ const showQwenSection = computed(() => isQwen.value && pluginsStore.isGlobalScop
 // note instead of a duplicated skills section.
 const showSkillsSection = computed(() => !isCodex.value
   && (pluginsStore.isGlobalScope || skillCount.value > 0))
-const platformNote = computed(() => {
-  const id = pluginsStore.selectedPlatformId
-  if (!id) return ''
-  const key = `plugin.notes.${id}`
-  return te(key) ? t(key) : ''
-})
 const platformTitle = computed(() => {
   const p = pluginsStore.selectedPlatform
   if (!p) return ''
   return p.id === 'shared' ? t('plugin.platform_shared') : p.display_name
 })
+
+function shortenPath(path: string): string {
+  if (!path) return ''
+  return path.replace(/^(\/Users\/[^/]+|C:\\Users\\[^\\]+)/, '~')
+}
+
+async function copyPath(path: string) {
+  if (!path) return
+  try {
+    await navigator.clipboard.writeText(path)
+    showToast(t('plugin.path_copied'), 'success')
+  } catch {
+    // fallback
+  }
+}
 
 function jumpToShared() {
   pluginsStore.selectPlatform('shared')
@@ -135,25 +138,15 @@ function togglePane(section: string) {
     <template v-else>
       <header class="ah-plugin-header">
         <div class="min-w-0">
-          <p class="ah-plugin-eyebrow">
-            {{ pluginsStore.isGlobalScope ? t('plugin.workspace') : t('plugin.scope_project') }}
-          </p>
           <h1 class="ah-page-title truncate">{{ platformTitle }}</h1>
-          <p class="ah-plugin-summary">
-            {{ isClaudeCode
-              ? t('plugin.summary_claude', { plugins: claudePluginsStore.plugins.length, skills: skillCount, servers: serverCount })
-              : t('plugin.summary', { skills: skillCount, servers: serverCount }) }}
-          </p>
-          <p v-if="platformNote" class="ah-plugin-note">{{ platformNote }}</p>
           <div v-if="isShared" class="ah-plugin-shared-agents">
-            <span class="ah-plugin-shared-agents__label">{{ t('plugin.shared_supported_agents') }}：</span>
             <div class="ah-plugin-shared-agents__list">
               <button
                 v-for="agent in SHARED_PLATFORMS"
                 :key="agent.id"
                 type="button"
                 class="ah-plugin-shared-agent-badge"
-                :title="agent.projectOnly ? t('plugin.shared_skills_banner_desc_antigravity') : t('plugin.shared_skills_banner_desc')"
+                v-tooltip="agent.projectOnly ? t('plugin.shared_skills_banner_desc_antigravity') : t('plugin.shared_skills_banner_desc')"
                 @click="pluginsStore.selectPlatform(agent.id)"
               >
                 <span>{{ agent.name }}</span>
@@ -165,6 +158,7 @@ function togglePane(section: string) {
       </header>
 
       <div class="ah-plugin-grid">
+        <!-- MCP Section -->
         <section
           v-if="showMcpSection"
           class="ah-plugin-pane"
@@ -175,15 +169,21 @@ function togglePane(section: string) {
             class="ah-plugin-pane__header ah-plugin-pane__header--collapsible"
             @click="togglePane('mcp')"
           >
-            <div>
-              <h2 id="plugin-mcp-heading">{{ t('plugin.mcp') }}</h2>
-              <p>{{ t('plugin.mcp_hint') }}</p>
-              <div v-if="pluginsStore.selectedPlatform.config_path" class="ah-plugin-path">
-                <span>{{ t('plugin.mcp_path') }}</span>
-                <code>{{ pluginsStore.selectedPlatform.config_path }}</code>
-              </div>
+            <div class="flex items-center gap-2 min-w-0 flex-1">
+              <h2 id="plugin-mcp-heading" class="shrink-0">{{ t('plugin.mcp') }}</h2>
+              <button
+                v-if="pluginsStore.selectedPlatform.config_path"
+                type="button"
+                class="ah-plugin-path-pill"
+                v-tooltip="`${pluginsStore.selectedPlatform.config_path} · ${t('plugin.copy_path')}`"
+                @click.stop="copyPath(pluginsStore.selectedPlatform.config_path)"
+              >
+                <Folder :size="12" class="shrink-0 opacity-60" />
+                <span class="truncate">{{ shortenPath(pluginsStore.selectedPlatform.config_path) }}</span>
+                <Copy :size="10" class="ah-plugin-path-pill__copy shrink-0" />
+              </button>
             </div>
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-2 shrink-0">
               <span class="ah-plugin-count">{{ serverCount }}</span>
               <button
                 v-if="pluginsStore.selectedPlatform.supports_mcp && pluginsStore.isGlobalScope"
@@ -213,6 +213,7 @@ function togglePane(section: string) {
           </div>
         </section>
 
+        <!-- Claude Code Plugins Section -->
         <section
           v-if="showClaudeSection"
           class="ah-plugin-pane"
@@ -223,11 +224,10 @@ function togglePane(section: string) {
             class="ah-plugin-pane__header ah-plugin-pane__header--collapsible"
             @click="togglePane('claude_plugins')"
           >
-            <div>
-              <h2 id="plugin-claude-heading">{{ t('plugin.claude_plugins') }}</h2>
-              <p>{{ t('plugin.claude_plugins_hint') }}</p>
+            <div class="flex items-center gap-2 min-w-0 flex-1">
+              <h2 id="plugin-claude-heading" class="shrink-0">{{ t('plugin.claude_plugins') }}</h2>
             </div>
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-2 shrink-0">
               <span
                 class="ah-plugin-count"
                 :title="t('plugin.claude_enabled_count', { enabled: claudePluginsStore.enabledCount, total: claudePluginsStore.plugins.length })"
@@ -255,6 +255,7 @@ function togglePane(section: string) {
           </div>
         </section>
 
+        <!-- ZCode Plugins Section -->
         <section
           v-if="showZCodeSection"
           class="ah-plugin-pane"
@@ -265,11 +266,16 @@ function togglePane(section: string) {
             class="ah-plugin-pane__header ah-plugin-pane__header--collapsible"
             @click="togglePane('zcode_plugins')"
           >
-            <div>
-              <h2 id="plugin-zcode-heading">{{ t('plugin.zcode_plugins') }}</h2>
-              <p>{{ t('plugin.zcode_plugins_hint') }}</p>
+            <div class="flex items-center gap-2 min-w-0 flex-1">
+              <h2 id="plugin-zcode-heading" class="shrink-0">{{ t('plugin.zcode_plugins') }}</h2>
+              <span
+                class="ah-plugin-readonly-badge"
+                v-tooltip="t('plugin.zcode_readonly_tooltip')"
+              >
+                {{ t('plugin.claude_read_only') }}
+              </span>
             </div>
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-2 shrink-0">
               <span
                 class="ah-plugin-count"
                 :title="t('plugin.zcode_installed_count', { installed: zcodePluginsStore.installedCount, total: zcodePluginsStore.plugins.length })"
@@ -297,6 +303,7 @@ function togglePane(section: string) {
           </div>
         </section>
 
+        <!-- Qwen Code Extensions Section -->
         <section
           v-if="showQwenSection"
           class="ah-plugin-pane"
@@ -307,11 +314,16 @@ function togglePane(section: string) {
             class="ah-plugin-pane__header ah-plugin-pane__header--collapsible"
             @click="togglePane('qwen_plugins')"
           >
-            <div>
-              <h2 id="plugin-qwen-heading">{{ t('plugin.qwen_plugins') }}</h2>
-              <p>{{ t('plugin.qwen_plugins_hint') }}</p>
+            <div class="flex items-center gap-2 min-w-0 flex-1">
+              <h2 id="plugin-qwen-heading" class="shrink-0">{{ t('plugin.qwen_plugins') }}</h2>
+              <span
+                class="ah-plugin-readonly-badge"
+                v-tooltip="t('plugin.qwen_readonly_tooltip')"
+              >
+                {{ t('plugin.claude_read_only') }}
+              </span>
             </div>
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-2 shrink-0">
               <span class="ah-plugin-count">{{ qwenPluginsStore.plugins.length }}</span>
               <button
                 type="button"
@@ -336,38 +348,19 @@ function togglePane(section: string) {
           </div>
         </section>
 
-        <section v-if="isCodex" class="ah-plugin-pane" aria-labelledby="plugin-codex-skills-heading">
-          <div class="ah-plugin-codex-skills">
-            <div>
-              <h2 id="plugin-codex-skills-heading">{{ t('plugin.skills') }}</h2>
-              <p>{{ t('plugin.codex_skills_in_pool') }}</p>
-              <div v-if="pluginsStore.sharedSkillDir" class="ah-plugin-path">
-                <span>{{ t('plugin.skills_path') }}</span>
-                <code>{{ pluginsStore.sharedSkillDir }}</code>
-              </div>
-            </div>
-            <button class="btn btn-secondary btn-sm" @click="jumpToShared">
-              {{ t('plugin.jump_to_pool') }}
-            </button>
+        <!-- Codex Special Skills Banner -->
+        <section v-if="isCodex" class="ah-plugin-codex-banner">
+          <div class="flex items-center gap-2.5 min-w-0">
+            <span class="ah-plugin-codex-banner__title">{{ t('plugin.skills') }}</span>
+            <span class="ah-plugin-codex-banner__desc truncate">{{ t('plugin.codex_shared_hint') }}</span>
           </div>
+          <button class="btn btn-secondary btn-sm shrink-0 flex items-center gap-1.5" @click="jumpToShared">
+            <span>{{ t('plugin.jump_to_pool') }}</span>
+            <ExternalLink :size="12" />
+          </button>
         </section>
 
-        <section v-if="showSharedSkillsBanner" class="ah-plugin-pane" aria-labelledby="plugin-shared-skills-heading">
-          <div class="ah-plugin-codex-skills">
-            <div>
-              <h2 id="plugin-shared-skills-heading">{{ t('plugin.shared_skills_banner_title') }}</h2>
-              <p>{{ currentSharedPlatform?.projectOnly ? t('plugin.shared_skills_banner_desc_antigravity') : t('plugin.shared_skills_banner_desc') }}</p>
-              <div v-if="pluginsStore.sharedSkillDir" class="ah-plugin-path">
-                <span>{{ t('plugin.skills_path') }}</span>
-                <code>{{ pluginsStore.sharedSkillDir }}</code>
-              </div>
-            </div>
-            <button class="btn btn-secondary btn-sm" @click="jumpToShared">
-              {{ t('plugin.jump_to_pool') }}
-            </button>
-          </div>
-        </section>
-
+        <!-- Skills Section -->
         <section
           v-if="showSkillsSection"
           class="ah-plugin-pane"
@@ -378,15 +371,31 @@ function togglePane(section: string) {
             class="ah-plugin-pane__header ah-plugin-pane__header--collapsible"
             @click="togglePane('skills')"
           >
-            <div>
-              <h2 id="plugin-skills-heading">{{ t('plugin.skills') }}</h2>
-              <p>{{ t('plugin.skills_hint') }}</p>
-              <div v-if="pluginsStore.selectedPlatform.skill_dir" class="ah-plugin-path">
-                <span>{{ t('plugin.skills_path') }}</span>
-                <code>{{ pluginsStore.selectedPlatform.skill_dir }}</code>
-              </div>
+            <div class="flex items-center gap-2 min-w-0 flex-1">
+              <h2 id="plugin-skills-heading" class="shrink-0">{{ t('plugin.skills') }}</h2>
+              <button
+                v-if="pluginsStore.selectedPlatform.skill_dir"
+                type="button"
+                class="ah-plugin-path-pill"
+                v-tooltip="`${pluginsStore.selectedPlatform.skill_dir} · ${t('plugin.copy_path')}`"
+                @click.stop="copyPath(pluginsStore.selectedPlatform.skill_dir)"
+              >
+                <Folder :size="12" class="shrink-0 opacity-60" />
+                <span class="truncate">{{ shortenPath(pluginsStore.selectedPlatform.skill_dir) }}</span>
+                <Copy :size="10" class="ah-plugin-path-pill__copy shrink-0" />
+              </button>
+              <button
+                v-if="currentSharedPlatform"
+                type="button"
+                class="ah-plugin-shared-link"
+                v-tooltip="currentSharedPlatform.projectOnly ? t('plugin.shared_skills_banner_desc_antigravity') : t('plugin.shared_skills_tooltip')"
+                @click.stop="jumpToShared"
+              >
+                <span>{{ t('plugin.shared_skills_link') }}</span>
+                <ExternalLink :size="11" />
+              </button>
             </div>
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-2 shrink-0">
               <span class="ah-plugin-count">{{ skillCount }}</span>
               <button
                 type="button"
@@ -418,7 +427,7 @@ function togglePane(section: string) {
 <style scoped>
 .ah-plugin-view {
   min-height: 100%;
-  padding: 22px 24px 24px;
+  padding: 20px 24px 24px;
   display: flex;
   flex-direction: column;
 }
@@ -433,36 +442,87 @@ function togglePane(section: string) {
   align-items: flex-end;
   justify-content: space-between;
   gap: 24px;
-  margin-bottom: 18px;
+  margin-bottom: 14px;
 }
-.ah-plugin-eyebrow {
-  margin-bottom: 2px;
-  color: var(--ink-4);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: .08em;
-  text-transform: uppercase;
-}
-.ah-plugin-summary {
-  margin-top: 3px;
-  color: var(--ink-3);
-  font-size: 13px;
-}
-.ah-plugin-path {
-  min-width: 0;
-  display: flex;
-  align-items: baseline;
-  gap: 7px;
-  margin-top: 5px;
-  color: var(--ink-4);
-  font-size: 11px;
-}
-.ah-plugin-path span { flex-shrink: 0; font-weight: 500; }
-.ah-plugin-path code {
+.ah-plugin-path-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 260px;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  border: 1px solid var(--hairline);
   color: var(--ink-3);
   font-family: var(--font-mono);
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-soft);
+  min-width: 0;
+}
+.ah-plugin-path-pill:hover {
+  background: var(--hover);
+  color: var(--ink);
+  border-color: var(--border);
+}
+.ah-plugin-path-pill__copy {
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-soft);
+}
+.ah-plugin-path-pill:hover .ah-plugin-path-pill__copy {
+  opacity: 0.8;
+}
+.ah-plugin-shared-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-soft);
+  flex-shrink: 0;
+}
+.ah-plugin-shared-link:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-color: var(--accent);
+}
+.ah-plugin-readonly-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--sunken);
+  border: 1px solid var(--hairline);
+  color: var(--ink-4);
+  font-size: 10.5px;
+  cursor: help;
+  flex-shrink: 0;
+}
+.ah-plugin-codex-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  box-shadow: var(--shadow-mist);
+}
+.ah-plugin-codex-banner__title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+  flex-shrink: 0;
+}
+.ah-plugin-codex-banner__desc {
+  font-size: 12.5px;
+  color: var(--ink-3);
 }
 .ah-plugin-count {
   border: 1px solid var(--hairline);
@@ -470,12 +530,13 @@ function togglePane(section: string) {
   background: var(--surface);
   color: var(--ink-3);
   font-size: 12px;
-  padding: 4px 10px;
+  font-family: var(--font-mono);
+  padding: 2px 8px;
 }
 .ah-plugin-grid {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 14px;
+  gap: 12px;
   align-items: start;
 }
 .ah-plugin-pane {
@@ -489,8 +550,8 @@ function togglePane(section: string) {
   overflow: hidden;
 }
 .ah-plugin-pane__header {
-  min-height: 66px;
-  padding: 13px 16px;
+  min-height: 46px;
+  padding: 9px 16px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -534,28 +595,15 @@ function togglePane(section: string) {
 .ah-plugin-pane__chevron.is-collapsed {
   transform: rotate(-90deg);
 }
-.ah-plugin-pane__header h2 { font-size: 14px; font-weight: 600; color: var(--ink); }
-.ah-plugin-pane__header p { font-size: 12px; color: var(--ink-4); margin-top: 1px; }
-.ah-plugin-count { font-family: var(--font-mono); padding: 2px 8px; }
+.ah-plugin-pane__header h2 { font-size: 13.5px; font-weight: 600; color: var(--ink); margin: 0; }
 .ah-plugin-pane__body { min-width: 0; }
-.ah-plugin-note {
-  margin-top: 5px;
-  color: var(--ink-4);
-  font-size: 11.5px;
-  line-height: 1.55;
-}
 .ah-plugin-shared-agents {
-  margin-top: 10px;
+  margin-top: 8px;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
   font-size: 12px;
-}
-.ah-plugin-shared-agents__label {
-  color: var(--ink-3);
-  font-weight: 500;
-  white-space: nowrap;
 }
 .ah-plugin-shared-agents__list {
   display: flex;
@@ -567,7 +615,7 @@ function togglePane(section: string) {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 3px 9px;
+  padding: 2.5px 9px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
@@ -588,19 +636,9 @@ function togglePane(section: string) {
   line-height: 16px;
   background: var(--sunken);
   border: 1px solid var(--hairline);
-  border-radius: 4px;
+  border-radius: 2px;
   color: var(--ink-4);
 }
-.ah-plugin-codex-skills {
-  min-height: 52px;
-  padding: 12px 16px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-.ah-plugin-codex-skills h2 { font-size: 14px; font-weight: 600; color: var(--ink); }
-.ah-plugin-codex-skills p { font-size: 12px; color: var(--ink-4); margin-top: 1px; }
 
 :deep(.ah-embedded-view) { padding: 0; }
 :deep(.ah-embedded-view .ah-view-content) { max-width: none; }

@@ -247,7 +247,7 @@ function stripTomlHeader(text: string, name: string): string {
         </div>
 
         <!-- Server List: click a row to open its config in a modal -->
-        <div class="space-y-1">
+        <div class="ah-server-list">
           <div
             v-for="server in store.servers"
             :key="server.name"

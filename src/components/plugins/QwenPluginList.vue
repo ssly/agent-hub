@@ -51,7 +51,6 @@ function componentsLabel(plugin: QwenPlugin) {
           </div>
         </article>
       </div>
-      <p class="ah-qwen-plugins__note">{{ t('plugin.qwen_readonly_note') }}</p>
     </template>
   </div>
 </template>
@@ -108,12 +107,6 @@ function componentsLabel(plugin: QwenPlugin) {
   color: var(--ink-4);
   font-family: var(--font-mono);
   font-size: 10.5px;
-}
-.ah-qwen-plugins__note {
-  padding: 9px 16px 11px;
-  color: var(--ink-4);
-  font-size: 11.5px;
-  line-height: 1.55;
 }
 
 @media (max-width: 720px) {

@@ -60,7 +60,7 @@ async function handleToggle(plugin: ClaudeCodePlugin) {
           <div class="ah-cc-plugin__meta">
             <span v-if="plugin.marketplace">{{ plugin.marketplace }}</span>
             <span class="ah-cc-plugin__scope">{{ scopeLabel(plugin.scope) }}</span>
-            <span v-if="!plugin.manageable" :title="t('plugin.claude_scope_read_only')">
+            <span v-if="!plugin.manageable" v-tooltip="t('plugin.claude_scope_read_only')">
               {{ t('plugin.claude_read_only') }}
             </span>
           </div>
@@ -72,7 +72,7 @@ async function handleToggle(plugin: ClaudeCodePlugin) {
           :class="{ 'is-on': plugin.enabled, 'is-busy': store.togglingIds.has(plugin.id) }"
           :aria-checked="plugin.enabled"
           :aria-label="t(plugin.enabled ? 'plugin.claude_disable' : 'plugin.claude_enable', { name: plugin.name })"
-          :title="plugin.manageable
+          v-tooltip="plugin.manageable
             ? t(plugin.enabled ? 'plugin.claude_disable' : 'plugin.claude_enable', { name: plugin.name })
             : t('plugin.claude_scope_read_only')"
           :disabled="!plugin.manageable || store.togglingIds.has(plugin.id)"

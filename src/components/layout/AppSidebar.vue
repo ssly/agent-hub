@@ -516,7 +516,7 @@ function handleSessionSearch(e: Event) {
   height: 20px;
   padding: 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   color: var(--ink-4);
   background: transparent;
   cursor: pointer;
@@ -576,7 +576,7 @@ function handleSessionSearch(e: Event) {
   min-width: 0;
   height: 28px;
   border: 1px solid var(--hairline);
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm);
   background: var(--surface);
   overflow: hidden;
   transition: border-color var(--dur-fast) var(--ease-soft);
