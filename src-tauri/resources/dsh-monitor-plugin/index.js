@@ -11,7 +11,8 @@ import crypto from 'node:crypto'
 
 export const name = 'agent-hub-dsh-monitor'
 
-const INBOX = path.join(os.homedir(), '.agent-hub', 'session-monitor', 'inbox')
+const homeDir = process.env.USERPROFILE || process.env.HOME || os.homedir()
+const INBOX = path.join(homeDir, '.agent-hub', 'session-monitor', 'inbox')
 
 function textFromContent(content) {
   if (!content) return ''
@@ -72,7 +73,14 @@ function emit(partial) {
     const tmp = path.join(INBOX, `.${eventId}.tmp`)
     const dest = path.join(INBOX, `${occurredAt}-${eventId}.json`)
     fs.writeFileSync(tmp, `${JSON.stringify(payload)}\n`)
-    fs.renameSync(tmp, dest)
+    try {
+      fs.renameSync(tmp, dest)
+    } catch {
+      try {
+        fs.writeFileSync(dest, `${JSON.stringify(payload)}\n`)
+        fs.unlinkSync(tmp)
+      } catch {}
+    }
   } catch {
     // Never surface monitor I/O into the harness.
   }

@@ -144,7 +144,7 @@ pub fn move_skill_to_trash(
     if original_path.is_symlink() {
         // Read the symlink target, then remove it
         let target = fs::read_link(original_path).map_err(|e| format!("read_link: {}", e))?;
-        fs::remove_file(original_path).map_err(|e| format!("remove symlink: {}", e))?;
+        crate::paths::remove_dir_link(original_path).map_err(|e| format!("remove symlink: {}", e))?;
         // Store the symlink target as the "backup" — we recreate the symlink on restore
         fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
         fs::write(dest.join(".symlink_target"), target.display().to_string())
@@ -231,10 +231,7 @@ pub fn restore_item(id: &str, overwrite: bool) -> Result<TrashItem, String> {
             if symlink_target_file.exists() {
                 let target = fs::read_to_string(&symlink_target_file).map_err(|e| e.to_string())?;
                 let target = target.trim();
-                #[cfg(unix)]
-                std::os::unix::fs::symlink(target, &orig).map_err(|e| format!("symlink: {}", e))?;
-                #[cfg(windows)]
-                std::os::windows::fs::symlink_file(target, &orig)
+                crate::paths::create_symlink_auto(std::path::Path::new(target), &orig)
                     .map_err(|e| format!("symlink: {}", e))?;
                 // Clean up the trash dir
                 let _ = fs::remove_dir_all(&trash_skill_dir);
@@ -303,10 +300,35 @@ mod tests {
     // Tests modify HOME env var which is not thread-safe; serialize them
     static TEST_LOCK: Mutex<()> = Mutex::new(());
 
-    fn setup_test_trash() -> tempfile::TempDir {
+    struct TestHomeGuard {
+        _dir: tempfile::TempDir,
+        orig_home: Option<std::ffi::OsString>,
+    }
+
+    impl TestHomeGuard {
+        fn path(&self) -> &std::path::Path {
+            self._dir.path()
+        }
+    }
+
+    impl Drop for TestHomeGuard {
+        fn drop(&mut self) {
+            if let Some(ref orig) = self.orig_home {
+                std::env::set_var("HOME", orig);
+            } else {
+                std::env::remove_var("HOME");
+            }
+        }
+    }
+
+    fn setup_test_trash() -> TestHomeGuard {
         let dir = tempfile::tempdir().unwrap();
+        let orig_home = std::env::var_os("HOME");
         std::env::set_var("HOME", dir.path());
-        dir
+        TestHomeGuard {
+            _dir: dir,
+            orig_home,
+        }
     }
 
     #[test]

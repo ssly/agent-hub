@@ -78,9 +78,6 @@ const breadcrumb = computed(() => {
 })
 
 const showBack = computed(() => appStore.currentTab === 'plugins' && appStore.currentView !== 'plugins')
-const showDiff = computed(() => pluginsStore.isGlobalScope
-  && appStore.currentTab === 'plugins'
-  && (appStore.currentView === 'detail' || appStore.currentView === 'diff'))
 const showSync = computed(() => pluginsStore.isGlobalScope
   && appStore.currentTab === 'plugins'
   && appStore.currentView === 'detail')
@@ -110,27 +107,15 @@ function handleBack() {
   appStore.setView('plugins')
 }
 
-async function handleDiffClick() {
-  try {
-    await skillsStore.loadDiffCandidates()
-    if (skillsStore.diffCandidates.length === 0) {
-      showToast(t('diff.no_other'), 'warning')
-    } else {
-      skillsStore.diffPlatformModalOpen = true
-    }
-  } catch (e: any) {
-    showToast(String(e), 'error')
-  }
-}
-
 async function handleSyncClick() {
+  if (!skillsStore.selectedSkillName) return
   try {
-    await skillsStore.loadSyncTargets()
+    await skillsStore.openSingleSync({
+      name: skillsStore.selectedSkillName,
+      folder: skillsStore.selectedFolder || '',
+    })
     if (skillsStore.syncTargets.length === 0) {
-      showToast(t('sync.no_targets') || 'No sync targets found', 'warning')
-    } else {
-      skillsStore.syncTargetPlatformId = skillsStore.syncTargets[0].id
-      skillsStore.syncPlatformModalOpen = true
+      showToast(t('error.no_target'), 'warning')
     }
   } catch (e: any) {
     showToast(String(e), 'error')
@@ -149,9 +134,6 @@ async function handleSyncClick() {
 
     <div class="flex-1" />
 
-    <button v-if="showDiff" class="btn btn-secondary btn-sm" @click="handleDiffClick">
-      {{ t('action.diff') }}
-    </button>
 
     <button v-if="showSync" class="btn btn-secondary btn-sm" @click="handleSyncClick">
       {{ t('action.sync') }}

@@ -6,7 +6,7 @@ import { useSwitchStore } from './switch'
 import { useSessionsStore } from './sessions'
 
 export type TabId = 'plugins' | 'sessions' | 'monitor' | 'accounts'
-export type ViewId = 'plugins' | 'detail' | 'diff' | 'search'
+export type ViewId = 'plugins' | 'detail' | 'search'
 export type UpdateStatus = 'idle' | 'checking' | 'available' | 'uptodate' | 'installing' | 'error'
 export type UpdateDownloadSource = 'direct' | 'mirror'
 

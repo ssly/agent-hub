@@ -75,35 +75,12 @@ function toggleKebab(skill: any, event: MouseEvent) {
   resetConfirmDelete()
 }
 
-function handleKebabDiff(skill: any) {
-  store.selectSkill(skill.name, skill.folder || '')
-  activeKebabSkill.value = null
-  handleDiffClick()
-}
-
 async function handleKebabSync(skill: any) {
-  store.selectSkill(skill.name, skill.folder || '')
   activeKebabSkill.value = null
   try {
-    await store.loadSyncTargets()
+    await store.openSingleSync(skill)
     if (store.syncTargets.length === 0) {
       showToast(t('error.no_target'), 'warning')
-      return
-    }
-    store.syncTargetPlatformId = store.syncTargets[0].id
-    store.syncPlatformModalOpen = true
-  } catch (e: any) {
-    showToast(String(e), 'error')
-  }
-}
-
-async function handleDiffClick() {
-  try {
-    await store.loadDiffCandidates()
-    if (store.diffCandidates.length === 0) {
-      showToast(t('diff.no_other'), 'warning')
-    } else {
-      store.diffPlatformModalOpen = true
     }
   } catch (e: any) {
     showToast(String(e), 'error')
@@ -264,12 +241,6 @@ onUnmounted(() => {
                       @click.stop="handleKebabSync(skill)"
                     >
                       {{ t('action.sync') }}
-                    </button>
-                    <button
-                      class="ah-kebab-item"
-                      @click.stop="handleKebabDiff(skill)"
-                    >
-                      {{ t('action.diff') }}
                     </button>
                     <button
                       class="ah-kebab-item font-medium"

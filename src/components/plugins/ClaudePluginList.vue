@@ -161,7 +161,7 @@ async function handleToggle(plugin: ClaudeCodePlugin) {
   height: 20px;
   flex-shrink: 0;
   border: 0;
-  border-radius: var(--radius-pill);
+  border-radius: 999px;
   background: var(--border);
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease-soft), opacity var(--dur-fast) var(--ease-soft);

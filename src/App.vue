@@ -10,6 +10,7 @@ import { takePendingLocateSession, type LocateSessionPayload } from '@/lib/api'
 import { useToast } from '@/composables/useToast'
 import { useHoverResetId, useHoverResetBool } from '@/composables/useHoverReset'
 import { formatInt, formatSessionTime } from '@/lib/utils'
+import { Check, Link2 } from 'lucide-vue-next'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import AppToolbar from '@/components/layout/AppToolbar.vue'
 import AppToast from '@/components/layout/AppToast.vue'
@@ -19,9 +20,10 @@ import SessionListView from '@/components/sessions/SessionListView.vue'
 import SessionMonitorView from '@/components/monitor/SessionMonitorView.vue'
 import SwitchView from '@/components/switch/SwitchView.vue'
 import SearchResults from '@/components/search/SearchResults.vue'
-import DiffView from '@/components/diff/DiffView.vue'
 import AppModal from '@/components/ui/AppModal.vue'
+import AppSelect from '@/components/ui/AppSelect.vue'
 import AppLoading from '@/components/ui/AppLoading.vue'
+import AgentIcon from '@/components/agents/AgentIcon.vue'
 import aboutHeroUrl from '@/assets/about-hero.png'
 
 // Detect Tauri context for plugin usage (updater works only in desktop build)
@@ -44,35 +46,133 @@ watch(
   },
 )
 
-async function handleDoSync() {
-  if (!skillsStore.syncTargetPlatformId) return
-  try {
-    await skillsStore.startSync(skillsStore.syncTargetPlatformId, false)
-    showToast(t('sync.done'), 'success')
-  } catch (e: any) {
-    const msg = e?.SyncError || e?.message || String(e)
-    // Stable backend marker: a same-named skill occupies the target. Ask
-    // whether to overwrite it or leave everything untouched.
-    if (msg.startsWith('target_exists')) {
-      skillsStore.syncPlatformModalOpen = false
-      syncConflictOpen.value = true
-      return
-    }
-    showToast(t('sync.failed', { error: msg }), 'error')
+const currentSourceSkill = computed(() => {
+  if (!skillsStore.selectedSkillName) return null
+  return skillsStore.skills.find(
+    s => s.name === skillsStore.selectedSkillName && (s.folder || '') === (skillsStore.selectedFolder || '')
+  ) || null
+})
+
+function toggleTargetPlatform(id: string) {
+  const idx = skillsStore.syncTargetPlatformIds.indexOf(id)
+  if (idx >= 0) {
+    skillsStore.syncTargetPlatformIds.splice(idx, 1)
+  } else {
+    skillsStore.syncTargetPlatformIds.push(id)
   }
 }
 
-// Copy-conflict confirm: target platform already has a same-named skill.
+function handleSelectAllTargets() {
+  skillsStore.syncTargetPlatformIds = skillsStore.syncTargets.map(t => t.id)
+}
+
+function handleClearAllTargets() {
+  skillsStore.syncTargetPlatformIds = []
+}
+
+const syncConfirmButtonText = computed(() => {
+  const tCount = skillsStore.syncTargetPlatformIds.length
+  if (tCount <= 1) {
+    return t('action.confirm')
+  }
+  return t('sync.confirm_btn_targets', { targets: tCount })
+})
+
+const isSyncing = ref(false)
 const syncConflictOpen = ref(false)
+const pendingConflicts = ref<Array<{ skillName: string; folder: string; targetPlatformId: string; targetPlatformName: string }>>([])
+const syncSuccessCount = ref(0)
+
+async function handleDoSync() {
+  if (skillsStore.syncTargetPlatformIds.length === 0 || !skillsStore.selectedSkillName) return
+
+  isSyncing.value = true
+  pendingConflicts.value = []
+  let success = 0
+  const errors: string[] = []
+
+  const targetNameMap = new Map<string, string>()
+  for (const t of skillsStore.syncTargets) {
+    targetNameMap.set(t.id, t.display_name)
+  }
+
+  const skillName = skillsStore.selectedSkillName
+  const folder = skillsStore.selectedFolder || ''
+
+  for (const targetId of skillsStore.syncTargetPlatformIds) {
+    try {
+      await skillsStore.startSync(targetId, false, skillsStore.syncMode, skillName, folder)
+      success++
+    } catch (e: any) {
+      const msg = e?.SyncError || e?.message || String(e)
+      if (msg.startsWith('target_exists') || msg.includes('Target already exists')) {
+        pendingConflicts.value.push({
+          skillName,
+          folder,
+          targetPlatformId: targetId,
+          targetPlatformName: targetNameMap.get(targetId) || targetId,
+        })
+      } else {
+        errors.push(`${targetNameMap.get(targetId) || targetId}: ${msg}`)
+      }
+    }
+  }
+
+  isSyncing.value = false
+  syncSuccessCount.value = success
+
+  if (pendingConflicts.value.length > 0) {
+    skillsStore.syncPlatformModalOpen = false
+    syncConflictOpen.value = true
+    return
+  }
+
+  skillsStore.syncPlatformModalOpen = false
+  await skillsStore.refreshPlatforms()
+
+  if (errors.length === 0) {
+    showToast(t('sync.done'), 'success')
+  } else if (success > 0) {
+    showToast(`${t('sync.done')} (${errors.length} failed)`, 'warning')
+  } else {
+    showToast(t('sync.failed', { error: errors.join('; ') }), 'error')
+  }
+}
 
 async function handleSyncConflictOverwrite() {
-  if (!skillsStore.syncTargetPlatformId) return
-  try {
-    await skillsStore.startSync(skillsStore.syncTargetPlatformId, true)
+  if (pendingConflicts.value.length === 0) {
     syncConflictOpen.value = false
+    return
+  }
+
+  let overwriteSuccess = 0
+  const overwriteErrors: string[] = []
+
+  for (const c of pendingConflicts.value) {
+    try {
+      await skillsStore.startSync(c.targetPlatformId, true, skillsStore.syncMode, c.skillName, c.folder)
+      overwriteSuccess++
+    } catch (e: any) {
+      overwriteErrors.push(`${c.skillName}: ${e?.SyncError || e?.message || String(e)}`)
+    }
+  }
+
+  syncConflictOpen.value = false
+  pendingConflicts.value = []
+  await skillsStore.refreshPlatforms()
+
+  if (overwriteErrors.length === 0) {
     showToast(t('sync.done'), 'success')
-  } catch (e: any) {
-    showToast(t('sync.failed', { error: e?.SyncError || e?.message || String(e) }), 'error')
+  } else {
+    showToast(t('sync.failed', { error: overwriteErrors.join('; ') }), 'error')
+  }
+}
+
+function handleSyncConflictSkip() {
+  syncConflictOpen.value = false
+  pendingConflicts.value = []
+  if (syncSuccessCount.value > 0) {
+    showToast(t('sync.done'), 'success')
   }
 }
 
@@ -459,7 +559,6 @@ onBeforeUnmount(() => {
         <template v-if="appStore.currentTab === 'plugins'">
           <PluginView v-if="appStore.currentView === 'plugins'" />
           <SkillDetailView v-else-if="appStore.currentView === 'detail'" />
-          <DiffView v-else-if="appStore.currentView === 'diff'" />
           <SearchResults v-else-if="appStore.currentView === 'search'" />
         </template>
         <SessionListView v-else-if="appStore.currentTab === 'sessions'" />
@@ -471,30 +570,7 @@ onBeforeUnmount(() => {
     </main>
     <AppToast />
 
-    <!-- Diff Platform Selection Modal -->
-    <AppModal
-      :show="skillsStore.diffPlatformModalOpen"
-      :title="t('diff.select_platform')"
-      @close="skillsStore.diffPlatformModalOpen = false"
-      width-class="w-[30rem]"
-    >
-      <div class="space-y-1.5">
-        <button
-          v-for="c in skillsStore.diffCandidates"
-          :key="c.id"
-          class="w-full text-left px-3 py-2 rounded cursor-pointer transition-colors border"
-          style="background: var(--surface); color: var(--ink); border-color: var(--border);"
-          @click="skillsStore.startDiff(c.id); appStore.setView('diff')"
-        >
-          {{ c.display_name }}
-        </button>
-      </div>
-      <template #footer>
-        <button class="btn btn-secondary" @click="skillsStore.diffPlatformModalOpen = false">{{ t('action.cancel') }}</button>
-      </template>
-    </AppModal>
-
-    <!-- Copy Platform Selection Modal -->
+    <!-- Skill Sync Platform Selection Modal -->
     <AppModal
       :show="skillsStore.syncPlatformModalOpen"
       :title="t('sync.title')"
@@ -502,27 +578,123 @@ onBeforeUnmount(() => {
       width-class="w-[32rem]"
     >
       <div class="space-y-4">
+        <!-- Target platforms multi-select -->
+        <div class="flex flex-col gap-2">
+          <div class="flex items-center justify-between">
+            <label class="text-xs font-semibold" style="color: var(--ink-2)">
+              {{ t('sync.select_target') }}
+              <span v-if="skillsStore.syncTargetPlatformIds.length > 0" class="ml-1 font-normal" style="color: var(--accent)">
+                ({{ skillsStore.syncTargetPlatformIds.length }}/{{ skillsStore.syncTargets.length }})
+              </span>
+            </label>
+            <div class="flex items-center gap-2 text-xs">
+              <button
+                type="button"
+                class="text-[11px] hover:underline cursor-pointer"
+                style="color: var(--accent)"
+                @click="handleSelectAllTargets"
+              >
+                {{ t('sync.select_all') }}
+              </button>
+              <span style="color: var(--hairline)">|</span>
+              <button
+                type="button"
+                class="text-[11px] hover:underline cursor-pointer"
+                style="color: var(--ink-3)"
+                @click="handleClearAllTargets"
+              >
+                {{ t('sync.clear_all') }}
+              </button>
+            </div>
+          </div>
+
+          <!-- Target platform grid -->
+          <div class="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto p-1 rounded border" style="background: var(--sunken); border-color: var(--hairline);">
+            <button
+              v-for="target in skillsStore.syncTargets"
+              :key="target.id"
+              type="button"
+              class="p-2 rounded border text-left cursor-pointer transition-colors flex items-center justify-between gap-1.5"
+              :class="skillsStore.syncTargetPlatformIds.includes(target.id) ? 'border-[var(--accent)] bg-[var(--surface)] shadow-xs' : 'border-transparent bg-transparent hover:bg-[var(--surface)]'"
+              @click="toggleTargetPlatform(target.id)"
+            >
+              <div class="flex items-center gap-2 min-w-0">
+                <span
+                  class="ah-select-check shrink-0"
+                  :class="{ 'is-checked': skillsStore.syncTargetPlatformIds.includes(target.id) }"
+                >
+                  <Check v-if="skillsStore.syncTargetPlatformIds.includes(target.id)" :size="11" :stroke-width="2.75" />
+                </span>
+                <AgentIcon :agent-id="target.id" :size="16" class="shrink-0" />
+                <span class="text-xs font-medium truncate" :style="{ color: skillsStore.syncTargetPlatformIds.includes(target.id) ? 'var(--ink)' : 'var(--ink-2)' }">
+                  {{ target.display_name }}
+                </span>
+              </div>
+              <span
+                v-if="target.has_skill"
+                class="text-[10px] px-1.5 py-0.5 rounded font-normal shrink-0"
+                style="background: var(--sunken); color: var(--amber-dark, #b45309);"
+                :title="target.conflict_skills?.join(', ') || ''"
+              >
+                {{ target.conflict_skills?.length > 1 ? t('sync.has_conflict_n', { n: target.conflict_skills.length }) : t('sync.has_conflict') }}
+              </span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Source origin notice (if source is a symlink) -->
+        <div v-if="currentSourceSkill?.is_symlink" class="p-2.5 rounded border text-xs" style="background: var(--sunken); border-color: var(--hairline); color: var(--ink-3);">
+          <div class="flex items-center gap-1.5 font-medium" style="color: var(--ink-2)">
+            <Link2 :size="13" class="shrink-0" style="color: var(--accent)" />
+            <span>{{ t('sync.symlink_origin_notice') }}</span>
+          </div>
+          <div class="mt-1 font-mono text-[11px] truncate" :title="currentSourceSkill.symlink_target || ''">
+            {{ currentSourceSkill.symlink_target }}
+          </div>
+        </div>
+
+        <!-- Sync Mode Radio Cards -->
         <div class="flex flex-col gap-1.5">
-          <label class="text-xs font-semibold" style="color: var(--ink-2)">{{ t('sync.select_target') }}</label>
-          <select
-            v-model="skillsStore.syncTargetPlatformId"
-            class="ah-select w-full"
-            style="height: 36px;"
-          >
-            <option v-for="target in skillsStore.syncTargets" :key="target.id" :value="target.id">
-              {{ target.display_name }}
-            </option>
-          </select>
+          <label class="text-xs font-semibold" style="color: var(--ink-2)">{{ t('sync.mode_label') }}</label>
+          <div class="grid grid-cols-2 gap-2.5">
+            <button
+              type="button"
+              class="p-3 rounded border text-left cursor-pointer transition-colors"
+              :class="skillsStore.syncMode === 'copy' ? 'border-[var(--accent)] bg-[var(--accent-soft)]' : 'border-[var(--hairline)] bg-[var(--surface)] hover:bg-[var(--hover)]'"
+              @click="skillsStore.syncMode = 'copy'"
+            >
+              <div class="text-xs font-semibold flex items-center justify-between" :style="{ color: skillsStore.syncMode === 'copy' ? 'var(--accent)' : 'var(--ink)' }">
+                <span>{{ t('sync.mode_copy') }}</span>
+                <span class="text-[10px] px-1.5 py-0.5 rounded font-normal" style="background: var(--sunken); color: var(--accent);">{{ t('sync.mode_recommended') }}</span>
+              </div>
+              <div class="text-[11px] mt-1.5 leading-snug" style="color: var(--ink-3)">
+                {{ t('sync.mode_copy_desc') }}
+              </div>
+            </button>
+            <button
+              type="button"
+              class="p-3 rounded border text-left cursor-pointer transition-colors"
+              :class="skillsStore.syncMode === 'symlink' ? 'border-[var(--accent)] bg-[var(--accent-soft)]' : 'border-[var(--hairline)] bg-[var(--surface)] hover:bg-[var(--hover)]'"
+              @click="skillsStore.syncMode = 'symlink'"
+            >
+              <div class="text-xs font-semibold" :style="{ color: skillsStore.syncMode === 'symlink' ? 'var(--accent)' : 'var(--ink)' }">
+                {{ t('sync.mode_symlink') }}
+              </div>
+              <div class="text-[11px] mt-1.5 leading-snug" style="color: var(--ink-3)">
+                {{ t('sync.mode_symlink_desc') }}
+              </div>
+            </button>
+          </div>
         </div>
       </div>
       <template #footer>
         <button class="btn btn-secondary" @click="skillsStore.syncPlatformModalOpen = false">{{ t('action.cancel') }}</button>
         <button
           class="btn btn-primary"
-          :disabled="!skillsStore.syncTargetPlatformId"
+          :disabled="skillsStore.syncTargetPlatformIds.length === 0 || isSyncing"
           @click="handleDoSync"
         >
-          {{ t('action.confirm') }}
+          {{ syncConfirmButtonText }}
         </button>
       </template>
     </AppModal>
@@ -531,14 +703,25 @@ onBeforeUnmount(() => {
     <AppModal
       :show="syncConflictOpen"
       :title="t('sync.conflict_title')"
-      @close="syncConflictOpen = false"
-      width-class="w-[26rem]"
+      @close="handleSyncConflictSkip"
+      width-class="w-[28rem]"
     >
-      <p class="text-sm" style="color: var(--ink-2)">
-        {{ t('sync.conflict_message', { name: skillsStore.selectedSkillName }) }}
-      </p>
+      <div class="space-y-3">
+        <p class="text-sm" style="color: var(--ink-2)">
+          {{ pendingConflicts.length > 1
+            ? t('sync.conflict_batch_message', { n: pendingConflicts.length })
+            : t('sync.conflict_message', { name: pendingConflicts[0]?.skillName || skillsStore.selectedSkillName }) }}
+        </p>
+
+        <div v-if="pendingConflicts.length > 1" class="p-2.5 rounded border text-xs max-h-36 overflow-y-auto space-y-1 font-mono" style="background: var(--sunken); border-color: var(--hairline);">
+          <div v-for="(c, idx) in pendingConflicts" :key="idx" class="flex items-center justify-between text-[11px]">
+            <span style="color: var(--ink)">{{ c.skillName }}</span>
+            <span style="color: var(--ink-3)">→ {{ c.targetPlatformName }}</span>
+          </div>
+        </div>
+      </div>
       <template #footer>
-        <button class="btn btn-secondary" @click="syncConflictOpen = false">{{ t('sync.conflict_skip') }}</button>
+        <button class="btn btn-secondary" @click="handleSyncConflictSkip">{{ t('sync.conflict_skip') }}</button>
         <button class="btn btn-danger" @click="handleSyncConflictOverwrite">{{ t('sync.conflict_overwrite') }}</button>
       </template>
     </AppModal>

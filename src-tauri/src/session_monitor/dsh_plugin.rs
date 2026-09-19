@@ -52,7 +52,7 @@ pub fn dsh_profile_dirs() -> Result<Vec<PathBuf>, String> {
         if name == "node_modules" || name.starts_with('.') {
             continue;
         }
-        if path.join("package.json").is_file() {
+        if path.join("package.json").is_file() || path.join("cordis.patch.yml").is_file() {
             dirs.push(path);
         }
     }

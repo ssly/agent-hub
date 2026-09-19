@@ -223,10 +223,8 @@ export async function getSkillDetail(_platformId: string, skillName: string, _fo
   await delay(200); return makeSkillDetail(skillName)
 }
 export async function openSkillFolder() { await delay(200) }
-export async function getDiffCandidates() { await delay(); return PLATFORMS.map(p => ({ id: p.id, display_name: p.display_name })) }
-export async function diffSkills() { await delay(); return { skill_name: 'code-review', source_platform: 'claude-code', target_platform: 'codex', file_diffs: [] } }
 export async function getSyncTargets() { await delay(); return PLATFORMS.map(p => ({ id: p.id, display_name: p.display_name })) }
-export async function syncSkill() { await delay(500); return { success: true } }
+export async function syncSkill(_sourcePlatformId?: string, _targetPlatformId?: string, _skillName?: string, _folder?: string, _overwrite?: boolean, _mode?: 'symlink' | 'copy') { await delay(500); return { success: true } }
 export async function syncFolder() { await delay(500); return { success: true } }
 export async function refreshPlatforms() { await delay(); return PLATFORMS }
 export async function refreshPlatformSkills(platformId: string) { await delay(); return makeSkills(platformId) }
@@ -279,7 +277,6 @@ export async function getMcpServer(_platformId: string, name: string, _workspace
 export async function saveMcpServer() { await delay() }
 export async function deleteMcpServer() { await delay() }
 export async function importMcpServer() { await delay() }
-export async function previewMcpChange() { await delay(); return { server_name: 'mock', target_format: 'json', target_config_path: '/mock/config.json', has_conflict: false, diff_lines: [{ tag: 'added', content: '  "mock": { "command": "echo" }\n' }], added: 1, removed: 0 } }
 
 // Claude Code native plugins
 export async function listClaudePlugins(workspaceDir?: string) {

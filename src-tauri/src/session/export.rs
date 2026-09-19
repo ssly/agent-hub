@@ -197,6 +197,7 @@ fn build_html(platform_id: &str, locale: &str, conversations: &[ExportConversati
     .user .bubble {{ background:var(--user); border-top-right-radius:2px; }}
     .assistant .bubble {{ border-top-left-radius:2px; }}
     .thinking {{ margin:0 0 12px; padding:8px 10px; border-radius:2px; background:#eef2f2; color:var(--muted); }}
+    .thinking:last-child {{ margin-bottom: 0; }}
     .thinking summary {{ cursor:pointer; font-size:12px; font-weight:700; user-select:none; }}
     .thinking pre {{ margin:8px 0 0; padding:0; overflow:visible; border-radius:0; color:var(--muted); background:transparent; font:12.5px/1.65 inherit; white-space:pre-wrap; }}
     
@@ -540,7 +541,8 @@ fn render_conversation(
         let thinking_html = message
             .thinking
             .as_deref()
-            .filter(|text| !text.trim().is_empty())
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
             .map(|text| {
                 format!(
                     "<details class=\"thinking\"><summary>{}</summary><pre>{}</pre></details>",
@@ -552,7 +554,8 @@ fn render_conversation(
         let system_html = message
             .system
             .as_deref()
-            .filter(|text| !text.trim().is_empty())
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
             .map(|text| {
                 format!(
                     "<details class=\"thinking\"><summary>{}</summary><pre>{}</pre></details>",

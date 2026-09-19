@@ -44,16 +44,24 @@ export const getSkillDetail = (platformId: string, skillName: string, folder: st
   invoke<any>('get_skill_detail', { platformId, skillName, folder, workspaceDir: workspaceDir || null })
 export const openSkillFolder = (platformId: string, skillName: string, folder: string, workspaceDir = '') =>
   invoke<void>('open_skill_folder', { platformId, skillName, folder, workspaceDir: workspaceDir || null })
-export const getDiffCandidates = (platformId: string, skillName: string, folder: string) =>
-  invoke<any[]>('get_diff_candidates', { platformId, skillName, folder })
-export const diffSkills = (sourcePlatformId: string, targetPlatformId: string, skillName: string, folder: string) =>
-  invoke<any>('diff_skills_cmd', { sourcePlatformId, targetPlatformId, skillName, folder })
 export const getSyncTargets = (platformId: string, skillName: string, folder: string) =>
   invoke<any[]>('get_sync_targets', { platformId, skillName, folder })
-export const syncSkill = (sourcePlatformId: string, targetPlatformId: string, skillName: string, folder: string, overwrite: boolean) =>
-  invoke<any>('sync_skill_cmd', { sourcePlatformId, targetPlatformId, skillName, folder, overwrite })
-export const syncFolder = (sourcePlatformId: string, targetPlatformId: string, folder: string) =>
-  invoke<any>('sync_folder_cmd', { sourcePlatformId, targetPlatformId, folder })
+export const syncSkill = (
+  sourcePlatformId: string,
+  targetPlatformId: string,
+  skillName: string,
+  folder: string,
+  overwrite: boolean,
+  mode: 'symlink' | 'copy' = 'symlink'
+) =>
+  invoke<any>('sync_skill_cmd', { sourcePlatformId, targetPlatformId, skillName, folder, overwrite, mode })
+export const syncFolder = (
+  sourcePlatformId: string,
+  targetPlatformId: string,
+  folder: string,
+  mode: 'symlink' | 'copy' = 'symlink'
+) =>
+  invoke<any>('sync_folder_cmd', { sourcePlatformId, targetPlatformId, folder, mode })
 export const refreshPlatforms = () => invoke<any[]>('refresh_platforms')
 export const refreshPlatformSkills = (platformId: string, workspaceDir = '') =>
   invoke<any[]>('refresh_platform_skills', { platformId, workspaceDir: workspaceDir || null })
@@ -79,8 +87,6 @@ export const deleteMcpServer = (platformId: string, name: string) =>
   invoke<void>('delete_mcp_server_cmd', { platformId, name })
 export const importMcpServer = (platformId: string, name: string, configText: string) =>
   invoke<void>('import_mcp_server_cmd', { platformId, name, configText })
-export const previewMcpChange = (platformId: string, serverName: string, configText?: string) =>
-  invoke<any>('preview_mcp_change_cmd', { platformId, serverName, configText })
 
 // Claude Code native plugins
 export const listClaudePlugins = (workspaceDir = '') =>

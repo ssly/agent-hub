@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Folder, Copy, ExternalLink } from 'lucide-vue-next'
+import { Folder, Copy, ExternalLink, CircleHelp } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import { usePluginsStore } from '@/stores/plugins'
 import { useSkillsStore } from '@/stores/skills'
@@ -146,11 +146,11 @@ function togglePane(section: string) {
                 :key="agent.id"
                 type="button"
                 class="ah-plugin-shared-agent-badge"
-                v-tooltip="agent.projectOnly ? t('plugin.shared_skills_banner_desc_antigravity') : t('plugin.shared_skills_banner_desc')"
+                v-tooltip="agent.projectOnly ? t('plugin.shared_skills_project_only_tooltip') : t('plugin.shared_skills_banner_desc')"
                 @click="pluginsStore.selectPlatform(agent.id)"
               >
                 <span>{{ agent.name }}</span>
-                <span v-if="agent.projectOnly" class="ah-plugin-shared-agent-tag">{{ t('plugin.project_only_tag') }}</span>
+                <CircleHelp v-if="agent.projectOnly" :size="11" class="ah-plugin-shared-agent-hint" />
               </button>
             </div>
           </div>
@@ -388,7 +388,7 @@ function togglePane(section: string) {
                 v-if="currentSharedPlatform"
                 type="button"
                 class="ah-plugin-shared-link"
-                v-tooltip="currentSharedPlatform.projectOnly ? t('plugin.shared_skills_banner_desc_antigravity') : t('plugin.shared_skills_tooltip')"
+                v-tooltip="currentSharedPlatform.projectOnly ? t('plugin.shared_skills_project_only_tooltip') : t('plugin.shared_skills_tooltip')"
                 @click.stop="jumpToShared"
               >
                 <span>{{ t('plugin.shared_skills_link') }}</span>
@@ -548,6 +548,18 @@ function togglePane(section: string) {
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-mist);
   overflow: hidden;
+  transition: background-color var(--dur-base) var(--ease-soft),
+              border-color var(--dur-base) var(--ease-soft),
+              box-shadow var(--dur-base) var(--ease-soft);
+}
+.ah-plugin-pane.is-collapsed {
+  background: var(--sunken);
+  box-shadow: none;
+  border-color: var(--hairline);
+}
+.ah-plugin-pane.is-collapsed:hover {
+  border-color: var(--border);
+  box-shadow: var(--shadow-mist);
 }
 .ah-plugin-pane__header {
   min-height: 46px;
@@ -564,10 +576,18 @@ function togglePane(section: string) {
 .ah-plugin-pane__header--collapsible {
   cursor: pointer;
   user-select: none;
-  transition: background-color 0.15s ease;
+  transition: background-color var(--dur-fast) var(--ease-soft);
 }
 .ah-plugin-pane__header--collapsible:hover {
   background: var(--hover);
+}
+.ah-plugin-pane.is-collapsed .ah-plugin-path-pill,
+.ah-plugin-pane.is-collapsed .ah-plugin-readonly-badge {
+  background: var(--surface);
+}
+.ah-plugin-pane.is-collapsed .ah-plugin-path-pill:hover {
+  background: var(--surface);
+  border-color: var(--border);
 }
 .ah-plugin-pane__toggle {
   display: inline-flex;
@@ -583,6 +603,12 @@ function togglePane(section: string) {
   transition: all 0.15s ease;
   padding: 0;
   flex-shrink: 0;
+}
+.ah-plugin-pane.is-collapsed .ah-plugin-pane__toggle {
+  color: var(--ink-3);
+}
+.ah-plugin-pane.is-collapsed:hover .ah-plugin-pane__toggle {
+  color: var(--ink);
 }
 .ah-plugin-pane__toggle:hover {
   background: var(--surface);
@@ -630,14 +656,12 @@ function togglePane(section: string) {
   border-color: var(--border-strong);
   color: var(--ink);
 }
-.ah-plugin-shared-agent-tag {
-  font-size: 10px;
-  padding: 0 4px;
-  line-height: 16px;
-  background: var(--sunken);
-  border: 1px solid var(--hairline);
-  border-radius: 2px;
+.ah-plugin-shared-agent-hint {
   color: var(--ink-4);
+  transition: color 0.15s ease;
+}
+.ah-plugin-shared-agent-badge:hover .ah-plugin-shared-agent-hint {
+  color: var(--ink-2);
 }
 
 :deep(.ah-embedded-view) { padding: 0; }

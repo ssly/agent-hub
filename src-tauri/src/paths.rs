@@ -248,6 +248,105 @@ pub fn replace_file(from: &Path, target: &Path) -> std::io::Result<()> {
     }
 }
 
+/// Clean an absolute canonical path by stripping Windows extended-length prefixes
+/// (`\\?\` or `\\?\UNC\`), producing a standard path usable by external CLI tools.
+pub fn clean_canonical_path(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let s = path.to_string_lossy();
+        if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+            PathBuf::from(format!(r"\\{}", rest))
+        } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+            PathBuf::from(rest)
+        } else {
+            path.to_path_buf()
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_path_buf()
+    }
+}
+
+/// Create a directory link pointing from `link` to `target`.
+///
+/// On Unix (macOS/Linux), creates a standard POSIX symlink.
+/// On Windows, creates an NTFS Directory Junction, which requires **no Administrator privileges**
+/// and **no Developer Mode**. If junction creation fails, falls back to `cmd /c mklink /J`
+/// and then `symlink_dir`.
+pub fn create_dir_link(target: &Path, link: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link)
+    }
+    #[cfg(windows)]
+    {
+        // Try native junction first (no UAC / elevation needed).
+        if let Ok(()) = junction::create(target, link) {
+            return Ok(());
+        }
+
+        // Fallback 1: cmd /c mklink /J (built into Windows cmd since 2000)
+        let status = std::process::Command::new("cmd")
+            .args(&["/c", "mklink", "/J", &link.to_string_lossy(), &target.to_string_lossy()])
+            .status();
+        if let Ok(s) = status {
+            if s.success() {
+                return Ok(());
+            }
+        }
+
+        // Fallback 2: symlink_dir (succeeds if Developer Mode is enabled)
+        std::os::windows::fs::symlink_dir(target, link)
+    }
+}
+
+/// Safely remove a directory link (symlink or junction) without deleting target directory contents.
+pub fn remove_dir_link(path: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        // On Windows, directory junctions and directory symlinks MUST be removed via remove_dir.
+        // fs::remove_file on a directory reparse point returns PermissionDenied or InvalidParameter.
+        if path.is_dir() {
+            std::fs::remove_dir(path)
+        } else {
+            std::fs::remove_file(path)
+        }
+    }
+    #[cfg(unix)]
+    {
+        std::fs::remove_file(path)
+    }
+}
+
+/// Create a link (directory link for dirs, or symlink/hardlink for files).
+pub fn create_symlink_auto(target: &Path, link: &Path) -> std::io::Result<()> {
+    if target.is_dir() {
+        create_dir_link(target, link)
+    } else {
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link)
+        }
+        #[cfg(windows)]
+        {
+            // Try symlink_file first (works if Developer Mode or Admin is enabled)
+            match std::os::windows::fs::symlink_file(target, link) {
+                Ok(()) => Ok(()),
+                Err(_) => {
+                    // Fallback to hard link (no admin needed on same NTFS volume)
+                    if std::fs::hard_link(target, link).is_ok() {
+                        Ok(())
+                    } else {
+                        // Fallback to file copy
+                        std::fs::copy(target, link).map(|_| ())
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -357,5 +456,35 @@ mod tests {
         assert_eq!(std::fs::read(&target).unwrap(), b"new-content");
         // No backup files left behind.
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn clean_canonical_path_handles_prefixes() {
+        let p = Path::new(r"\\?\C:\Users\demo\project");
+        let cleaned = clean_canonical_path(p);
+        #[cfg(windows)]
+        assert_eq!(cleaned, PathBuf::from(r"C:\Users\demo\project"));
+        #[cfg(not(windows))]
+        assert_eq!(cleaned, PathBuf::from(r"\\?\C:\Users\demo\project"));
+    }
+
+    #[test]
+    fn dir_link_lifecycle() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("original_dir");
+        let link = dir.path().join("linked_dir");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("file.txt"), b"hello").unwrap();
+
+        // Create directory link
+        create_dir_link(&target, &link).unwrap();
+        assert!(link.exists());
+        assert_eq!(std::fs::read(link.join("file.txt")).unwrap(), b"hello");
+
+        // Remove link: target contents must remain intact!
+        remove_dir_link(&link).unwrap();
+        assert!(!link.exists());
+        assert!(target.exists());
+        assert_eq!(std::fs::read(target.join("file.txt")).unwrap(), b"hello");
     }
 }

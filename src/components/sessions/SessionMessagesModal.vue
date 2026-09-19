@@ -334,9 +334,10 @@ function normalizeSessionMsg(msg: SessionMsg): SessionMsg {
 }
 
 function joinParts(left: string, right: string | null | undefined): string {
-  const next = right?.trim() ? right : ''
-  if (!next) return left
-  return left ? `${left}\n\n${next}` : next
+  const next = right?.trim() ? right.trim() : ''
+  const prev = left?.trim() ? left.trim() : ''
+  if (!next) return prev
+  return prev ? `${prev}\n\n${next}` : next
 }
 
 // Consecutive assistant replies belong to one turn (tools in between). Fold
@@ -358,9 +359,9 @@ function groupSessionMessages(list: SessionMsg[]): DisplayMsg[] {
       role: msg.role,
       startedAt: msg.timestamp,
       timestamp: msg.timestamp,
-      thinking: msg.thinking?.trim() ? msg.thinking : '',
-      system: msg.system?.trim() ? msg.system : '',
-      content: msg.content || '',
+      thinking: msg.thinking?.trim() || '',
+      system: msg.system?.trim() || '',
+      content: msg.content?.trim() || '',
     })
   }
   return groups
@@ -667,12 +668,12 @@ onUnmounted(() => {
                     </summary>
                     <pre class="ah-msg__thinking-body select-text">{{ msg.thinking }}</pre>
                   </details>
-                  <div v-if="msg.content" class="ah-msg__content select-text" v-html="renderMarkdown(msg.content)"></div>
+                  <div v-if="msg.content?.trim()" class="ah-msg__content select-text" v-html="renderMarkdown(msg.content)"></div>
                 </div>
-                <div class="ah-msg__meta">
+                <div v-if="msg.hint || msg.content?.trim()" class="ah-msg__meta">
                   <span v-if="msg.hint" class="ah-msg__hint">{{ msg.hint }}</span>
                   <button
-                    v-if="msg.content"
+                    v-if="msg.content?.trim()"
                     type="button"
                     class="ah-msg__copy-btn"
                     :title="copiedIdx === idx ? t('action.copied') : t('action.copy')"

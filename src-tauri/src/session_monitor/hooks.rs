@@ -177,8 +177,8 @@ fn config_path(agent: AgentKind) -> Result<PathBuf, String> {
         // Official global scope (~/.kiro/hooks/) applies to Kiro IDE + CLI.
         // Dedicated managed file — never edit user/project hook files.
         AgentKind::Kiro => Ok(home.join(".kiro").join("hooks").join("agent-hub.json")),
-        AgentKind::Dsh => Ok(home
-            .join(".dsh")
+        AgentKind::Dsh => Ok(crate::session::dsh::dsh_home()
+            .unwrap_or_else(|| home.join(".dsh"))
             .join("profiles")
             .join("web")
             .join("cordis.patch.yml")),
@@ -242,7 +242,7 @@ pub fn agent_presence_path(agent: AgentKind) -> Option<PathBuf> {
         AgentKind::ZCode => home.join(".zcode"),
         AgentKind::Workbuddy => home.join(".workbuddy"),
         AgentKind::Kiro => home.join(".kiro"),
-        AgentKind::Dsh => home.join(".dsh"),
+        AgentKind::Dsh => crate::session::dsh::dsh_home().unwrap_or_else(|| home.join(".dsh")),
         AgentKind::Omp => home.join(".omp"),
     })
 }

@@ -13,7 +13,7 @@ interface SelectOption {
 }
 
 const props = withDefaults(defineProps<{
-  modelValue: string
+  modelValue?: string | null
   options: SelectOption[]
   disabled?: boolean
   placeholder?: string
@@ -21,13 +21,16 @@ const props = withDefaults(defineProps<{
   searchPlaceholder?: string
   searchEmpty?: string
   searchClearLabel?: string
+  size?: 'sm' | 'md'
 }>(), {
+  modelValue: '',
   disabled: false,
   placeholder: '',
   searchable: false,
   searchPlaceholder: '',
   searchEmpty: '',
   searchClearLabel: '',
+  size: 'sm',
 })
 
 const emit = defineEmits<{
@@ -43,7 +46,7 @@ const activeIndex = ref(-1)
 const query = ref('')
 const listPos = ref<Record<string, string>>({})
 
-const selected = computed(() => props.options.find(o => o.value === props.modelValue))
+const selected = computed(() => props.options.find(o => o.value === (props.modelValue ?? '')))
 const displayLabel = computed(() => selected.value?.label ?? props.placeholder)
 
 const visibleOptions = computed(() => {
@@ -63,9 +66,10 @@ function placeList() {
   if (!el) return
   const rect = el.getBoundingClientRect()
   const pad = 8
-  const preferred = Math.min(420, window.innerWidth - pad * 2)
-  const width = Math.max(rect.width, preferred)
-  let left = rect.right - width
+  const isMd = props.size === 'md'
+  const preferred = isMd ? rect.width : Math.min(420, window.innerWidth - pad * 2)
+  const width = isMd ? rect.width : Math.max(rect.width, preferred)
+  let left = isMd ? rect.left : rect.right - width
   if (left < pad) left = pad
   if (left + width > window.innerWidth - pad) {
     left = Math.max(pad, window.innerWidth - pad - width)
@@ -202,10 +206,11 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div ref="rootRef" class="app-select" :class="{ 'is-open': open, 'is-disabled': disabled }">
+  <div ref="rootRef" class="app-select" :class="[{ 'is-open': open, 'is-disabled': disabled }, `app-select--${size}`]">
     <button
       type="button"
       class="app-select__trigger"
+      :class="`app-select__trigger--${size}`"
       :disabled="disabled"
       :aria-expanded="open"
       aria-haspopup="listbox"
@@ -268,11 +273,13 @@ onUnmounted(() => {
               @click="choose(opt)"
               @mouseenter="activeIndex = idx"
             >
-              <span
-                class="app-select__option-label"
-                :class="{ 'is-path': isPathLabel(opt.label) }"
-                :title="opt.label"
-              >{{ opt.label }}</span>
+              <slot name="option" :option="opt">
+                <span
+                  class="app-select__option-label"
+                  :class="{ 'is-path': isPathLabel(opt.label) }"
+                  :title="opt.label"
+                >{{ opt.label }}</span>
+              </slot>
               <svg
                 v-if="opt.value === modelValue"
                 class="app-select__check"
@@ -313,6 +320,16 @@ onUnmounted(() => {
   outline: none;
   box-shadow: var(--shadow-mist);
   transition: border-color var(--dur-fast) var(--ease-soft), background var(--dur-fast) var(--ease-soft), color var(--dur-fast) var(--ease-soft);
+}
+.app-select__trigger--md {
+  height: 36px;
+  padding: 0 12px;
+  font-size: 13px;
+  gap: 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--ink);
 }
 .app-select__trigger:hover:not(:disabled) {
   border-color: var(--border-strong);

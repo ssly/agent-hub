@@ -12,17 +12,24 @@ export const useSkillsStore = defineStore('skills', () => {
   const skillSortBy = ref<'size' | 'name'>('name')
   const skillSortDir = ref<'asc' | 'desc'>('asc')
   const collapsedFolders = ref(new Set<string>())
-  const diffResult = ref<any>(null)
   const searchResults = ref<any[]>([])
   const searchLoading = ref(false)
   const searchQuery = ref('')
 
   // Modal States
-  const diffPlatformModalOpen = ref(false)
-  const diffCandidates = ref<any[]>([])
   const syncPlatformModalOpen = ref(false)
+  const skillsToSync = ref<Array<{ name: string; folder: string }>>([])
   const syncTargets = ref<any[]>([])
-  const syncTargetPlatformId = ref<string | null>(null)
+  const syncTargetPlatformIds = ref<string[]>([])
+  const syncMode = ref<'symlink' | 'copy'>('copy')
+
+  // Backward compatibility alias for single-target selection
+  const syncTargetPlatformId = computed({
+    get: () => syncTargetPlatformIds.value[0] || null,
+    set: (val: string | null) => {
+      syncTargetPlatformIds.value = val ? [val] : []
+    },
+  })
 
   const selectedPlatform = computed(() =>
     platforms.value.find(p => p.id === selectedPlatformId.value)
@@ -88,7 +95,6 @@ export const useSkillsStore = defineStore('skills', () => {
   function backToList() {
     selectedSkillName.value = null
     selectedFolder.value = ''
-    diffResult.value = null
   }
 
   function toggleFolder(folder: string) {
@@ -129,27 +135,76 @@ export const useSkillsStore = defineStore('skills', () => {
     }
   }
 
-  async function loadDiffCandidates() {
-    if (!selectedPlatformId.value || !selectedSkillName.value) return
-    diffCandidates.value = await api.getDiffCandidates(selectedPlatformId.value, selectedSkillName.value, selectedFolder.value)
+  async function openSingleSync(skill: { name: string; folder?: string }) {
+    selectSkill(skill.name, skill.folder || '')
+    skillsToSync.value = [{ name: skill.name, folder: skill.folder || '' }]
+    syncTargetPlatformIds.value = []
+    await loadSyncTargets()
+    syncPlatformModalOpen.value = true
   }
 
-  async function startDiff(targetPlatformId: string) {
-    if (!selectedPlatformId.value || !selectedSkillName.value) return
-    diffResult.value = await api.diffSkills(selectedPlatformId.value, targetPlatformId, selectedSkillName.value, selectedFolder.value)
-    diffPlatformModalOpen.value = false
+  async function openBatchSync(skillsList: Array<{ name: string; folder?: string }>) {
+    skillsToSync.value = skillsList.map(s => ({ name: s.name, folder: s.folder || '' }))
+    syncTargetPlatformIds.value = []
+    await loadSyncTargets()
+    syncPlatformModalOpen.value = true
   }
 
   async function loadSyncTargets() {
-    if (!selectedPlatformId.value || !selectedSkillName.value) return
-    syncTargets.value = await api.getSyncTargets(selectedPlatformId.value, selectedSkillName.value, selectedFolder.value)
+    if (!selectedPlatformId.value) return
+    const skillsToInspect = skillsToSync.value.length > 0
+      ? skillsToSync.value
+      : (selectedSkillName.value ? [{ name: selectedSkillName.value, folder: selectedFolder.value }] : [])
+    if (skillsToInspect.length === 0) return
+
+    const results = await Promise.all(
+      skillsToInspect.map(s => api.getSyncTargets(selectedPlatformId.value!, s.name, s.folder))
+    )
+
+    if (results.length === 0 || !results[0] || results[0].length === 0) {
+      syncTargets.value = []
+      return
+    }
+
+    const targetMap = new Map<string, { id: string; display_name: string; has_skill: boolean; conflict_skills: string[] }>()
+
+    for (const target of results[0]) {
+      targetMap.set(target.id, {
+        id: target.id,
+        display_name: target.display_name,
+        has_skill: false,
+        conflict_skills: [],
+      })
+    }
+
+    results.forEach((targetList, idx) => {
+      const skillName = skillsToInspect[idx].name
+      for (const t of targetList) {
+        const entry = targetMap.get(t.id)
+        if (entry && t.has_skill) {
+          entry.has_skill = true
+          if (!entry.conflict_skills.includes(skillName)) {
+            entry.conflict_skills.push(skillName)
+          }
+        }
+      }
+    })
+
+    syncTargets.value = Array.from(targetMap.values())
   }
 
-  async function startSync(targetPlatformId: string, overwrite: boolean) {
-    if (!selectedPlatformId.value || !selectedSkillName.value) return
-    await api.syncSkill(selectedPlatformId.value, targetPlatformId, selectedSkillName.value, selectedFolder.value, overwrite)
-    syncPlatformModalOpen.value = false
-    await refreshPlatforms()
+  async function startSync(
+    targetPlatformId: string,
+    overwrite: boolean,
+    mode: 'symlink' | 'copy' = syncMode.value,
+    skillName?: string,
+    folder?: string
+  ) {
+    if (!selectedPlatformId.value) return
+    const name = skillName || selectedSkillName.value
+    const f = folder !== undefined ? folder : selectedFolder.value
+    if (!name) return
+    await api.syncSkill(selectedPlatformId.value, targetPlatformId, name, f, overwrite, mode)
   }
 
   async function performDeleteSkill(name: string, folder: string) {
@@ -163,13 +218,12 @@ export const useSkillsStore = defineStore('skills', () => {
 
   return {
     platforms, skills, selectedPlatformId, workspaceDirectory, selectedSkillName, selectedFolder,
-    skillSortBy, skillSortDir, collapsedFolders, diffResult,
+    skillSortBy, skillSortDir, collapsedFolders,
     searchResults, searchLoading, searchQuery,
-    diffPlatformModalOpen, diffCandidates,
-    syncPlatformModalOpen, syncTargets, syncTargetPlatformId,
+    syncPlatformModalOpen, skillsToSync, syncTargets, syncTargetPlatformIds, syncTargetPlatformId, syncMode,
     selectedPlatform,
     refreshPlatforms, reloadPlatforms, loadSkills, selectPlatform, clearPlatform, selectSkill,
     backToList, toggleFolder, toggleSort, doSearch,
-    loadDiffCandidates, startDiff, loadSyncTargets, startSync, performDeleteSkill,
+    openSingleSync, loadSyncTargets, startSync, performDeleteSkill,
   }
 })

@@ -25,9 +25,7 @@ const newServerConfig = ref('')
 const editModalOpen = ref(false)
 const editServerName = ref('')
 const editText = ref('')
-// Tracks whether the current preview originated from the edit modal,
-// so cancelling the preview re-opens the edit modal.
-const previewFromEdit = ref(false)
+const deleteConfirmName = ref<string | null>(null)
 
 // Detail modal: clicking a server row opens its config in a modal
 // (same interaction pattern as the Accounts tab).
@@ -82,14 +80,17 @@ watch(() => store.selectedPlatformId, () => {
   newServerConfig.value = defaultConfigTemplate(selectedFormat.value)
 }, { immediate: true })
 
-// --- Add flow: add modal → preview ---
+// --- Add flow: direct create without preview ---
 async function handleCreateServer() {
   const name = newServerName.value.trim()
   const config = newServerConfig.value.trim()
   if (!name) return
   try {
-    await store.loadAddPreview(name, config)
+    await store.createServer(name, config)
     store.addModalOpen = false
+    newServerName.value = ''
+    newServerConfig.value = defaultConfigTemplate(selectedFormat.value)
+    showToast(t('mcp.saved'), 'success')
   } catch (e: any) {
     const msg = String(e?.message || e)
     if (msg.includes('TOML')) {
@@ -102,59 +103,21 @@ async function handleCreateServer() {
   }
 }
 
-// --- Delete flow: delete button → preview ---
-async function handleDeleteClick(name: string) {
-  store.deleteConfirmServerName = null
-  try {
-    await store.loadDeletePreview(name)
-  } catch (e: any) {
-    showToast(String(e?.message || e), 'error')
-  }
+// --- Delete flow: confirm modal → delete ---
+function handleDeleteClick(name: string) {
+  deleteConfirmName.value = name
 }
 
-// --- Preview confirm / cancel ---
-async function handlePreviewConfirm() {
+async function handleConfirmDelete() {
+  if (!deleteConfirmName.value) return
+  const name = deleteConfirmName.value
+  deleteConfirmName.value = null
   try {
-    const wasEdit = previewFromEdit.value
-    const wasAdd = store.previewMode === 'add' && !previewFromEdit.value
-    const wasDelete = store.previewMode === 'delete'
-    const changedName = store.previewData?.server_name
-    await store.confirmPreview()
-    // Refresh the edited server's detail so the read-only view stays in sync.
-    if (wasEdit && changedName && store.selectedPlatformId) {
-      try {
-        const newDetail = await api.getMcpServer(store.selectedPlatformId, changedName)
-        store.serverDetails[changedName] = { config_text: newDetail.config_text, format: newDetail.format }
-      } catch { /* ignore refresh error */ }
-    }
-    showToast(wasEdit || wasAdd ? t('mcp.saved') : t('mcp.deleted'), 'success')
-    // Deleting an MCP server moves its config into the trash on the backend;
-    // refresh the sidebar badge so the count reflects it immediately.
-    if (wasDelete) {
-      appStore.refreshTrashCount()
-    }
-    previewFromEdit.value = false
-    // Reset add form if it was a fresh add
-    if (wasAdd) {
-      newServerName.value = ''
-      newServerConfig.value = defaultConfigTemplate(selectedFormat.value)
-    }
+    await store.deleteServer(name)
+    appStore.refreshTrashCount()
+    showToast(t('mcp.deleted'), 'success')
   } catch (e: any) {
     showToast(String(e?.message || e), 'error')
-  }
-}
-
-function handlePreviewCancel() {
-  const fromEdit = previewFromEdit.value
-  const wasAdd = store.previewMode === 'add' && !fromEdit
-  store.cancelPreview()
-  previewFromEdit.value = false
-  if (fromEdit) {
-    // Re-open edit modal with preserved inputs
-    editModalOpen.value = true
-  } else if (wasAdd) {
-    // Re-open add modal with preserved inputs
-    store.addModalOpen = true
   }
 }
 
@@ -195,10 +158,14 @@ async function handleEditSave() {
       // importer receives just the server's inner config.
       saveText = stripTomlHeader(text, name)
     }
-    // Route through preview + confirmation before applying, same as add/delete.
+    await store.createServer(name, saveText)
     editModalOpen.value = false
-    previewFromEdit.value = true
-    await store.loadAddPreview(name, saveText)
+    // Refresh the edited server's detail so the read-only view stays in sync.
+    try {
+      const newDetail = await api.getMcpServer(store.selectedPlatformId, name)
+      store.serverDetails[name] = { config_text: newDetail.config_text, format: newDetail.format }
+    } catch { /* ignore refresh error */ }
+    showToast(t('mcp.saved'), 'success')
   } catch (e: any) {
     const msg = String(e?.message || e)
     if (msg.includes('TOML')) {
@@ -362,59 +329,19 @@ function stripTomlHeader(text: string, name: string): string {
           </template>
         </AppModal>
 
-        <!-- Preview Diff Modal (Add / Delete) -->
+        <!-- Delete Confirm Modal -->
         <AppModal
-          :show="store.previewModalOpen"
-          :title="store.previewMode === 'add' ? t('mcp.preview_title_add') : t('mcp.preview_title_delete')"
-          @close="handlePreviewCancel"
-          width-class="w-[40rem]"
+          :show="deleteConfirmName !== null"
+          :title="t('mcp.confirm_delete')"
+          @close="deleteConfirmName = null"
+          width-class="w-[26rem]"
         >
-          <!-- Loading -->
-          <div v-if="store.previewLoading" class="text-sm py-4" style="color: var(--ink-3)">
-            {{ t('mcp.preview_loading') }}
-          </div>
-
-          <!-- Error -->
-          <div v-else-if="store.previewData?.error" class="text-sm py-3" style="color: var(--danger)">
-            {{ t('mcp.preview_error', { error: store.previewData.error }) }}
-          </div>
-
-          <!-- Preview content -->
-          <template v-else-if="store.previewData">
-            <!-- Conflict warning -->
-            <div v-if="store.previewData.has_conflict" class="text-xs mb-3 px-3 py-2 rounded" style="background: color-mix(in srgb, var(--warning) 12%, transparent); color: var(--warning);">
-              {{ t('mcp.preview_conflict') }}
-            </div>
-
-            <!-- Config path -->
-            <div class="text-xs mb-2" style="color: var(--ink-4)">
-              {{ store.previewData.target_config_path }}
-              <span class="ml-2">{{ store.previewData.target_format?.toUpperCase() }}</span>
-            </div>
-
-            <!-- Stats -->
-            <div class="text-xs mb-3 font-medium" style="color: var(--accent)">
-              {{ t('mcp.preview_stats', { added: store.previewData.added, removed: store.previewData.removed }) }}
-            </div>
-
-            <!-- Diff lines -->
-            <pre class="ah-config-editor" style="max-height: 360px; overflow-y: auto; font-size: 12px; line-height: 1.6;"><template v-for="(line, idx) in store.previewData.diff_lines" :key="idx"><span :style="{
-                color: line.tag === 'added' ? 'var(--success)' : line.tag === 'removed' ? 'var(--danger)' : 'var(--ink-3)',
-                display: 'block',
-                background: line.tag === 'added' ? 'color-mix(in srgb, var(--success) 8%, transparent)' : line.tag === 'removed' ? 'color-mix(in srgb, var(--danger) 8%, transparent)' : 'transparent',
-              }">{{ line.tag === 'added' ? '+ ' : line.tag === 'removed' ? '- ' : '  ' }}{{ line.content }}</span></template></pre>
-          </template>
-
+          <p class="text-sm" style="color: var(--ink-2)">
+            {{ t('mcp.delete_confirm', { name: deleteConfirmName }) }}
+          </p>
           <template #footer>
-            <button class="btn btn-secondary" @click="handlePreviewCancel">{{ t('action.cancel') }}</button>
-            <button
-              class="btn"
-              :class="store.previewMode === 'delete' ? 'btn-danger' : 'btn-primary'"
-              :disabled="!store.previewData || !!store.previewData.error"
-              @click="handlePreviewConfirm"
-            >
-              {{ store.previewMode === 'delete' ? t('mcp.delete') : t('action.confirm') }}
-            </button>
+            <button class="btn btn-secondary" @click="deleteConfirmName = null">{{ t('action.cancel') }}</button>
+            <button class="btn btn-danger" @click="handleConfirmDelete">{{ t('mcp.delete') }}</button>
           </template>
         </AppModal>
       </template>

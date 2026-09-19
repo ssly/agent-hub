@@ -100,11 +100,13 @@ pub fn builtin_platforms() -> Vec<PlatformDef> {
             id: "dsh".into(),
             display_name: "DeepSeek Harness".into(),
             description: "DeepSeek Harness (dsh CLI) agent skills".into(),
-            presence_path: home.join(".dsh"),
+            presence_path: crate::session::dsh::dsh_home().unwrap_or_else(|| home.join(".dsh")),
             // DSH reads user-level skills from ~/.dsh/skills (and, via the
             // Shared platform, ~/.agents/skills). Project level is
             // <workspace>/.dsh/skills, which the default mirror already maps.
-            skill_dir: join_relative(home.clone(), ".dsh/skills"),
+            skill_dir: crate::session::dsh::dsh_home()
+                .unwrap_or_else(|| home.join(".dsh"))
+                .join("skills"),
         },
         PlatformDef {
             id: "omp".into(),
@@ -187,7 +189,14 @@ pub fn get_supported_agents(config: &crate::config::Config) -> Vec<SupportedAgen
                 vec![home.join(".workbuddy"), home.join(".codebuddy")],
             ),
             "kiro" => ("~/.kiro", vec![home.join(".kiro")]),
-            "dsh" => ("~/.dsh", vec![home.join(".dsh")]),
+            "dsh" => {
+                let mut candidates = Vec::new();
+                if let Some(dh) = crate::session::dsh::dsh_home() {
+                    candidates.push(dh);
+                }
+                candidates.push(home.join(".dsh"));
+                ("~/.dsh", candidates)
+            }
             "omp" => ("~/.omp", vec![home.join(".omp")]),
             _ => ("~", vec![p.presence_path.clone()]),
         };

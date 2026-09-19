@@ -1,7 +1,6 @@
 use std::{fs, ops::Range};
 
 use serde_json::Value;
-use similar::{ChangeTag, TextDiff};
 
 use super::registry::{find_mcp_platform, find_workspace_mcp_platform, McpFormat, McpPlatformDef};
 
@@ -234,24 +233,6 @@ pub fn config_to_display(config: &Value, format: McpFormat, mcp_key: &str, name:
     }
 }
 
-// --- MCP Sync Preview ---
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct DiffLine {
-    pub tag: String, // "context" | "added" | "removed"
-    pub content: String,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct McpSyncPreview {
-    pub server_name: String,
-    pub target_format: String,
-    pub target_config_path: String,
-    pub has_conflict: bool,
-    pub diff_lines: Vec<DiffLine>,
-    pub added: usize,
-    pub removed: usize,
-}
 
 pub(crate) fn apply_json_server(
     before: &str,
@@ -1700,144 +1681,3 @@ command = \"b\"
     }
 }
 
-fn compute_text_diff(before: &str, after: &str) -> Vec<DiffLine> {
-    let diff = TextDiff::from_lines(before, after);
-    diff.iter_all_changes()
-        .map(|change| {
-            let content = change.to_string_lossy().into_owned();
-            let tag = match change.tag() {
-                ChangeTag::Equal => "context",
-                ChangeTag::Insert => "added",
-                ChangeTag::Delete => "removed",
-            };
-            DiffLine {
-                tag: tag.to_string(),
-                content,
-            }
-        })
-        .collect()
-}
-
-// --- MCP Change Preview (Add / Delete) ---
-
-/// Generate empty file content for a new platform config.
-fn default_new_file_content(format: McpFormat, mcp_key: &str) -> String {
-    match format {
-        McpFormat::Json => "{}".to_string(),
-        McpFormat::Toml => format!("[{}]\n", mcp_key),
-    }
-}
-
-/// Preview the effect of importing/adding a server (before actually writing).
-pub fn preview_import_mcp_server(
-    platform_id: &str,
-    name: &str,
-    config: &Value,
-) -> Result<McpSyncPreview, String> {
-    let def = find_mcp_platform(platform_id).ok_or("Platform not found")?;
-    let existing = read_mcp_server(platform_id, name).ok();
-
-    let before_text = if def.config_path.exists() {
-        fs::read_to_string(&def.config_path).unwrap_or_default()
-    } else {
-        default_new_file_content(def.format, &def.mcp_key)
-    };
-
-    let after_text = match def.format {
-        McpFormat::Json => apply_json_server(&before_text, &def.mcp_key, name, config)?,
-        McpFormat::Toml => apply_toml_server(&before_text, &def.mcp_key, name, config)?,
-    };
-
-    let diff_lines = compute_text_diff(&before_text, &after_text);
-    let added = diff_lines.iter().filter(|l| l.tag == "added").count();
-    let removed = diff_lines.iter().filter(|l| l.tag == "removed").count();
-
-    Ok(McpSyncPreview {
-        server_name: name.to_string(),
-        target_format: match def.format {
-            McpFormat::Json => "json",
-            McpFormat::Toml => "toml",
-        }
-        .to_string(),
-        target_config_path: def.config_path.display().to_string(),
-        has_conflict: existing.is_some(),
-        diff_lines,
-        added,
-        removed,
-    })
-}
-
-/// Preview the effect of deleting a server (before actually deleting).
-pub fn preview_delete_mcp_server(platform_id: &str, name: &str) -> Result<McpSyncPreview, String> {
-    let def = find_mcp_platform(platform_id).ok_or("Platform not found")?;
-    if !def.config_path.exists() {
-        return Err("Config file not found".into());
-    }
-
-    let before_text = fs::read_to_string(&def.config_path).map_err(|e| e.to_string())?;
-
-    let after_text = match def.format {
-        McpFormat::Json => {
-            // Use the same surgical text edit as the real delete so the preview
-            // matches what actually gets written byte-for-byte.
-            remove_json_server(&before_text, &def.mcp_key, name)?
-        }
-        McpFormat::Toml => {
-            let ranges = find_toml_server_section_ranges(&before_text, &def.mcp_key, name);
-            if ranges.is_empty() {
-                // Fallback: full re-serialization
-                let mut doc: toml::Value =
-                    toml::from_str(&before_text).map_err(|e| format!("Invalid TOML: {}", e))?;
-                if let Some(servers) = doc
-                    .as_table_mut()
-                    .and_then(|t| t.get_mut(&def.mcp_key))
-                    .and_then(|v| v.as_table_mut())
-                {
-                    servers.remove(name);
-                }
-                toml::to_string_pretty(&doc).map_err(|e| e.to_string())?
-            } else {
-                // Remove all matched section ranges (server + nested subtables),
-                // then tidy up stray blank lines.
-                let mut result = String::with_capacity(before_text.len());
-                let mut cursor = 0usize;
-                for r in &ranges {
-                    if r.start > cursor {
-                        result.push_str(&before_text[cursor..r.start]);
-                    }
-                    cursor = r.end;
-                }
-                if cursor < before_text.len() {
-                    result.push_str(&before_text[cursor..]);
-                }
-                while result.contains("\n\n\n") {
-                    result = result.replace("\n\n\n", "\n\n");
-                }
-                let trimmed = result.trim_end();
-                if trimmed.is_empty() {
-                    String::new()
-                } else {
-                    format!("{}\n", trimmed)
-                }
-            }
-        }
-    };
-
-    let diff_lines = compute_text_diff(&before_text, &after_text);
-    let added = diff_lines.iter().filter(|l| l.tag == "added").count();
-    let removed = diff_lines.iter().filter(|l| l.tag == "removed").count();
-
-    Ok(McpSyncPreview {
-        server_name: name.to_string(),
-        target_format: match def.format {
-            McpFormat::Json => "json",
-            McpFormat::Toml => "toml",
-        }
-        .to_string(),
-        target_config_path: def.config_path.display().to_string(),
-        has_conflict: false,
-        diff_lines,
-        added,
-        removed,
-    })
-}

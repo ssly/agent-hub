@@ -1,10 +1,12 @@
 //! Antigravity (agy CLI / Antigravity 2.0) session browser.
 //!
-//! Index: `~/.gemini/antigravity-cli/conversation_summaries.db` (covers both
-//! CLI and IDE via `app_data_dir`). Message text is read from the human-readable
-//! transcript at `<app>/brain/<id>/.system_generated/logs/transcript.jsonl`
-//! rather than the protobuf trajectory SQLite (which is hard to decode).
+//! Index: aggregated across `~/.gemini/antigravity/conversation_summaries.db`,
+//! `~/.gemini/antigravity-cli/conversation_summaries.db`, and IDE databases.
+//! Message text is read from the human-readable transcript at
+//! `<app>/brain/<id>/.system_generated/logs/transcript.jsonl` (or fallback
+//! `transcript_full.jsonl`) rather than the protobuf trajectory SQLite.
 
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -18,37 +20,70 @@ use crate::session::models::{SessionMessage, SessionSummary};
 const PLATFORM_ID: &str = "antigravity";
 
 pub fn count_antigravity_sessions() -> Result<usize, String> {
-    let db_path = summaries_db_path()?;
-    if !db_path.exists() {
+    let db_paths = candidate_db_paths();
+    if db_paths.is_empty() {
         return Ok(0);
     }
-    let conn = open_readonly(&db_path)?;
-    let count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM conversation_summaries", [], |row| {
-            row.get(0)
-        })
-        .map_err(|err| err.to_string())?;
-    usize::try_from(count).map_err(|err| err.to_string())
+    if db_paths.len() == 1 {
+        let conn = open_readonly(&db_paths[0])?;
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM conversation_summaries", [], |row| {
+                row.get(0)
+            })
+            .map_err(|err| err.to_string())?;
+        return usize::try_from(count.max(0)).map_err(|err| err.to_string());
+    }
+
+    let mut seen_ids = HashSet::new();
+    for db_path in db_paths {
+        if let Ok(conn) = open_readonly(&db_path) {
+            if let Ok(mut stmt) = conn.prepare("SELECT conversation_id FROM conversation_summaries") {
+                if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
+                    for id in rows.flatten() {
+                        let trimmed = id.trim();
+                        if !trimmed.is_empty() {
+                            seen_ids.insert(trimmed.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(seen_ids.len())
 }
 
 pub fn list_antigravity_sessions_all() -> Result<Vec<SessionSummary>, String> {
-    let db_path = summaries_db_path()?;
-    if !db_path.exists() {
+    let db_paths = candidate_db_paths();
+    if db_paths.is_empty() {
         return Ok(Vec::new());
     }
 
-    let conn = open_readonly(&db_path)?;
-    let mut stmt = conn
-        .prepare(
+    let mut session_map: HashMap<String, SessionSummary> = HashMap::new();
+
+    for db_path in db_paths {
+        let conn = match open_readonly(&db_path) {
+            Ok(conn) => conn,
+            Err(_) => continue,
+        };
+
+        let parent_dir_name = db_path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or("antigravity")
+            .to_string();
+
+        let mut stmt = match conn.prepare(
             "SELECT conversation_id, title, preview, step_count, last_modified_time, \
              workspace_uris, app_data_dir, last_user_input_time \
              FROM conversation_summaries \
              ORDER BY last_modified_time DESC",
-        )
-        .map_err(|err| err.to_string())?;
+        ) {
+            Ok(stmt) => stmt,
+            Err(_) => continue,
+        };
 
-    let rows = stmt
-        .query_map([], |row| {
+        let rows = match stmt.query_map([], |row| {
             let id: String = row.get(0)?;
             let title: String = row.get(1)?;
             let preview: String = row.get(2)?;
@@ -67,56 +102,99 @@ pub fn list_antigravity_sessions_all() -> Result<Vec<SessionSummary>, String> {
                 app_data_dir,
                 last_user_input,
             ))
-        })
-        .map_err(|err| err.to_string())?;
-
-    let mut sessions = Vec::new();
-    for row in rows {
-        let (
-            id,
-            title,
-            preview,
-            step_count,
-            last_modified,
-            workspace_uris,
-            app_data_dir,
-            last_user,
-        ) = row.map_err(|err| err.to_string())?;
-        if id.trim().is_empty() {
-            continue;
-        }
-
-        let display_title = first_nonempty(&[&title, &preview]).unwrap_or_else(|| id.clone());
-        let project_path = first_workspace_path(&workspace_uris).unwrap_or_default();
-        let updated_at = parse_sqlite_datetime(&last_modified)
-            .or_else(|| parse_sqlite_datetime(&last_user))
-            .unwrap_or(0);
-        let started_at = parse_sqlite_datetime(&last_user).unwrap_or(updated_at);
-        // Product surface from the summaries index (official app_data_dir):
-        // antigravity-cli → terminal CLI, antigravity → desktop 2.0,
-        // antigravity-ide → IDE. Same strings the monitor capture uses.
-        let source = match app_data_dir.as_str() {
-            "antigravity-cli" => Some("terminal".to_string()),
-            "antigravity-ide" => Some("antigravity-ide".to_string()),
-            "antigravity" => Some("antigravity".to_string()),
-            other if !other.trim().is_empty() => Some(other.to_string()),
-            _ => None,
+        }) {
+            Ok(rows) => rows,
+            Err(_) => continue,
         };
-        let message_count = u32::try_from(step_count.max(0)).ok();
 
-        sessions.push(SessionSummary {
-            id,
-            title: display_title,
-            project_path,
-            model: None,
-            started_at,
-            updated_at,
-            message_count,
-            tokens_used: None,
-            platform_id: PLATFORM_ID.to_string(),
-            source,
-        });
+        for row in rows.flatten() {
+            let (
+                id,
+                title,
+                preview,
+                step_count,
+                last_modified,
+                workspace_uris,
+                app_data_dir,
+                last_user,
+            ) = row;
+            let id = id.trim().to_string();
+            if id.is_empty() {
+                continue;
+            }
+
+            let display_title = first_nonempty(&[&title, &preview]).unwrap_or_else(|| id.clone());
+            let project_path = first_workspace_path(&workspace_uris).unwrap_or_default();
+            let updated_at = parse_sqlite_datetime(&last_modified)
+                .or_else(|| parse_sqlite_datetime(&last_user))
+                .unwrap_or(0);
+            let started_at = parse_sqlite_datetime(&last_user).unwrap_or(updated_at);
+
+            let effective_app = if !app_data_dir.trim().is_empty() {
+                app_data_dir.as_str()
+            } else {
+                parent_dir_name.as_str()
+            };
+
+            // Product surface from the summaries index (official app_data_dir):
+            // antigravity-cli → terminal CLI, antigravity → desktop 2.0,
+            // antigravity-ide → IDE. Same strings the monitor capture uses.
+            let source = match effective_app {
+                "antigravity-cli" => Some("terminal".to_string()),
+                "antigravity-ide" => Some("antigravity-ide".to_string()),
+                "antigravity" => Some("antigravity".to_string()),
+                other if !other.trim().is_empty() => Some(other.to_string()),
+                _ => None,
+            };
+            let message_count = u32::try_from(step_count.max(0)).ok();
+
+            let candidate = SessionSummary {
+                id: id.clone(),
+                title: display_title,
+                project_path,
+                model: None,
+                started_at,
+                updated_at,
+                message_count,
+                tokens_used: None,
+                platform_id: PLATFORM_ID.to_string(),
+                source,
+            };
+
+            match session_map.entry(id) {
+                std::collections::hash_map::Entry::Vacant(v) => {
+                    v.insert(candidate);
+                }
+                std::collections::hash_map::Entry::Occupied(mut o) => {
+                    let existing = o.get_mut();
+                    if candidate.updated_at > existing.updated_at {
+                        let mut new_item = candidate;
+                        if new_item.title == new_item.id && existing.title != existing.id {
+                            new_item.title = existing.title.clone();
+                        }
+                        if new_item.message_count.unwrap_or(0)
+                            < existing.message_count.unwrap_or(0)
+                        {
+                            new_item.message_count = existing.message_count;
+                        }
+                        *existing = new_item;
+                    } else {
+                        if existing.title == existing.id && candidate.title != candidate.id {
+                            existing.title = candidate.title;
+                        }
+                        if existing.message_count.unwrap_or(0)
+                            < candidate.message_count.unwrap_or(0)
+                        {
+                            existing.message_count = candidate.message_count;
+                        }
+                    }
+                }
+            }
+        }
     }
+
+    let mut sessions: Vec<SessionSummary> = session_map.into_values().collect();
+    sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     Ok(sessions)
 }
 
@@ -132,7 +210,10 @@ pub fn get_antigravity_messages(
 pub fn last_antigravity_messages(
     session_id: &str,
 ) -> Result<(Option<SessionMessage>, Option<SessionMessage>), String> {
-    let path = resolve_transcript_path(session_id)?;
+    let path = match resolve_transcript_path(session_id) {
+        Ok(path) => path,
+        Err(_) => return Ok((None, None)),
+    };
     let file = fs::File::open(&path).map_err(|err| err.to_string())?;
     let reader = BufReader::new(file);
     let mut last_user = None;
@@ -191,41 +272,51 @@ pub fn delete_antigravity_session(session_id: &str) -> Result<(), String> {
         return Err("session id is empty".to_string());
     }
 
-    let app_dir = lookup_app_data_dir(id).unwrap_or_else(|| "antigravity-cli".to_string());
-    let home = crate::paths::home_dir();
-    let base = join_relative(home, &format!(".gemini/{app_dir}"));
+    let mut target_apps = Vec::new();
+    if let Some(app) = lookup_app_data_dir(id) {
+        target_apps.push(app);
+    }
+    for app in ["antigravity", "antigravity-cli", "antigravity-ide"] {
+        if !target_apps.iter().any(|existing| existing == app) {
+            target_apps.push(app.to_string());
+        }
+    }
 
-    // Conversation files: {id}.db / .pb + sqlite sidecars.
-    let conversations = base.join("conversations");
-    if conversations.is_dir() {
-        if let Ok(entries) = fs::read_dir(&conversations) {
-            for entry in entries.flatten() {
-                let name = entry.file_name();
-                let name = name.to_string_lossy();
-                if name == id
-                    || name.starts_with(&format!("{id}."))
-                    || name.starts_with(&format!("{id}-"))
-                {
-                    let path = entry.path();
-                    if path.is_dir() {
-                        let _ = fs::remove_dir_all(&path);
-                    } else {
-                        let _ = fs::remove_file(&path);
+    let home = crate::paths::home_dir();
+    for app_dir in target_apps {
+        let base = join_relative(home.clone(), &format!(".gemini/{app_dir}"));
+
+        // Conversation files: {id}.db / .pb + sqlite sidecars.
+        let conversations = base.join("conversations");
+        if conversations.is_dir() {
+            if let Ok(entries) = fs::read_dir(&conversations) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name();
+                    let name = name.to_string_lossy();
+                    if name == id
+                        || name.starts_with(&format!("{id}."))
+                        || name.starts_with(&format!("{id}-"))
+                    {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            let _ = fs::remove_dir_all(&path);
+                        } else {
+                            let _ = fs::remove_file(&path);
+                        }
                     }
                 }
             }
         }
+
+        // Brain tree for this conversation.
+        let brain = base.join("brain").join(id);
+        if brain.exists() {
+            let _ = fs::remove_dir_all(&brain);
+        }
     }
 
-    // Brain tree for this conversation.
-    let brain = base.join("brain").join(id);
-    if brain.exists() {
-        let _ = fs::remove_dir_all(&brain);
-    }
-
-    // Drop the index row (best-effort).
-    let db_path = summaries_db_path()?;
-    if db_path.exists() {
+    // Drop the index row across all candidate databases (best-effort).
+    for db_path in candidate_db_paths() {
         if let Ok(conn) = Connection::open(&db_path) {
             let _ = conn.execute(
                 "DELETE FROM conversation_summaries WHERE conversation_id = ?1",
@@ -237,11 +328,38 @@ pub fn delete_antigravity_session(session_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn summaries_db_path() -> Result<PathBuf, String> {
-    Ok(join_relative(
-        crate::paths::home_dir(),
-        ".gemini/antigravity-cli/conversation_summaries.db",
-    ))
+fn candidate_db_paths() -> Vec<PathBuf> {
+    let home = crate::paths::home_dir();
+    let gemini_dir = join_relative(home, ".gemini");
+    let mut paths = Vec::new();
+    let mut seen = HashSet::new();
+
+    // Standard known directories in priority order:
+    // "antigravity" (Desktop / 2.0 - active recent version),
+    // "antigravity-cli" (CLI tool),
+    // "antigravity-ide" (IDE).
+    for name in ["antigravity", "antigravity-cli", "antigravity-ide"] {
+        let p = gemini_dir.join(name).join("conversation_summaries.db");
+        if p.is_file() && seen.insert(p.clone()) {
+            paths.push(p);
+        }
+    }
+
+    // Also discover any other .gemini/*/conversation_summaries.db
+    if let Ok(entries) = fs::read_dir(&gemini_dir) {
+        for entry in entries.flatten() {
+            if let Ok(file_type) = entry.file_type() {
+                if file_type.is_dir() {
+                    let p = entry.path().join("conversation_summaries.db");
+                    if p.is_file() && seen.insert(p.clone()) {
+                        paths.push(p);
+                    }
+                }
+            }
+        }
+    }
+
+    paths
 }
 
 fn open_readonly(path: &Path) -> Result<Connection, String> {
@@ -250,38 +368,57 @@ fn open_readonly(path: &Path) -> Result<Connection, String> {
 }
 
 fn lookup_app_data_dir(session_id: &str) -> Option<String> {
-    let db_path = summaries_db_path().ok()?;
-    if !db_path.exists() {
-        return None;
+    for db_path in candidate_db_paths() {
+        if let Ok(conn) = open_readonly(&db_path) {
+            if let Ok(dir) = conn.query_row(
+                "SELECT app_data_dir FROM conversation_summaries WHERE conversation_id = ?1",
+                [session_id],
+                |row| row.get::<_, String>(0),
+            ) {
+                if !dir.trim().is_empty() {
+                    return Some(dir);
+                }
+            }
+        }
     }
-    let conn = open_readonly(&db_path).ok()?;
-    conn.query_row(
-        "SELECT app_data_dir FROM conversation_summaries WHERE conversation_id = ?1",
-        [session_id],
-        |row| row.get::<_, String>(0),
-    )
-    .ok()
-    .filter(|value| !value.trim().is_empty())
+
+    // Check if brain/{session_id} exists under any known directory
+    for app in ["antigravity", "antigravity-cli", "antigravity-ide"] {
+        let path = join_relative(
+            crate::paths::home_dir(),
+            &format!(".gemini/{app}/brain/{session_id}"),
+        );
+        if path.is_dir() {
+            return Some(app.to_string());
+        }
+    }
+
+    None
 }
 
-/// Prefer the app_data_dir from the index; fall back to probing both trees.
+/// Prefer the app_data_dir from the index; fall back to probing all candidate trees.
 fn resolve_transcript_path(session_id: &str) -> Result<PathBuf, String> {
     let mut candidates = Vec::new();
     if let Some(app) = lookup_app_data_dir(session_id) {
         candidates.push(app);
     }
-    for app in ["antigravity-cli", "antigravity"] {
+    for app in ["antigravity", "antigravity-cli", "antigravity-ide"] {
         if !candidates.iter().any(|existing| existing == app) {
             candidates.push(app.to_string());
         }
     }
     for app in candidates {
-        let path = join_relative(
+        let log_dir = join_relative(
             crate::paths::home_dir(),
-            &format!(".gemini/{app}/brain/{session_id}/.system_generated/logs/transcript.jsonl"),
+            &format!(".gemini/{app}/brain/{session_id}/.system_generated/logs"),
         );
-        if path.is_file() {
-            return Ok(path);
+        let transcript = log_dir.join("transcript.jsonl");
+        if transcript.is_file() {
+            return Ok(transcript);
+        }
+        let transcript_full = log_dir.join("transcript_full.jsonl");
+        if transcript_full.is_file() {
+            return Ok(transcript_full);
         }
     }
     Err(format!(
@@ -525,10 +662,26 @@ mod tests {
     #[test]
     fn real_summaries_smoke() {
         let sessions = list_antigravity_sessions_all().expect("list");
+        let count = count_antigravity_sessions().expect("count");
+        assert_eq!(sessions.len(), count);
         // Machine may have no Antigravity install — empty is fine.
         if sessions.is_empty() {
             return;
         }
         assert!(!sessions[0].id.is_empty());
+        let first_id = &sessions[0].id;
+        let msgs = get_antigravity_messages(first_id, 0, 5).expect("msgs");
+        assert!(!msgs.is_empty(), "First session should have messages");
+        let (last_u, last_a) = last_antigravity_messages(first_id).expect("last msgs");
+        assert!(last_u.is_some() || last_a.is_some());
+    }
+
+    #[test]
+    fn candidate_db_paths_exist_and_match() {
+        let paths = candidate_db_paths();
+        for p in paths {
+            assert!(p.exists());
+            assert!(p.ends_with("conversation_summaries.db"));
+        }
     }
 }

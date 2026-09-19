@@ -37,12 +37,7 @@ pub fn parse_skill(skill_dir: &Path, platform_id: &str) -> Option<Skill> {
         .unwrap_or("")
         .to_string();
 
-    let is_symlink = skill_dir.is_symlink();
-    let symlink_target = if is_symlink {
-        fs::read_link(skill_dir).ok()
-    } else {
-        None
-    };
+    let (is_symlink, symlink_target) = detect_symlink_origin(skill_dir);
     let files = list_files(skill_dir);
     let modified_at = fs::metadata(skill_dir).ok().and_then(|m| m.modified().ok());
     let total_size = calc_total_size(skill_dir);
@@ -97,12 +92,7 @@ pub fn parse_flat_skill(md_file: &Path, platform_id: &str) -> Option<Skill> {
         .unwrap_or("")
         .to_string();
 
-    let is_symlink = md_file.is_symlink();
-    let symlink_target = if is_symlink {
-        fs::read_link(md_file).ok()
-    } else {
-        None
-    };
+    let (is_symlink, symlink_target) = detect_symlink_origin(md_file);
     let files = md_file
         .file_name()
         .map(PathBuf::from)
@@ -167,4 +157,22 @@ fn calc_total_size(dir: &Path) -> u64 {
         .filter(|e| e.file_type().is_file())
         .map(|e| e.metadata().map(|m| m.len()).unwrap_or(0))
         .sum()
+}
+
+fn detect_symlink_origin(path: &Path) -> (bool, Option<PathBuf>) {
+    #[cfg(windows)]
+    let is_link = path.is_symlink() || junction::exists(path).unwrap_or(false);
+    #[cfg(not(windows))]
+    let is_link = path.is_symlink();
+
+    if is_link {
+        let origin = path
+            .canonicalize()
+            .ok()
+            .map(|p| crate::paths::clean_canonical_path(&p))
+            .or_else(|| fs::read_link(path).ok());
+        (true, origin)
+    } else {
+        (false, None)
+    }
 }

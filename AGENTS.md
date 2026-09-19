@@ -36,8 +36,6 @@ src/
     sessions/             # SessionListView + 会话/监听共用组件（SessionCard、SessionMessagesModal、SessionResumeModal，仅组件共用、数据不共用）
     settings/             # SettingsModal（支持的 Agent 列表与全局文件夹检测、启停勾选、用量刷新与监控面板条数设置；Shared 为公共技能池而非独立 Agent，始终保持启用且不在设置列表中展示）
     switch/               # SwitchView（含各平台用量面板）
-    tray/                 # 托盘监控面板：CodexTrayView + UsageOrb（泡泡水 + 圆环可视化）+ TrayWaveLoader（查询中水波 loading）+ useTrayDock.ts（边缘吸附 composable）；左上角控件（不透明度滑块 / 刷新间隔滑块（后端内存共享，非 localStorage）/ 隐藏使用量 / 隐藏监听 / mini（按钮已隐藏、代码保留，SHOW_MINI_TOGGLE 常量控制），localStorage 持久化；两区不可同时隐藏；mini 仅圆环+短名+恢复正常），区域无内容时展示固定空状态。边缘吸附（macOS Dock 式；判定与动画全在后端 tray.rs；面板无置顶概念——右上角为 X 关闭按钮（close_usage_tray：清 dock 态 + 隐藏），浮动面板失焦自动隐藏，吸附即常驻）：拖动全程窗口在松手时被钳制在屏幕内（X 物理边界并集 / Y 工作区，拖不出桌面）；吸附唯一触发条件是"光标在面板外持续 200ms（前端 mouseenter/mouseleave 经 set_usage_tray_hovered 上报）且窗口贴着显示器外侧左/右/上边缘（上边缘贴工作区顶，不盖菜单栏）"（双屏相接的缝不吸附；拖动中绝不吸附——触发时校验最近 200ms 无移动）；吸附后收成条：左右为 20×72 竖条，顶部为同内容逆时针旋转 90° 的横条（约 72×20），展开从下方滑出、收回向上收到顶边；悬停条滑出面板（expand_usage_tray；macOS 后台悬停靠 core-graphics 光标轮询，弹层打开时经 set_usage_tray_overlay 暂停自动收回）、光标移开 350ms 后收回（collapse_usage_tray，拖动中的 mouseleave 由后端按最近移动时间拦截）；拖着展开的面板远离边缘松手（Moved 停住 190ms 判定）即退出 dock 态、停在边缘则收回条；状态经 `usage-tray-dock-changed` 事件（edge + expanded）推给前端 useTrayDock.ts 镜像，尺寸动画前发 `usage-tray-dock-animating` 让前端隐藏内容、落地再显示；条内容为每个监听会话一个状态点（绿=工作中、黄=等待用户确认、灰=已结束，与监听条同一数据源），点数即会话数，长边按点数动态调整（前端经 resize_usage_tray_dock 推长边尺寸；顶部改宽度、左右改高度）；docked 态失焦不隐藏；点托盘图标/侧栏按钮重开一律是"全新打开"（清 dock、居中、400×120 起始高度，不再用记忆位置）
-    diff/                 # DiffView
     search/               # SearchResults
   stores/                 # Pinia stores
     app.ts                # 全局/导航
@@ -74,8 +72,7 @@ src-tauri/src/
     registry.rs           # 内置平台定义（12 个 Skill 平台，顺序即侧边栏顺序）
     discovery.rs          # 自动发现 + 自定义平台
   skill/                  # Skill 模型、解析、扫描
-  diff/                   # Myers diff 引擎
-  sync/                   # Skill 同步服务
+  sync/                   # Skill 同步服务（软链接 / 复制文件，支持 Windows Junction 免提权）
   mcp/                    # MCP Server 管理（11 个平台；mcp_key 支持点分嵌套路径，如 ZCode 的 mcp.servers；DSH 为 cordis.patch.yml 只读）
     parser.rs             # JSON/TOML 配置解析
     writer.rs             # 配置回写
@@ -85,7 +82,7 @@ src-tauri/src/
   session/                # 会话浏览器与批量 HTML 导出
     claude.rs             # Claude Code 会话适配
     codex.rs              # Codex CLI 会话适配
-    antigravity.rs        # Antigravity 会话适配（列表读 ~/.gemini/antigravity-cli/conversation_summaries.db，消息读 brain/<id>/.../transcript.jsonl；恢复 `agy --conversation=<id>`）
+    antigravity.rs        # Antigravity 会话适配（聚合读取 ~/.gemini/antigravity/ 与 antigravity-cli 等的 conversation_summaries.db，消息读 brain/<id>/.../transcript.jsonl；恢复 `agy --conversation=<id>`）
     kiro.rs               # Kiro 会话适配
     grok.rs               # Grok CLI 会话适配（~/.grok/sessions/<编码cwd>/<uuid>/ 下 summary.json + chat_history.jsonl）
     kimi.rs               # Kimi Code 会话适配（~/.kimi-code/sessions/<wd目录>/session_<uuid>/ 下 state.json + agents/main/wire.jsonl，workDir 取自 session_index.jsonl）
@@ -157,13 +154,17 @@ npm run version [-- <ver>] # 从 git tag 同步版本号
 
 Skill 是包含 `SKILL.md` 的目录，SKILL.md 使用 YAML frontmatter（`name`、`version`、`description`）+ Markdown body。扫描器递归遍历平台目录，用 canonical path 集合防止符号链接循环。DeepSeek Harness 平台额外支持扁平单文件 Skill（见插件工作区条目）。
 
-### Diff 引擎
+### Skill 复制系统
 
-使用 `similar` crate 实现 Myers diff，按文件逐一对比两个平台的同名 Skill。
+Skill 复制（`sync/service.rs`）支持“复制文件（推荐）”与“创建软链接”两种模式，默认复制文件，支持技能多选批量复制与多目标平台批量复制：
+- **软链接跨平台实现**：Unix（macOS / Linux）系统使用标准符号链接（`std::os::unix::fs::symlink`）；Windows 环境下标准符号链接需要管理员权限或开发者模式，因此在 Windows 上专门使用 NTFS 目录联接（Directory Junction，经 `junction` crate 实现），免提权、普通用户开箱即用。
+- **穿透追溯物理源头**：复制或创建软链接时，通过 `canonicalize()` 自动穿透多层嵌套的软链接或 Junction，直接追溯至源头物理目录进行操作，避免复制出软链接指针或软链接链式嵌套。UI 在检测到所选技能为软链接时提示将以源头物理目录进行操作。
+- **多选与批量操作**：技能列表支持勾选多选，顶部出现浮动批量操作条（已选计数、全选/取消、批量复制、批量删除）；复制弹窗支持同时勾选多个目标平台，支持一键全选/清空目标；若目标平台已存在同名技能，展示冲突标记并支持一键跳过或覆盖冲突。
+- **覆盖与清理**：覆盖同名技能或删除时，区分符号链接/Junction 与物理目录，移除链接不会误删源头物理文件；Windows Junction 严格通过 `remove_dir` 清理。
 
 ### MCP Server
 
-每个平台有独立的配置格式（JSON 或 TOML），`parser.rs` 统一解析为内部模型，`writer.rs` 按原格式回写。
+每个平台有独立的配置格式（JSON 或 TOML），`parser.rs` 统一解析为内部模型，`writer.rs` 按原格式外科式回写。MCP 增删改直接保存或弹窗确认删除（已移除多余的 diff 预览），支持软删除至回收站。
 
 ### 会话浏览器
 

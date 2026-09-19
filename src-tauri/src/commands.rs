@@ -324,60 +324,6 @@ pub fn open_skill_folder(
     Ok(())
 }
 
-#[tauri::command]
-pub fn get_diff_candidates(
-    state: tauri::State<'_, SafeState>,
-    platform_id: String,
-    skill_name: String,
-    folder: String,
-) -> Vec<PlatformView> {
-    let mut s = state.lock().unwrap();
-    crate::platform::ensure_all_skills_loaded(&mut s.platforms);
-    s.platforms
-        .iter()
-        .filter(|p| {
-            p.id != platform_id
-                && p.skills
-                    .iter()
-                    .any(|sk| sk.name == skill_name && sk.folder == folder)
-        })
-        .map(PlatformView::from)
-        .collect()
-}
-
-#[tauri::command]
-pub fn diff_skills_cmd(
-    state: tauri::State<'_, SafeState>,
-    source_platform_id: String,
-    target_platform_id: String,
-    skill_name: String,
-    folder: String,
-) -> Result<crate::diff::DiffResult, CommandError> {
-    let mut s = state.lock().unwrap();
-    for id in [&source_platform_id, &target_platform_id] {
-        if let Some(p) = s.platforms.iter_mut().find(|p| &p.id == id) {
-            crate::platform::load_platform_skills(p);
-        }
-    }
-    let source_platform = s
-        .platforms
-        .iter()
-        .find(|p| p.id == source_platform_id)
-        .ok_or_else(|| CommandError::NotFound("Source platform not found".into()))?;
-    let target_platform = s
-        .platforms
-        .iter()
-        .find(|p| p.id == target_platform_id)
-        .ok_or_else(|| CommandError::NotFound("Target platform not found".into()))?;
-    let source_skill = find_skill(source_platform, &skill_name, &folder)
-        .cloned()
-        .ok_or_else(|| CommandError::NotFound("Source skill not found".into()))?;
-    let target_skill = find_skill(target_platform, &skill_name, &folder)
-        .cloned()
-        .ok_or_else(|| CommandError::NotFound("Target skill not found".into()))?;
-    Ok(crate::diff::diff_skills(&source_skill, &target_skill))
-}
-
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SyncTarget {
     pub id: String,
@@ -416,7 +362,13 @@ pub fn sync_skill_cmd(
     skill_name: String,
     folder: String,
     overwrite: bool,
+    mode: Option<String>,
 ) -> Result<String, CommandError> {
+    let sync_mode = match mode.as_deref() {
+        Some("symlink") => crate::sync::SyncMode::Symlink,
+        _ => crate::sync::SyncMode::Copy,
+    };
+
     let (source_skill, target_platform) = {
         let mut s = state.lock().unwrap();
         if let Some(p) = s.platforms.iter_mut().find(|p| p.id == source_platform_id) {
@@ -439,9 +391,9 @@ pub fn sync_skill_cmd(
     };
 
     let result = if overwrite {
-        crate::sync::sync_overwrite(&source_skill, &target_platform)
+        crate::sync::sync_overwrite(&source_skill, &target_platform, sync_mode)
     } else {
-        crate::sync::sync_skill(&source_skill, &target_platform)
+        crate::sync::sync_skill(&source_skill, &target_platform, sync_mode)
     };
 
     match result {
@@ -467,7 +419,13 @@ pub fn sync_folder_cmd(
     source_platform_id: String,
     target_platform_id: String,
     folder: String,
+    mode: Option<String>,
 ) -> Result<serde_json::Value, CommandError> {
+    let sync_mode = match mode.as_deref() {
+        Some("symlink") => crate::sync::SyncMode::Symlink,
+        _ => crate::sync::SyncMode::Copy,
+    };
+
     let results = {
         let mut s = state.lock().unwrap();
         if let Some(p) = s.platforms.iter_mut().find(|p| p.id == source_platform_id) {
@@ -494,7 +452,7 @@ pub fn sync_folder_cmd(
         let mut synced = 0;
         let mut errors = Vec::new();
         for skill in &skills {
-            match crate::sync::sync_overwrite(skill, target_platform) {
+            match crate::sync::sync_overwrite(skill, target_platform, sync_mode) {
                 Ok(()) => synced += 1,
                 Err(e) => errors.push(format!("{}: {}", skill.name, e)),
             }
@@ -1531,31 +1489,6 @@ fn base64_to_string(value: &str) -> Result<String, CommandError> {
         .map_err(|err| CommandError::SyncError(err.to_string()))
 }
 
-#[tauri::command]
-pub fn preview_mcp_change_cmd(
-    platform_id: String,
-    server_name: String,
-    config_text: Option<String>,
-) -> Result<crate::mcp::McpSyncPreview, CommandError> {
-    if let Some(text) = config_text {
-        // Add/import preview
-        let def = crate::mcp::find_mcp_platform(&platform_id)
-            .ok_or_else(|| CommandError::NotFound("Platform not found".into()))?;
-        let config = crate::mcp::parse_server_config_input_with_format(
-            &text,
-            &def.mcp_key,
-            &server_name,
-            def.format,
-        )
-        .map_err(|e| CommandError::SyncError(e))?;
-        crate::mcp::preview_import_mcp_server(&platform_id, &server_name, &config)
-            .map_err(|e| CommandError::SyncError(e))
-    } else {
-        // Delete preview
-        crate::mcp::preview_delete_mcp_server(&platform_id, &server_name)
-            .map_err(|e| CommandError::SyncError(e))
-    }
-}
 
 // --- Monitor Commands ---
 

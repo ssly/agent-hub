@@ -35,10 +35,63 @@ use crate::session::models::{SessionMessage, SessionSummary};
 
 const PLATFORM_ID: &str = "dsh";
 const DS_HOME_ENV: &str = "DSH_HOME";
-const LOG_ZSTD: &str = "session.jsonl.zstd";
-const LOG_PLAIN: &str = "session.jsonl";
 /// Chunk rows only carry raw stream deltas; skipping them is safe.
 const CHUNK_ROW_TYPES: [&str; 3] = ["text-chunks", "reasoning-chunks", "tool-call-chunks"];
+
+/// Parse one canonical DSH session generation filename.
+///
+/// In DeepSeek Harness (@deepseek-ai/dsh):
+/// - Generation 0 is `session.jsonl` / `session.jsonl.zstd`
+/// - Generation N (e.g. 1, 2, 3...) is `session.v{N}.jsonl` / `session.v{N}.jsonl.zstd`
+///
+/// Returns `Some((version, is_zstd))` or `None` if the name is not a canonical session log.
+pub fn parse_dsh_log_filename(name: &str) -> Option<(u32, bool)> {
+    let (stem, is_zstd) = if let Some(stripped) = name.strip_suffix(".jsonl.zstd") {
+        (stripped, true)
+    } else if let Some(stripped) = name.strip_suffix(".jsonl") {
+        (stripped, false)
+    } else {
+        return None;
+    };
+
+    if stem == "session" {
+        return Some((0, is_zstd));
+    }
+
+    if let Some(v_str) = stem.strip_prefix("session.v") {
+        if !v_str.is_empty() && v_str.chars().all(|c| c.is_ascii_digit()) {
+            if let Ok(version) = v_str.parse::<u32>() {
+                return Some((version, is_zstd));
+            }
+        }
+    }
+
+    None
+}
+
+/// Select the highest canonical generation log in a session directory.
+///
+/// If multiple generations exist (e.g. `session.jsonl.zstd` and `session.v3.jsonl.zstd`),
+/// DSH's canonical persistence selector picks the highest version generation.
+/// For the same version, `.zstd` is preferred over plaintext `.jsonl`.
+pub fn resolve_dsh_session_log(session_dir: &Path) -> Option<PathBuf> {
+    let entries = fs::read_dir(session_dir).ok()?;
+    let mut candidates: Vec<(u32, bool, PathBuf)> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if let Some((version, is_zstd)) = parse_dsh_log_filename(name) {
+            candidates.push((version, is_zstd, path));
+        }
+    }
+    candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+    candidates.into_iter().next().map(|(_, _, path)| path)
+}
 
 /// Decoded session artifact: immutable header + the event stream.
 #[derive(Debug, Clone, Default)]
@@ -118,13 +171,7 @@ pub fn list_dsh_session_files() -> Vec<DshSessionFile> {
             if !session_dir.is_dir() {
                 continue;
             }
-            let zstd = session_dir.join(LOG_ZSTD);
-            let plain = session_dir.join(LOG_PLAIN);
-            let log_path = if zstd.exists() {
-                zstd
-            } else if plain.exists() {
-                plain
-            } else {
+            let Some(log_path) = resolve_dsh_session_log(&session_dir) else {
                 continue;
             };
             let session_id = session_dir
@@ -142,10 +189,27 @@ pub fn list_dsh_session_files() -> Vec<DshSessionFile> {
 }
 
 pub fn find_dsh_session_file(session_id: &str) -> Option<PathBuf> {
-    list_dsh_session_files()
-        .into_iter()
-        .find(|file| file.session_id == session_id)
-        .map(|file| file.log_path)
+    let files = list_dsh_session_files();
+    // 1. Exact match on directory session_id
+    if let Some(file) = files.iter().find(|file| file.session_id == session_id) {
+        return Some(file.log_path.clone());
+    }
+    // 2. Case-insensitive match (crucial on Windows NTFS)
+    if let Some(file) = files
+        .iter()
+        .find(|file| file.session_id.eq_ignore_ascii_case(session_id))
+    {
+        return Some(file.log_path.clone());
+    }
+    // 3. Fallback: decode log header and check log.header.id
+    for file in &files {
+        if let Ok(log) = decode_dsh_log(&file.log_path) {
+            if log.header.id == session_id || log.header.id.eq_ignore_ascii_case(session_id) {
+                return Some(file.log_path.clone());
+            }
+        }
+    }
+    None
 }
 
 /// Decode one session artifact. `session.jsonl.zstd` is a concatenated-frame
@@ -293,7 +357,13 @@ pub fn list_dsh_sessions_all() -> Result<Vec<SessionSummary>, String> {
         if log.header.is_subagent {
             continue;
         }
-        let pc = projcache_session(&cache, &file.session_id);
+        let session_id = if log.header.id.is_empty() {
+            file.session_id.clone()
+        } else {
+            log.header.id.clone()
+        };
+        let pc = projcache_session(&cache, &session_id)
+            .or_else(|| projcache_session(&cache, &file.session_id));
         let title = pc
             .and_then(|s| projcache_row(s, "title"))
             .and_then(|v| v.as_str())
@@ -334,16 +404,15 @@ pub fn list_dsh_sessions_all() -> Result<Vec<SessionSummary>, String> {
             })
             .filter(|total| *total > 0);
 
-        let project_path = log.header.cwd.clone().unwrap_or_default();
+        let project_path = log
+            .header
+            .cwd
+            .as_deref()
+            .and_then(crate::paths::normalize_project_path_display)
+            .or_else(|| log.header.cwd.clone())
+            .unwrap_or_default();
         let model = first_assistant_model(&log);
         let started_at = log.header.created_at;
-        // Prefer the header's own id (path-escaped ids round-trip for known
-        // `session-<uuid>` names); fall back to the directory name.
-        let session_id = if log.header.id.is_empty() {
-            file.session_id.clone()
-        } else {
-            log.header.id.clone()
-        };
 
         sessions.push(SessionSummary {
             id: session_id,
@@ -450,18 +519,31 @@ pub fn search_dsh_messages(
         if log.header.is_subagent {
             continue;
         }
-        let title = projcache_session(&cache, &file.session_id)
+        let sid = if log.header.id.is_empty() {
+            file.session_id.clone()
+        } else {
+            log.header.id.clone()
+        };
+        let title = projcache_session(&cache, &sid)
+            .or_else(|| projcache_session(&cache, &file.session_id))
             .and_then(|s| projcache_row(s, "title"))
             .and_then(|v| v.as_str())
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty())
             .unwrap_or_else(|| file.session_id.clone());
+        let project_path = log
+            .header
+            .cwd
+            .as_deref()
+            .and_then(crate::paths::normalize_project_path_display)
+            .or_else(|| log.header.cwd.clone())
+            .unwrap_or_default();
         for message in collect_dsh_messages(&log) {
             if message.matches_query(query_lower) {
                 results.push(crate::session::models::SessionSearchResult {
-                    session_id: file.session_id.clone(),
+                    session_id: sid.clone(),
                     session_title: title.clone(),
-                    project_path: log.header.cwd.clone().unwrap_or_default(),
+                    project_path: project_path.clone(),
                     platform_id: PLATFORM_ID.to_string(),
                     message,
                 });
@@ -481,10 +563,20 @@ pub fn delete_dsh_session(session_id: &str) -> Result<(), String> {
     let session_dir = file
         .parent()
         .ok_or_else(|| "invalid session path".to_string())?;
+    let dir_name = session_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|s| s.to_string());
     fs::remove_dir_all(session_dir).map_err(|e| format!("无法删除会话目录: {e}"))?;
     // Best effort: the session is gone from disk even if index cleanup fails.
     let _ = remove_id_from_workspace_index(session_id);
     let _ = remove_id_from_projcache(session_id);
+    if let Some(ref dir_id) = dir_name {
+        if dir_id != session_id {
+            let _ = remove_id_from_workspace_index(dir_id);
+            let _ = remove_id_from_projcache(dir_id);
+        }
+    }
     Ok(())
 }
 
@@ -657,16 +749,20 @@ mod tests {
             decoded_any |= !log.events.is_empty();
         }
         assert!(decoded_any, "real dsh session logs decoded zero events");
-        let first = &sessions[0];
-        let page = get_dsh_messages(&first.id, 0, 50);
-        if let Ok(messages) = page {
-            assert!(messages.len() <= 50);
-            assert!(
-                !messages.is_empty(),
-                "session {} should expose transcript messages",
-                first.id
-            );
+        let mut found_messages = false;
+        for session in &sessions {
+            if let Ok(messages) = get_dsh_messages(&session.id, 0, 50) {
+                if !messages.is_empty() {
+                    assert!(messages.len() <= 50);
+                    found_messages = true;
+                    break;
+                }
+            }
         }
+        assert!(
+            found_messages,
+            "at least one real dsh session should expose transcript messages"
+        );
     }
 
     #[test]
@@ -746,5 +842,46 @@ mod tests {
         assert_eq!(truncate_chars("short", 80), "short");
         let long = "长".repeat(100);
         assert_eq!(truncate_chars(&long, 80).chars().count(), 83); // 80 + "..."
+    }
+
+    #[test]
+    fn test_parse_dsh_log_filename() {
+        assert_eq!(parse_dsh_log_filename("session.jsonl"), Some((0, false)));
+        assert_eq!(parse_dsh_log_filename("session.jsonl.zstd"), Some((0, true)));
+        assert_eq!(parse_dsh_log_filename("session.v1.jsonl"), Some((1, false)));
+        assert_eq!(parse_dsh_log_filename("session.v1.jsonl.zstd"), Some((1, true)));
+        assert_eq!(parse_dsh_log_filename("session.v3.jsonl.zstd"), Some((3, true)));
+        assert_eq!(parse_dsh_log_filename("session.v10.jsonl.zstd"), Some((10, true)));
+
+        // Non-canonical or unrelated files
+        assert_eq!(parse_dsh_log_filename("session.lock"), None);
+        assert_eq!(parse_dsh_log_filename(".agent-hub-tmp"), None);
+        assert_eq!(parse_dsh_log_filename("session.vX.jsonl"), None);
+        assert_eq!(parse_dsh_log_filename("other.jsonl"), None);
+    }
+
+    #[test]
+    fn test_resolve_dsh_session_log_selection() {
+        let temp_dir = std::env::temp_dir().join(format!("dsh-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        // Initially empty
+        assert!(resolve_dsh_session_log(&temp_dir).is_none());
+
+        // Add v0 zstd
+        let v0_file = temp_dir.join("session.jsonl.zstd");
+        fs::write(&v0_file, b"v0").unwrap();
+        assert_eq!(resolve_dsh_session_log(&temp_dir), Some(v0_file.clone()));
+
+        // Add v3 zstd -> should prefer v3
+        let v3_file = temp_dir.join("session.v3.jsonl.zstd");
+        fs::write(&v3_file, b"v3").unwrap();
+        assert_eq!(resolve_dsh_session_log(&temp_dir), Some(v3_file.clone()));
+
+        // Add lock file and non-canonical file -> still v3
+        fs::write(temp_dir.join("session.lock"), b"").unwrap();
+        assert_eq!(resolve_dsh_session_log(&temp_dir), Some(v3_file.clone()));
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

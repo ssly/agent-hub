@@ -1,7 +1,6 @@
 mod claude_plugin;
 mod commands;
 mod config;
-mod diff;
 mod i18n;
 mod mcp;
 #[allow(dead_code)]
@@ -210,8 +209,6 @@ pub fn run() {
             commands::get_platform_skills,
             commands::get_skill_detail,
             commands::open_skill_folder,
-            commands::get_diff_candidates,
-            commands::diff_skills_cmd,
             commands::get_sync_targets,
             commands::sync_skill_cmd,
             commands::sync_folder_cmd,
@@ -228,7 +225,6 @@ pub fn run() {
             commands::save_mcp_server_cmd,
             commands::delete_mcp_server_cmd,
             commands::import_mcp_server_cmd,
-            commands::preview_mcp_change_cmd,
             commands::list_trash_cmd,
             commands::restore_trash_item_cmd,
             commands::permanently_delete_trash_item_cmd,
