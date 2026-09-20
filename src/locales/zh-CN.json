@@ -227,7 +227,10 @@
     "open_folder_failed": "打开文件夹失败",
     "selected_count": "已选择 {n} 项",
     "batch_copy_n": "复制到... ({n})",
-    "batch_delete_n": "删除选中 ({n})"
+    "batch_delete_n": "删除选中 ({n})",
+    "file_list": "文件列表",
+    "pin": "固定面板",
+    "unpin": "取消固定"
   },
   "action": {
     "sync": "复制",

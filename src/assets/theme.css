@@ -581,43 +581,185 @@
 }
 .ah-skill-detail { max-width: 70rem; }
 .ah-file-workspace {
-  display: grid;
-  grid-template-columns: minmax(11rem, 14rem) minmax(0, 1fr);
-  align-items: start;
-  gap: 14px;
+  position: relative;
+  width: 100%;
 }
 .ah-file-content {
   min-width: 0;
+  width: 100%;
+}
+
+/* Collapsible right file dropdown */
+.ah-file-dropdown-anchor {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 100%;
+  pointer-events: none;
+  z-index: 40;
+}
+
+.ah-file-dropdown-wrap {
   position: sticky;
   top: 16px;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
 }
-.ah-file {
-  display: grid;
-  grid-template-columns: 24px 1fr;
+
+/* Button displaying current file on the right */
+.ah-file-select-btn {
+  display: inline-flex;
   align-items: center;
-  gap: 12px;
-  min-height: 44px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--hairline);
+  gap: 6px;
+  height: 32px;
+  max-width: 18rem;
+  padding: 0 10px;
+  background: var(--surface);
+  color: var(--ink-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
   cursor: pointer;
-  width: 100%;
-  text-align: left;
-  background: transparent;
-  border-left: 0;
-  border-right: 0;
-  border-top: 0;
-  transition: background var(--dur-fast) var(--ease-soft);
+  white-space: nowrap;
+  user-select: none;
+  font-size: 12px;
+  font-weight: 500;
+  transition: all var(--dur-fast) var(--ease-soft);
+  box-shadow: var(--shadow-mist);
 }
-.ah-file:last-child { border-bottom: none; }
-.ah-file:hover { background: var(--hover); }
-.ah-file.is-active { background: var(--accent-soft); }
-.ah-file.is-active .ah-file__name { color: var(--accent); font-weight: 600; }
-.ah-file:hover .ah-file__name { color: var(--accent-strong); }
-.ah-file__icon { color: var(--ink-3); display: flex; }
-.ah-file__name {
-  font-family: var(--font-mono); font-size: 12.5px; color: var(--accent);
-  min-width: 0; white-space: normal; overflow-wrap: anywhere; word-break: break-word;
-  transition: color var(--dur-fast) var(--ease-soft);
+
+.ah-file-select-btn:hover,
+.ah-file-select-btn.is-active {
+  color: var(--accent);
+  background: var(--surface);
+  border-color: var(--accent);
+  box-shadow: var(--shadow-soft);
+}
+
+.ah-file-select-btn__icon {
+  color: var(--accent);
+  display: flex;
+  flex-shrink: 0;
+}
+
+.ah-file-select-btn__name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.ah-file-select-btn__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: var(--radius-pill);
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  background: var(--accent-soft);
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.ah-file-select-btn__arrow {
+  color: var(--ink-4);
+  flex-shrink: 0;
+  transition: transform var(--dur-fast) var(--ease-soft), color var(--dur-fast) var(--ease-soft);
+}
+
+.ah-file-select-btn:hover .ah-file-select-btn__arrow,
+.ah-file-select-btn.is-active .ah-file-select-btn__arrow {
+  color: var(--accent);
+  transform: rotate(180deg);
+}
+
+/* Dropdown list directly underneath the current file button */
+.ah-file-dropdown-menu {
+  margin-top: 4px;
+  width: 20rem;
+  max-width: calc(100vw - 48px);
+  max-height: 22rem;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-modal);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.ah-file-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-size: 12px;
+  color: var(--ink-2);
+  transition: all var(--dur-fast) var(--ease-soft);
+}
+
+.ah-file-dropdown-item:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.ah-file-dropdown-item.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 500;
+  border-color: var(--accent-mid);
+}
+
+.ah-file-dropdown-item__icon {
+  color: var(--ink-3);
+  display: flex;
+  flex-shrink: 0;
+}
+
+.ah-file-dropdown-item.is-active .ah-file-dropdown-item__icon {
+  color: var(--accent);
+}
+
+.ah-file-dropdown-item__name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.ah-file-dropdown-item__check {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+/* Dropdown fade animation */
+.dropdown-fade-enter-active,
+.dropdown-fade-leave-active {
+  transition: opacity var(--dur-fast) var(--ease-soft), transform var(--dur-fast) var(--ease-soft);
+}
+
+.dropdown-fade-enter-from,
+.dropdown-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
 }
 
 .ah-file-viewer {
@@ -1276,8 +1418,6 @@
   .ah-meta-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ah-thead    { display: none; }
   .ah-row { grid-template-columns: 1fr auto; height: auto; padding: 12px 16px; }
-  .ah-file-workspace { grid-template-columns: 1fr; }
-  .ah-file-content { position: static; }
 }
 
 /* ============================================================

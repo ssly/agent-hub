@@ -227,7 +227,10 @@
     "open_folder_failed": "Failed to open folder",
     "selected_count": "{n} selected",
     "batch_copy_n": "Copy to... ({n})",
-    "batch_delete_n": "Delete Selected ({n})"
+    "batch_delete_n": "Delete Selected ({n})",
+    "file_list": "File List",
+    "pin": "Pin Panel",
+    "unpin": "Unpin Panel"
   },
   "action": {
     "sync": "Copy",
