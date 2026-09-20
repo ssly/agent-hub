@@ -8,6 +8,7 @@ import { usePluginsStore } from '@/stores/plugins'
 import { useSessionsStore } from '@/stores/sessions'
 import { useSwitchStore } from '@/stores/switch'
 import { platform } from '@/lib/utils'
+import * as api from '@/lib/api'
 
 import { useToast } from '@/composables/useToast'
 import { useHoverResetBool } from '@/composables/useHoverReset'
@@ -78,10 +79,34 @@ const breadcrumb = computed(() => {
 })
 
 const showBack = computed(() => appStore.currentTab === 'plugins' && appStore.currentView !== 'plugins')
+const showOpenFolder = computed(() =>
+  appStore.currentTab === 'plugins'
+  && appStore.currentView === 'detail'
+  && !!skillsStore.selectedSkillName
+)
 const showSync = computed(() => pluginsStore.isGlobalScope
   && appStore.currentTab === 'plugins'
   && appStore.currentView === 'detail')
 const showDelete = showSync
+
+const openingFolder = ref(false)
+
+async function handleOpenFolderClick() {
+  if (!skillsStore.selectedPlatformId || !skillsStore.selectedSkillName || openingFolder.value) return
+  openingFolder.value = true
+  try {
+    await api.openSkillFolder(
+      skillsStore.selectedPlatformId,
+      skillsStore.selectedSkillName,
+      skillsStore.selectedFolder,
+      skillsStore.workspaceDirectory,
+    )
+  } catch (e: any) {
+    showToast(t('skill.open_folder_failed'), 'error')
+  } finally {
+    openingFolder.value = false
+  }
+}
 
 const { armed: confirmingDelete, arm: armConfirmDelete, reset: resetConfirmDelete } = useHoverResetBool()
 
@@ -134,6 +159,14 @@ async function handleSyncClick() {
 
     <div class="flex-1" />
 
+    <button
+      v-if="showOpenFolder"
+      class="btn btn-secondary btn-sm"
+      :disabled="openingFolder"
+      @click="handleOpenFolderClick"
+    >
+      {{ t('skill.open_folder') }}
+    </button>
 
     <button v-if="showSync" class="btn btn-secondary btn-sm" @click="handleSyncClick">
       {{ t('action.sync') }}

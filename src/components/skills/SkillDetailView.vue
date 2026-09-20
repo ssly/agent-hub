@@ -2,20 +2,17 @@
 import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSkillsStore } from '@/stores/skills'
-import { useToast } from '@/composables/useToast'
-import { formatBytes, avatarToneFromName } from '@/lib/utils'
+import { formatBytes } from '@/lib/utils'
 import * as api from '@/lib/api'
-import { FolderOpen, Link2, FileText, ChevronDown, Check, FileCode } from 'lucide-vue-next'
+import { Link2, FileText, ChevronDown, Check, FileCode } from 'lucide-vue-next'
 import AppLoading from '@/components/ui/AppLoading.vue'
 
 const { t } = useI18n()
 const store = useSkillsStore()
-const { showToast } = useToast()
 const detail = ref<any>(null)
 const activeFile = ref<string | null>(null)
 const fileContent = ref('')
 const loading = ref(true)
-const openingFolder = ref(false)
 
 const isDropdownOpen = ref(false)
 let leaveTimer: ReturnType<typeof setTimeout> | null = null
@@ -81,24 +78,6 @@ async function loadFile(path: string) {
   }
 }
 
-// Reveal this skill's directory in the OS file manager.
-async function handleOpenFolder() {
-  if (!store.selectedPlatformId || !store.selectedSkillName || openingFolder.value) return
-  openingFolder.value = true
-  try {
-    await api.openSkillFolder(
-      store.selectedPlatformId,
-      store.selectedSkillName,
-      store.selectedFolder,
-      store.workspaceDirectory,
-    )
-  } catch (e: any) {
-    showToast(t('skill.open_folder_failed'), 'error')
-  } finally {
-    openingFolder.value = false
-  }
-}
-
 onMounted(loadDetail)
 
 onBeforeUnmount(() => {
@@ -116,25 +95,11 @@ watch(() => [store.selectedSkillName, store.selectedFolder], loadDetail)
       <template v-else-if="detail">
         <!-- Hero -->
         <header class="ah-hero">
-          <div :class="['ah-hero__icon', `ah-hero__icon--${avatarToneFromName(detail.name)}`]">
-            {{ (detail.name || '?').charAt(0).toUpperCase() }}
+          <div class="flex items-center gap-2.5 flex-wrap">
+            <h1 class="ah-hero__title mb-0">{{ detail.name }}</h1>
+            <span v-if="detail.version" class="ah-version-chip ah-version-chip--hero">v{{ detail.version }}</span>
           </div>
-          <div class="min-w-0 flex-1">
-            <div class="flex items-center gap-2.5 flex-wrap">
-              <h1 class="ah-hero__title mb-0">{{ detail.name }}</h1>
-              <span v-if="detail.version" class="ah-version-chip ah-version-chip--hero">v{{ detail.version }}</span>
-            </div>
-            <p v-if="detail.description" class="ah-hero__subtitle mt-1.5">{{ detail.description }}</p>
-          </div>
-          <button
-            class="btn btn-secondary flex items-center gap-1.5 flex-shrink-0"
-            :disabled="openingFolder"
-            :title="t('skill.open_folder')"
-            @click="handleOpenFolder"
-          >
-            <FolderOpen :size="15" />
-            {{ t('skill.open_folder') }}
-          </button>
+          <p v-if="detail.description" class="ah-hero__subtitle mt-1.5">{{ detail.description }}</p>
         </header>
 
         <!-- Skill location path + symlink target if present -->
