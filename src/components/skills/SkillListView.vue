@@ -208,7 +208,6 @@ onUnmounted(() => {
                 <div class="ah-row__name">
                   <div class="ah-row__name-text">
                     <span class="ah-row__skill-name">{{ skill.name }}</span>
-                    <span v-if="skill.version" class="ah-version-chip">v{{ skill.version }}</span>
                     <span
                       v-if="skill.is_symlink"
                       class="ah-symlink-icon"
@@ -220,7 +219,7 @@ onUnmounted(() => {
                 </div>
 
                 <!-- Description -->
-                <div class="ah-row__desc">{{ skill.description || '' }}</div>
+                <div class="ah-row__desc" :title="skill.description || undefined">{{ skill.description || '' }}</div>
 
                 <!-- Size -->
                 <div class="ah-row__size">{{ formatBytes(skill.total_size || 0) }}</div>
@@ -260,3 +259,23 @@ onUnmounted(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+.ah-row__name-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+}
+.ah-row__skill-name {
+  line-height: 1.25;
+}
+.ah-symlink-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transform: translateY(1.5px);
+  flex-shrink: 0;
+}
+</style>
