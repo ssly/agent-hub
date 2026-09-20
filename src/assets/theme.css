@@ -925,7 +925,7 @@
 .ah-sidebar__header {
   /* Fixed height shared with .ah-toolbar so the hairlines under both top
      bars sit on the same line. Strictly follows 4px/8px design grid. */
-  height: 36px;
+  height: 40px;
   padding: 0 12px 0 16px;
   border-bottom: 1px solid var(--hairline);
   display: flex; align-items: center; justify-content: space-between;
@@ -1021,7 +1021,7 @@
    ============================================================ */
 .ah-toolbar {
   /* Same fixed height as .ah-sidebar__header: their bottom hairlines align. */
-  height: 36px;
+  height: 40px;
   background: var(--surface);
   border-bottom: 1px solid var(--hairline);
   box-shadow: var(--shadow-mist);
