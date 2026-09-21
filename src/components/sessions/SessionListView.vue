@@ -7,11 +7,15 @@ import { useHoverResetBool } from '@/composables/useHoverReset'
 import * as api from '@/lib/api'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import AppLoading from '@/components/ui/AppLoading.vue'
-import { Folder } from 'lucide-vue-next'
+import { Folder, MessagesSquare, PanelRightClose, PanelRightOpen, Play } from 'lucide-vue-next'
 import AppSelect from '@/components/ui/AppSelect.vue'
+import AgentIcon from '@/components/agents/AgentIcon.vue'
 import SessionCard from '@/components/sessions/SessionCard.vue'
+import SessionClientIcon from '@/components/sessions/SessionClientIcon.vue'
 import SessionMessagesModal from '@/components/sessions/SessionMessagesModal.vue'
+import SessionMessagesPanel from '@/components/sessions/SessionMessagesPanel.vue'
 import SessionResumeModal from '@/components/sessions/SessionResumeModal.vue'
+import SessionStatsView from '@/components/sessions/SessionStatsView.vue'
 
 const { t, locale } = useI18n()
 const store = useSessionsStore()
@@ -37,6 +41,65 @@ const pathSelectOptions = computed(() =>
 const loadMoreSentinel = ref<HTMLElement | null>(null)
 const listBody = ref<HTMLElement | null>(null)
 let observer: IntersectionObserver | null = null
+
+// ---------------------------------------------------------------------------
+// Wide-screen master–detail. A split only earns its keep when BOTH panes still
+// fit what they are for, so the threshold is the sum of their comfortable
+// widths rather than "whatever is left over":
+//   list  30rem — a full badge/time row plus a title that is not chopped short
+//   pane  44rem — a transcript measure you can actually read
+// Below that, one full-width column beats two cramped ones (see the fluid /
+// roomy content modifiers below). Keep these numbers in step with the
+// --session-* variables in the style block.
+// Measured on the page element, not the viewport: the sidebar can collapse (or
+// be a different width) without the window changing size.
+// ---------------------------------------------------------------------------
+const SPLIT_MIN_WIDTH = 480 + 704 // 30rem list + 44rem pane
+const PANE_COLLAPSED_KEY = 'ah-session-pane-collapsed'
+
+const pageRoot = ref<HTMLElement | null>(null)
+const isSplit = ref(false)
+const paneCollapsed = ref(localStorage.getItem(PANE_COLLAPSED_KEY) === '1')
+let pageObserver: ResizeObserver | null = null
+
+function measurePage() {
+  isSplit.value = (pageRoot.value?.clientWidth || 0) >= SPLIT_MIN_WIDTH
+}
+
+function togglePane() {
+  paneCollapsed.value = !paneCollapsed.value
+  try {
+    localStorage.setItem(PANE_COLLAPSED_KEY, paneCollapsed.value ? '1' : '0')
+  } catch {
+    /* Preference only — a blocked storage must not break the toggle. */
+  }
+}
+
+/** Card click: preview in the pane when it is open, modal otherwise. */
+function handleOpen(session: any) {
+  if (isSplit.value) store.openPreview(session)
+  else store.openMessages(session)
+}
+
+function previewTitle(session: any): string {
+  return session?.title || t('session.untitled')
+}
+
+/** Same badge resolution as the list cards, so the pane names the client the
+ *  same way the selected row does. */
+const previewBadge = computed(() => sessionBadge(store.previewSession || {}))
+const previewBadgeAgentId = computed(() => sessionBadgeAgentId(store.previewSession || {}) || '')
+const previewBadgeIcon = computed(() => sessionBadgeIcon(store.previewSession || {}) || '')
+
+/** Empty-pane copy. When the list itself is empty the pane only echoes the
+ *  list's own message (one quiet line, no illustration, no second paragraph). */
+const paneEmptyTitle = computed(() => {
+  if (store.sessions.length > 0) return t('session.preview_empty')
+  return store.directoryFilter ? t('session.path_filter_empty') : t('session.no_sessions')
+})
+const paneEmptyHint = computed(() =>
+  store.sessions.length > 0 ? t('session.preview_empty_hint') : '',
+)
 
 function setupObserver() {
   if (observer) observer.disconnect()
@@ -84,6 +147,11 @@ function onKeydown(event: KeyboardEvent) {
 
 onMounted(() => {
   setupObserver()
+  measurePage()
+  if (typeof ResizeObserver !== 'undefined') {
+    pageObserver = new ResizeObserver(measurePage)
+    if (pageRoot.value) pageObserver.observe(pageRoot.value)
+  }
   window.addEventListener('keydown', onKeydown)
 })
 
@@ -93,6 +161,7 @@ watch([loadMoreSentinel, listBody], () => {
 
 onUnmounted(() => {
   observer?.disconnect()
+  pageObserver?.disconnect()
   window.removeEventListener('keydown', onKeydown)
 })
 
@@ -250,7 +319,7 @@ function clearSessionSearch() {
 </script>
 
 <template>
-  <div class="session-page view-enter">
+  <div ref="pageRoot" class="session-page view-enter" :class="{ 'session-page--split': isSplit }">
       <AppLoading v-if="store.isLoading" class="py-16">{{ t('session.loading_messages') }}</AppLoading>
 
       <div v-else-if="store.loadError" class="p-6" style="color: var(--danger)">{{ store.loadError }}</div>
@@ -258,6 +327,9 @@ function clearSessionSearch() {
       <div v-else-if="!store.selectedPlatformId" class="flex flex-col items-center justify-center py-20">
         <p style="color: var(--ink-3)">{{ t('session.select_platform') }}</p>
       </div>
+
+      <!-- "All": aggregate statistics only — no list, no reading pane. -->
+      <SessionStatsView v-else-if="store.isStatsView" />
 
       <template v-else>
         <!-- Search results view -->
@@ -273,7 +345,7 @@ function clearSessionSearch() {
             </div>
           </div>
 
-          <div class="session-page__body">
+          <div class="session-page__body session-page__body--single">
           <div class="ah-view-content">
           <AppLoading v-if="store.isSearching" class="py-12">{{ t('session.loading_messages') }}</AppLoading>
 
@@ -345,7 +417,7 @@ function clearSessionSearch() {
         <!-- Standard session list view -->
         <template v-else>
           <div
-            class="ah-filter-bar"
+            class="ah-filter-bar ah-filter-bar--list"
             :class="{ 'ah-filter-bar--selecting': store.selectedCount > 0 }"
           >
             <div class="ah-filter-bar__inner flex items-center justify-between gap-3">
@@ -415,18 +487,39 @@ function clearSessionSearch() {
                       : t('session.batch_delete_n', { n: store.selectedCount }) }}
                 </button>
               </template>
+              <!-- Reading-pane toggle: only exists once the window is wide
+                   enough for the split layout (below that it is the modal). -->
+              <button
+                v-if="isSplit"
+                v-tooltip="paneCollapsed ? t('session.preview_show') : t('session.preview_hide')"
+                type="button"
+                class="btn btn-secondary btn-sm btn-icon"
+                :aria-label="paneCollapsed ? t('session.preview_show') : t('session.preview_hide')"
+                :aria-pressed="!paneCollapsed"
+                @click="togglePane"
+              >
+                <PanelRightOpen v-if="paneCollapsed" :size="14" />
+                <PanelRightClose v-else :size="14" />
+              </button>
             </div>
             </div>
           </div>
 
-          <div ref="listBody" class="session-page__body">
-          <div class="ah-view-content">
+          <div
+            class="session-page__body"
+            :class="{ 'session-page__body--split': isSplit && !paneCollapsed }"
+          >
+          <div ref="listBody" class="session-page__list">
+          <div class="ah-view-content" :class="{
+            'ah-view-content--fluid': !isSplit,
+            'ah-view-content--roomy': isSplit && paneCollapsed,
+          }">
           <!-- Session Cards -->
           <div v-if="store.sessions.length === 0" class="py-8 text-center" style="color: var(--ink-3)">
             {{ store.directoryFilter ? t('session.path_filter_empty') : t('session.no_sessions') }}
           </div>
 
-          <div class="space-y-1.5">
+          <div class="session-list-grid">
             <SessionCard
               v-for="session in store.sessions"
               :key="session.id"
@@ -438,7 +531,8 @@ function clearSessionSearch() {
               :subtitle="session.project_path || t('session.no_project')"
               :selectable="true"
               :selected="!!store.selectedMap[session.id]"
-              @open="store.openMessages(session)"
+              :active="isSplit && !paneCollapsed && !store.isStatsView && store.previewSession?.id === session.id"
+              @open="handleOpen(session)"
               @resume="store.openResume(session)"
               @delete="handleDelete(session)"
               @select="handleSelect(session.id, $event)"
@@ -457,6 +551,76 @@ function clearSessionSearch() {
             </span>
           </div>
           </div>
+          </div>
+
+          <!-- Reading pane. The store keeps it filled (newest session, or the
+               last one previewed on this platform), so the empty state below
+               only appears when the platform/filter really has no session. -->
+          <aside
+            v-if="isSplit && !paneCollapsed && !store.isStatsView"
+            class="session-preview"
+          >
+            <template v-if="store.previewSession">
+              <!-- Reading column: past a certain width a full-bleed transcript
+                   is as unreadable as a full-bleed list row, so the pane keeps
+                   a measure and lets its background carry the rest. -->
+              <div class="session-preview__inner">
+              <header class="session-preview__head">
+                <span class="session-preview__badge">
+                  <SessionClientIcon
+                    v-if="previewBadgeIcon === 'chatgpt'"
+                    client-id="chatgpt"
+                    :size="12"
+                  />
+                  <AgentIcon v-else-if="previewBadgeAgentId" :agent-id="previewBadgeAgentId" :size="12" />
+                  {{ previewBadge }}
+                </span>
+                <h3
+                  v-tooltip.clamp="previewTitle(store.previewSession)"
+                  class="session-preview__title truncate"
+                >
+                  {{ previewTitle(store.previewSession) }}
+                </h3>
+                <div class="session-preview__actions">
+                  <button
+                    class="btn btn-secondary btn-sm"
+                    @click="store.openResume(store.previewSession)"
+                  >
+                    <Play :size="12" />
+                    {{ t('session.resume') }}
+                  </button>
+                  <button
+                    v-tooltip="t('session.preview_hide')"
+                    type="button"
+                    class="btn btn-secondary btn-sm btn-icon"
+                    :aria-label="t('session.preview_hide')"
+                    @click="togglePane"
+                  >
+                    <PanelRightClose :size="14" />
+                  </button>
+                </div>
+              </header>
+
+              <SessionMessagesPanel
+                :active="true"
+                :platform-id="store.previewSession.platform_id || store.selectedPlatformId"
+                :session-id="store.previewSession.id"
+                :project-path="store.previewSession.project_path"
+                :model="store.previewSession.model"
+                :tokens="store.previewSession.tokens_used"
+                :started-at="store.previewSession.started_at"
+              />
+              </div>
+            </template>
+
+            <!-- No illustration on purpose: this pane is part of a list view,
+                 and the list next to it already states the same thing. -->
+            <div v-else class="session-preview__empty">
+              <MessagesSquare :size="26" />
+              <strong>{{ paneEmptyTitle }}</strong>
+              <span v-if="paneEmptyHint">{{ paneEmptyHint }}</span>
+            </div>
+          </aside>
           </div>
         </template>
 
@@ -491,13 +655,148 @@ function clearSessionSearch() {
   flex-direction: column;
   overflow: hidden;
   min-height: 0;
+  /* List gutter + column widths, shared by the filter bar and the split body so
+     the toolbar's left edge stays on the cards' left edge in both layouts.
+     The split minimum (see SPLIT_MIN_WIDTH) is --session-list-min +
+     --session-pane-min: 480 + 704 = 1184px of content. */
+  --session-list-min: 30rem;
+  --session-list-col: 34rem;
+  --session-pane-min: 44rem;
+  --session-list-pad: 24px;
 }
+.session-page--split {
+  --session-list-pad: 20px;
+}
+/* The body never scrolls itself: the list (and, in split mode, the reading
+   pane) own their scrollbars, so the two panes scroll independently. */
 .session-page__body {
   flex: 1;
   min-height: 0;
+  display: flex;
+}
+.session-page__list {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 14px var(--session-list-pad) 24px;
+}
+/* Split layout: the list starts at its comfortable minimum and grows to
+   --session-list-col; the pane keeps at least --session-pane-min and takes the
+   rest. Both sides are therefore always usable — the split is only allowed to
+   happen once those two minimums fit side by side. */
+.session-page__body--split {
+  display: grid;
+  grid-template-columns: minmax(var(--session-list-min), var(--session-list-col)) minmax(var(--session-pane-min), 1fr);
+}
+/* Search results keep the pre-split shape: one scrolling column. */
+.session-page__body--single {
+  display: block;
   overflow-y: auto;
   padding: 14px 24px 24px;
 }
+/* Session cards. One column while the pane is open (that column is only
+   30–34rem wide anyway), a responsive grid whenever the list owns the window:
+   one row stretched over 1000px+ wastes exactly the space it just reclaimed.
+   auto-fill drops back to a single column as soon as a card would go under
+   24rem, which also covers the narrow and search layouts. */
+.session-list-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(24rem, 100%), 1fr));
+  gap: 6px 12px;
+}
+/* The list branch's toolbar tracks the list column in every layout: it starts
+   on the cards' left edge and uses the full row (the right-hand group — path
+   filter, batch actions — needs the room). The search branch has its own bar
+   and keeps the centred readable column. */
+.ah-filter-bar--list {
+  padding-left: var(--session-list-pad);
+  padding-right: var(--session-list-pad);
+}
+.ah-filter-bar--list .ah-filter-bar__inner {
+  max-width: none;
+  margin-left: 0;
+  margin-right: 0;
+}
+/* No room for two panes: one column, and it fills the window (the list is the
+   only thing on screen, so capping it would just move the emptiness inward). */
+.ah-view-content--fluid {
+  max-width: none;
+}
+/* Two panes but the reader collapsed the second one: keep a generous measure
+   instead of stretching rows across an ultrawide display. */
+.ah-view-content--roomy {
+  max-width: 72rem;
+}
+
+/* ---- Reading pane -------------------------------------------------------- */
+.session-preview {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 12px 18px 16px;
+  border-left: 1px solid var(--hairline);
+  background: var(--surface);
+}
+/* Readable measure, hugging the list column: past a certain width a full-bleed
+   transcript is as unreadable as a full-bleed list row, so the pane keeps a
+   measure and lets the leftover space fall at the window edge instead of
+   splitting it into two voids around the text. */
+.session-preview__inner {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 60rem;
+  margin-right: auto;
+}
+.session-preview__head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 2px 10px;
+}
+.session-preview__badge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+.session-preview__title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.session-preview__actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+/* Same shape as the Monitor's empty state: icon + one line (+ one hint). */
+.session-preview__empty {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--ink-4);
+  text-align: center;
+}
+.session-preview__empty strong { color: var(--ink-2); font-size: 14px; font-weight: 500; }
+.session-preview__empty span { font-size: 12px; }
+
 /* Batch-mode confirm chip reuses the card delete styling; it lives outside
    SessionCard so the classes are duplicated here. */
 .session-card__delete {

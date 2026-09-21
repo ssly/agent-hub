@@ -163,6 +163,39 @@ export async function exportSessionsHtml(
 export const searchSessionMessages = (platformId: string, query: string) =>
   invoke<any[]>('search_session_messages', { platformId, query })
 
+/** Message tally as the transcript renders it: `user` counts every prompt,
+ *  `assistant` counts turns (consecutive assistant records are one reply). */
+export interface SessionMessageStats {
+  total: number
+  user: number
+  assistant: number
+}
+
+export interface AgentSessionStats {
+  platform_id: string
+  display_name: string
+  session_count: number
+  messages: SessionMessageStats
+  last_active_at: number
+  failed_sessions: number
+}
+
+export interface SessionStatsReport {
+  days: number
+  since: number
+  generated_at: number
+  session_count: number
+  totals: SessionMessageStats
+  agents: AgentSessionStats[]
+  inactive_agents: number
+}
+
+export const getSessionMessageStats = (platformId: string, sessionId: string) =>
+  invoke<SessionMessageStats>('get_session_message_stats', { platformId, sessionId })
+
+export const getSessionStats = (days: number, pathFilter?: string | null) =>
+  invoke<SessionStatsReport>('get_session_stats', { days, pathFilter: pathFilter || null })
+
 // Trash
 export const listTrash = () => invoke<any[]>('list_trash_cmd')
 export const restoreTrashItem = (id: string, overwrite = false) =>

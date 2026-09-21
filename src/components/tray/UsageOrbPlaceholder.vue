@@ -26,13 +26,12 @@ withDefaults(defineProps<{
   >
     <div class="usage-orb-ph__graph" aria-hidden="true">
       <svg viewBox="0 0 180 180">
-        <!-- Thin echo of the orb ring: keeps the footprint without alarm. -->
-        <circle class="ph-ring" cx="90" cy="90" r="80" />
-        <!-- Soft dashed fill hint -->
-        <circle class="ph-dash" cx="90" cy="90" r="72" />
-        <!-- Soft badge disc anchoring the center icon (empty state only — the
-             error state floats a bare, slightly larger "!"). -->
-        <circle v-if="kind !== 'error'" class="ph-badge" cx="90" cy="90" r="40" />
+        <!-- Thin echo of the orb sphere: keeps the footprint without alarm. -->
+        <circle class="ph-ring" cx="90" cy="90" r="76" />
+        <!-- Soft inner bezel hint -->
+        <circle class="ph-dash" cx="90" cy="90" r="74.5" />
+        <!-- Soft badge disc anchoring the center icon -->
+        <circle v-if="kind !== 'error'" class="ph-badge" cx="90" cy="90" r="38" />
       </svg>
       <div class="usage-orb-ph__center">
         <CircleAlert v-if="kind === 'error'" :size="mini ? 26 : 28" class="usage-orb-ph__icon" />

@@ -658,7 +658,10 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.session-monitor-page { max-width: 960px; margin: 0 auto; padding: 28px 32px 48px; }
+/* The panel leaves a lot of white space at 960px on a wide window, and one
+   full-width card row wastes whatever it reclaimed; the card grid below uses
+   the room instead. Kept in sync with the fluid/roomy session list. */
+.session-monitor-page { max-width: min(100%, 88rem); margin: 0 auto; padding: 28px 32px 48px; }
 .session-monitor-heading { align-items: flex-end; }
 .session-monitor-heading__actions { display: flex; align-items: center; gap: 8px; flex: none; }
 .session-monitor-subtitle { margin-top: 5px; color: var(--ink-3); font-size: 13px; }
@@ -681,7 +684,13 @@ onUnmounted(() => {
 .session-list-header { display: flex; align-items: center; justify-content: space-between; margin: 14px 0 8px; }
 .session-list-header h2 { color: var(--ink); font: 600 15px/1.2 var(--font-serif); }
 .session-list-header__actions { display: flex; align-items: center; gap: 8px; }
-.session-monitor-list { display: flex; flex-direction: column; gap: 8px; }
+/* auto-fill keeps it to one column as soon as a card would drop under 24rem,
+   so narrow windows and the 760px breakpoint below stay single-column. */
+.session-monitor-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(24rem, 100%), 1fr));
+  gap: 8px 12px;
+}
 /* Q&A line inside the shared card's default slot (monitor-specific body). */
 .session-row__line { min-width: 0; margin-top: 3px; font-size: 12.5px; line-height: 1.45; }
 .session-row__line > p { min-width: 0; overflow: hidden; color: var(--ink-2); text-overflow: ellipsis; white-space: nowrap; }

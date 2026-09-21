@@ -239,6 +239,8 @@ pub fn run() {
             commands::get_session_resume_preview,
             commands::get_session_messages,
             commands::search_session_messages,
+            commands::get_session_message_stats,
+            commands::get_session_stats,
             commands::delete_session,
             commands::delete_sessions,
             commands::export_sessions_html,

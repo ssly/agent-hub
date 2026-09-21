@@ -4,7 +4,7 @@ Agent Hub 的项目上下文文档，供 AI Agent 和开发者快速了解项目
 
 ## 项目概述
 
-Agent Hub 是一个基于 Tauri 2.x 的桌面应用，用于统一管理本地多个 AI Agent 平台的插件（Skill、MCP Server、Claude Code 原生插件）、会话和账号。当前版本 **0.27.7**。
+Agent Hub 是一个基于 Tauri 2.x 的桌面应用，用于统一管理本地多个 AI Agent 平台的插件（Skill、MCP Server、Claude Code 原生插件）、会话和账号。当前版本 **0.28.0**。
 
 ## 架构
 
@@ -168,7 +168,7 @@ Skill 复制（`sync/service.rs`）支持“复制文件（推荐）”与“创
 
 ### 会话浏览器
 
-每个平台有独立的会话适配器（`claude.rs`、`codex.rs`、`kiro.rs`、`grok.rs`、`kimi.rs`、`qwen.rs`、`zcode.rs`、`workbuddy.rs`、`dsh.rs`、`omp.rs`），读取各自的会话存储格式。支持分页浏览、消息查看、终端恢复（ZCode 是 Electron 桌面应用，无终端恢复命令，`build_resume_command` 对其返回明确错误，由恢复弹窗展示），以及将批量选中的会话导出为可搜索、自包含的 HTML 文件。DeepSeek Harness 会话（`dsh.rs`）：列表扫描 `~/.dsh/sessions/<项目>/<sessionId>/session.jsonl.zstd`（zstd 拼接帧容器：每批追加一个 frame，用 `ruzstd`（纯 Rust，无 C 依赖）流式解码；首行 `{"type":"session",…}` 头含 id/createdAt/cwd/origin，后续行为事件信封 `{type,seq,time,data}` 或打包 chunk 行 text-chunks/reasoning-chunks/tool-call-chunks——chunk 行只存增量可跳过）；标题/轮数/Token 统计读 `~/.dsh/storages/session_projcache.json`（rows.title/sessionStats/tokenUsage/sessionListMetadata）；消息取 `user/message`（仅 `source.kind=="user"`，过滤 plugin 注入与 goal 轮）与 `assistant/message`（text 块为正文、reasoning 块为思维链；compaction 的 `surfaceOp:{op:"replace"}` 拷贝跳过，避免重复）；子 agent 会话（`origin:"subagent"`）跳过；删除会移除会话目录并同步清理 `workspace.json` 的 sessionIds 与 projcache 表；恢复命令：无终端恢复（`dsh --resume` 只对 headless/tui profile 生效，web 界面在 GUI 内继续），恢复弹窗展示引导错误信息。平台显示名用产品名（如 "Kiro"），具体客户端在会话卡片 badge 上按 `SessionSummary.source` 区分（Kiro 会话全部来自 `~/.kiro/sessions/cli`，只有 kiro-cli 写这里，故 source 固定 `terminal`、badge 标 "Kiro CLI"；Codex 按 `threads.source` 列映射，`vscode`→ChatGPT 客户端）。
+每个平台有独立的会话适配器（`claude.rs`、`codex.rs`、`kiro.rs`、`grok.rs`、`kimi.rs`、`qwen.rs`、`zcode.rs`、`workbuddy.rs`、`dsh.rs`、`omp.rs`），读取各自的会话存储格式。支持分页浏览、消息查看、终端恢复（ZCode 是 Electron 桌面应用，无终端恢复命令，`build_resume_command` 对其返回明确错误，由恢复弹窗展示），以及将批量选中的会话导出为可搜索、自包含的 HTML 文件。**消息统计**：侧边栏 Sessions 列表首项「全部」（伪平台 id `all`，`STATS_PLATFORM_ID`）只展示统计——各 Agent 的会话数/消息数/AI/我 + 汇总（`SessionStatsView.vue`，环形图与堆叠条均为纯 CSS，不引图表库）；`get_session_stats(days, pathFilter)` 按会话最近活动时间圈定 近 1/7/31 天窗口（前端 range 存 localStorage，默认 7 天），逐平台列表→过滤→计数，计数按"面板渲染口径"折叠：每条 user 记录 1 条、连续 assistant 记录算 1 轮（`fold_role_counts`，与 `groupSessionMessages` 一致），结果按 `(platform, sessionId, updated_at)` 记忆化（`session/mod.rs` 的 `message_stats_cache`，仅在该平台当前列表内保留），计数用 6 线程分片，release 下 31 天窗口约 0.5s；单个会话的明细口径由 `get_session_message_stats` 提供，弹窗底部「关闭」行左侧显示「共 N 条 · AI x · 我 y」（面板通过 `stats` 事件上报，独占 footer 的宿主用 `meta-stats=false` 关掉 meta 行里的同一行数字）。DeepSeek Harness 会话（`dsh.rs`）：列表扫描 `~/.dsh/sessions/<项目>/<sessionId>/session.jsonl.zstd`（zstd 拼接帧容器：每批追加一个 frame，用 `ruzstd`（纯 Rust，无 C 依赖）流式解码；首行 `{"type":"session",…}` 头含 id/createdAt/cwd/origin，后续行为事件信封 `{type,seq,time,data}` 或打包 chunk 行 text-chunks/reasoning-chunks/tool-call-chunks——chunk 行只存增量可跳过）；标题/轮数/Token 统计读 `~/.dsh/storages/session_projcache.json`（rows.title/sessionStats/tokenUsage/sessionListMetadata）；消息取 `user/message`（仅 `source.kind=="user"`，过滤 plugin 注入与 goal 轮）与 `assistant/message`（text 块为正文、reasoning 块为思维链；compaction 的 `surfaceOp:{op:"replace"}` 拷贝跳过，避免重复）；子 agent 会话（`origin:"subagent"`）跳过；删除会移除会话目录并同步清理 `workspace.json` 的 sessionIds 与 projcache 表；恢复命令：无终端恢复（`dsh --resume` 只对 headless/tui profile 生效，web 界面在 GUI 内继续），恢复弹窗展示引导错误信息。平台显示名用产品名（如 "Kiro"），具体客户端在会话卡片 badge 上按 `SessionSummary.source` 区分（Kiro 会话全部来自 `~/.kiro/sessions/cli`，只有 kiro-cli 写这里，故 source 固定 `terminal`、badge 标 "Kiro CLI"；Codex 按 `threads.source` 列映射，`vscode`→ChatGPT 客户端）。
 
 ### 会话监听（session_monitor）
 

@@ -2,6 +2,25 @@ import { defineStore } from 'pinia'
 import { ref, computed, reactive } from 'vue'
 import * as api from '@/lib/api'
 
+/** Pseudo-platform of the Sessions sidebar: "All" shows aggregate statistics
+ *  only — no session list, no per-platform search. */
+export const STATS_PLATFORM_ID = 'all'
+
+export type SessionStatsRange = '1d' | '7d' | '31d'
+
+const STATS_RANGE_KEY = 'ah-session-stats-range'
+const STATS_RANGE_DAYS: Record<SessionStatsRange, number> = { '1d': 1, '7d': 7, '31d': 31 }
+
+function readStatsRange(): SessionStatsRange {
+  try {
+    const stored = localStorage.getItem(STATS_RANGE_KEY)
+    if (stored === '1d' || stored === '7d' || stored === '31d') return stored
+  } catch {
+    /* Private mode: fall through to the default window. */
+  }
+  return '7d'
+}
+
 export const useSessionsStore = defineStore('sessions', () => {
   const platforms = ref<any[]>([])
   const sessions = ref<any[]>([])
@@ -31,6 +50,58 @@ export const useSessionsStore = defineStore('sessions', () => {
   // Directory filter for path-first session exploration (mirrors plugins workspace)
   const directoryFilter = ref<string | null>(localStorage.getItem('ah-sessions-directory-filter') || null)
 
+  // ---------------------------------------------------------------------------
+  // Statistics ("All" view)
+  // ---------------------------------------------------------------------------
+  // Counted by the backend (one transcript pass per session, memoized there),
+  // so range switches reuse everything the previous window already counted.
+  // Kept in the store rather than the view: entering the Sessions tab remounts
+  // the view, and the tallies should not flash away in between.
+  const statsRange = ref<SessionStatsRange>(readStatsRange())
+  const stats = ref<api.SessionStatsReport | null>(null)
+  const statsLoading = ref(false)
+  const statsError = ref('')
+
+  const isStatsView = computed(() => selectedPlatformId.value === STATS_PLATFORM_ID)
+
+  async function loadStats() {
+    statsLoading.value = true
+    statsError.value = ''
+    try {
+      stats.value = await api.getSessionStats(STATS_RANGE_DAYS[statsRange.value], directoryFilter.value)
+    } catch (e: any) {
+      statsError.value = e?.SyncError || e?.message || String(e)
+    } finally {
+      statsLoading.value = false
+    }
+  }
+
+  async function setStatsRange(range: SessionStatsRange) {
+    if (range === statsRange.value && stats.value) return
+    statsRange.value = range
+    try {
+      localStorage.setItem(STATS_RANGE_KEY, range)
+    } catch {
+      /* Preference only — a blocked storage must not break the switch. */
+    }
+    await loadStats()
+  }
+
+  /** Enter the "All" statistics view. */
+  async function selectStats() {
+    selectedPlatformId.value = STATS_PLATFORM_ID
+    selectedPathFilter.value = 'all'
+    searchQuery.value = ''
+    searchResults.value = []
+    clearSelection()
+    isLoading.value = true
+    try {
+      await loadStats()
+    } finally {
+      isLoading.value = false
+    }
+  }
+
   async function refreshPlatforms(keepPathFilter = false) {
     loadError.value = ''
     try {
@@ -42,14 +113,24 @@ export const useSessionsStore = defineStore('sessions', () => {
     if (platforms.value.length === 0) {
       selectedPlatformId.value = null
       sessions.value = []
+      previewSession.value = null
+      previewPlatformId.value = null
       return
     }
-    const exists = platforms.value.some(p => p.id === selectedPlatformId.value)
-    if (!exists) {
-      selectedPlatformId.value = platforms.value[0].id
+    // "All" is not one of the counted platforms, but stays selectable as long
+    // as there is anything at all to aggregate.
+    if (selectedPlatformId.value !== STATS_PLATFORM_ID) {
+      const exists = platforms.value.some(p => p.id === selectedPlatformId.value)
+      if (!exists) {
+        selectedPlatformId.value = platforms.value[0].id
+      }
     }
     if (!keepPathFilter) {
       selectedPathFilter.value = directoryFilter.value || 'all'
+    }
+    if (isStatsView.value) {
+      await loadStats()
+      return
     }
     await loadSessions(false)
   }
@@ -63,6 +144,79 @@ export const useSessionsStore = defineStore('sessions', () => {
   function openMessages(session: any) {
     activeSession.value = session
     messagesModalOpen.value = true
+    rememberPreview(selectedPlatformId.value || session?.platform_id, session?.id)
+  }
+
+  // ---------------------------------------------------------------------------
+  // Preview session — the wide-screen reading pane of the Sessions browser
+  // ---------------------------------------------------------------------------
+  // A third kind of "current session", deliberately kept apart from selectedMap
+  // (batch checkboxes) and from the messages modal, which stays the narrow-window
+  // path. Nothing here fetches: the pane and the modal share SessionMessagesPanel,
+  // which loads messages itself. The last previewed session per platform is
+  // remembered so coming back to a platform lands where you left off.
+  const PREVIEW_MEMORY_KEY = 'ah-session-preview'
+  const previewSession = ref<any | null>(null)
+  // Platform the current preview was picked for. Session ids are only unique
+  // per platform, so "is this row still the preview?" must be asked per
+  // platform — otherwise switching platforms can silently keep the old row.
+  const previewPlatformId = ref<string | null>(null)
+
+  function readPreviewMemory(): Record<string, string> {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(PREVIEW_MEMORY_KEY) || '{}')
+      return parsed && typeof parsed === 'object' ? parsed : {}
+    } catch {
+      return {}
+    }
+  }
+
+  function rememberPreview(platformId: string | null | undefined, sessionId: string | null | undefined) {
+    if (!platformId || !sessionId) return
+    try {
+      const memory = readPreviewMemory()
+      memory[platformId] = sessionId
+      localStorage.setItem(PREVIEW_MEMORY_KEY, JSON.stringify(memory))
+    } catch {
+      /* Private mode / quota: the memory is a nicety, never a requirement. */
+    }
+  }
+
+  /** Decide what the pane shows after the list changed: keep the current preview
+   *  while it is still listed, else restore this platform's remembered session,
+   *  else fall back to the newest one (the list is updated_at DESC). Never pulls
+   *  extra pages to hunt for a remembered id that is not loaded yet. */
+  function ensurePreview() {
+    const list = sessions.value
+    const platformId = selectedPlatformId.value
+    if (list.length === 0 || !platformId) {
+      previewSession.value = null
+      previewPlatformId.value = null
+      return
+    }
+    const currentId = previewSession.value?.id
+    const kept =
+      previewPlatformId.value === platformId && currentId
+        ? list.find((session: any) => session.id === currentId)
+        : null
+    if (kept) {
+      // Re-point at the freshly loaded row so title/time/metadata stay current.
+      previewSession.value = kept
+      return
+    }
+    const rememberedId = readPreviewMemory()[platformId]
+    previewSession.value = (rememberedId && list.find((session: any) => session.id === rememberedId)) || list[0]
+    previewPlatformId.value = platformId
+  }
+
+  function openPreview(session: any) {
+    previewSession.value = session
+    // Keyed by the browsed platform, not by the row's own platform_id: the
+    // memory is read back with selectedPlatformId, and the two can differ
+    // (a client-source row, a platform whose adapter relabels sessions).
+    const platformId = selectedPlatformId.value || session?.platform_id || null
+    previewPlatformId.value = platformId
+    rememberPreview(platformId, session?.id)
   }
 
   async function loadSessions(append: boolean) {
@@ -90,6 +244,7 @@ export const useSessionsStore = defineStore('sessions', () => {
         loadError.value = e?.SyncError || e?.message || String(e)
       }
     }
+    ensurePreview()
   }
 
   async function setDirectoryFilter(directory: string | null) {
@@ -113,6 +268,10 @@ export const useSessionsStore = defineStore('sessions', () => {
   }
 
   async function selectPlatform(id: string) {
+    if (id === STATS_PLATFORM_ID) {
+      await selectStats()
+      return
+    }
     selectedPlatformId.value = id
     selectedPathFilter.value = directoryFilter.value || 'all'
     searchQuery.value = ''
@@ -150,7 +309,8 @@ export const useSessionsStore = defineStore('sessions', () => {
 
   async function doSearch(query: string) {
     searchQuery.value = query
-    if (!query.trim() || !selectedPlatformId.value) {
+    // The "All" view aggregates across platforms and has no search of its own.
+    if (!query.trim() || !selectedPlatformId.value || isStatsView.value) {
       searchResults.value = []
       isSearching.value = false
       return
@@ -244,7 +404,10 @@ export const useSessionsStore = defineStore('sessions', () => {
     sessionTotal, sessionOffset, hasMore,
     isLoading, loadingMore, loadError,
     directoryFilter, setDirectoryFilter,
+    statsRange, stats, statsLoading, statsError, isStatsView,
+    selectStats, setStatsRange, loadStats,
     messagesModalOpen, activeSession,
+    previewSession, openPreview, ensurePreview,
     resumeModalOpen, resumeTarget,
     searchQuery, searchResults, isSearching, searchError,
     selectedMap, selectedCount, isBulkDeleting, isBulkExporting, isSelected,

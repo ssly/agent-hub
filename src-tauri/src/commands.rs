@@ -710,6 +710,25 @@ pub fn search_session_messages(
     session::search_session_messages(&platform_id, &query).map_err(CommandError::SyncError)
 }
 
+/// Message tally for one session — the detail footer's "N messages · AI · me".
+#[tauri::command(async)]
+pub fn get_session_message_stats(
+    platform_id: String,
+    session_id: String,
+) -> Result<session::SessionMessageStats, CommandError> {
+    session::count_session_messages(&platform_id, &session_id).map_err(CommandError::SyncError)
+}
+
+/// Whole-library statistics for the Sessions "All" tab, limited to sessions
+/// whose latest activity falls inside the trailing `days` window.
+#[tauri::command(async)]
+pub fn get_session_stats(
+    days: u32,
+    path_filter: Option<String>,
+) -> Result<session::SessionStatsReport, CommandError> {
+    session::session_stats_report(days, path_filter.as_deref()).map_err(CommandError::SyncError)
+}
+
 #[tauri::command(async)]
 pub fn delete_session(platform_id: String, session_id: String) -> Result<String, CommandError> {
     session::delete_session(&platform_id, &session_id).map_err(CommandError::SyncError)?;

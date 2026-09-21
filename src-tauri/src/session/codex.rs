@@ -75,6 +75,7 @@ pub fn get_codex_messages(
     let mut messages = Vec::new();
     let mut matched = 0usize;
     let page_limit = limit.max(1);
+    let mut last_user: Option<String> = None;
 
     for line in reader.lines() {
         let line = match line {
@@ -88,6 +89,14 @@ pub fn get_codex_messages(
         let Some(message) = parse_codex_rollout_message(&data) else {
             continue;
         };
+        if message.role == "user" {
+            if is_repeated_user_message(last_user.as_deref(), &message) {
+                continue;
+            }
+            last_user = Some(message.content.clone());
+        } else {
+            last_user = None;
+        }
         if matched >= offset {
             messages.push(message);
             if messages.len() >= page_limit {
@@ -185,24 +194,38 @@ fn delete_codex_sessions_in_db(path: &Path, session_ids: &[String]) -> Result<us
 
 fn parse_codex_rollout_message(value: &Value) -> Option<SessionMessage> {
     let line_type = value.get("type").and_then(|v| v.as_str())?;
+    let timestamp = value
+        .get("timestamp")
+        .and_then(|v| v.as_str())
+        .and_then(parse_rfc3339_to_ms)
+        .unwrap_or(0);
+
     if line_type == "event_msg" {
         let payload = value.get("payload")?;
-        if payload.get("type").and_then(|v| v.as_str())? != "user_message" {
+        let payload_type = payload.get("type").and_then(|v| v.as_str())?;
+
+        // Current Codex builds report the user's turn as a completed turn
+        // item. This is the prompt alone — the `response_item` records with
+        // role=user that sit next to it also carry injected context
+        // (`<environment_context>`, plugin lists, …), so the item stream is
+        // the only clean source of "what I typed".
+        if payload_type == "item_completed" {
+            let item = payload.get("item")?;
+            if item.get("type").and_then(|v| v.as_str())? != "UserMessage" {
+                return None;
+            }
+            let content = extract_item_text_content(item.get("content")?)?;
+            return Some(SessionMessage::new("user", content, timestamp));
+        }
+
+        if payload_type != "user_message" {
             return None;
         }
         let content = payload.get("message").and_then(|v| v.as_str())?.trim();
         if content.is_empty() {
             return None;
         }
-        return Some(SessionMessage::new(
-            "user",
-            content,
-            value
-                .get("timestamp")
-                .and_then(|v| v.as_str())
-                .and_then(parse_rfc3339_to_ms)
-                .unwrap_or(0),
-        ));
+        return Some(SessionMessage::new("user", content, timestamp));
     }
 
     if line_type == "response_item" {
@@ -219,18 +242,43 @@ fn parse_codex_rollout_message(value: &Value) -> Option<SessionMessage> {
         if content.trim().is_empty() {
             return None;
         }
-        return Some(SessionMessage::new(
-            "assistant",
-            content,
-            value
-                .get("timestamp")
-                .and_then(|v| v.as_str())
-                .and_then(parse_rfc3339_to_ms)
-                .unwrap_or(0),
-        ));
+        return Some(SessionMessage::new("assistant", content, timestamp));
     }
 
     None
+}
+
+/// Text of a turn item's content parts (`UserMessage` items use
+/// `{"type": "text", "text": …}`, unlike assistant `output_text`).
+fn extract_item_text_content(content: &Value) -> Option<String> {
+    let Value::Array(items) = content else {
+        return None;
+    };
+    let mut parts = Vec::new();
+    for item in items {
+        let Some(text) = item.get("text").and_then(|value| value.as_str()) else {
+            continue;
+        };
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            parts.push(trimmed.to_string());
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n"))
+    }
+}
+
+/// Rollouts written while Codex was switching formats can carry the user's
+/// prompt twice — once as the legacy `user_message` event and once as the
+/// current `item_completed` item — with nothing in between. The repeat is
+/// dropped so prompts are neither shown twice nor counted twice. Only
+/// back-to-back repeats are dropped, so a user genuinely sending the same text
+/// twice (after a reply) still shows up twice.
+fn is_repeated_user_message(previous_user: Option<&str>, message: &SessionMessage) -> bool {
+    message.role == "user" && previous_user == Some(message.content.as_str())
 }
 
 fn parse_codex_summary_row(row: &Row<'_>) -> Result<SessionSummary, rusqlite::Error> {
@@ -458,6 +506,7 @@ pub fn search_codex_messages(
             continue;
         };
         let reader = BufReader::new(file);
+        let mut last_user: Option<String> = None;
 
         for line in reader.lines() {
             let line = match line {
@@ -471,6 +520,14 @@ pub fn search_codex_messages(
             let Some(message) = parse_codex_rollout_message(&data) else {
                 continue;
             };
+            if message.role == "user" {
+                if is_repeated_user_message(last_user.as_deref(), &message) {
+                    continue;
+                }
+                last_user = Some(message.content.clone());
+            } else {
+                last_user = None;
+            }
             if message.content.to_lowercase().contains(query_lower) {
                 results.push(crate::session::SessionSearchResult {
                     session_id: thread.summary.id.clone(),
@@ -636,5 +693,67 @@ mod tests {
         let (_dir, db_path) = create_test_codex_db();
         let n = delete_codex_sessions_in_db(&db_path, &[]).expect("empty batch ok");
         assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn parses_user_turn_item_as_user_message() {
+        // Shape written by current Codex builds (rollout 2026-09): the user's
+        // prompt arrives as a completed item, not as a `user_message` event.
+        let line = serde_json::json!({
+            "timestamp": "2026-09-21T02:16:55.123Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "item_completed",
+                "item": {
+                    "type": "UserMessage",
+                    "id": "item-1",
+                    "content": [{ "type": "text", "text": "  帮我看下这个 bug\n" }]
+                }
+            }
+        });
+        let message = parse_codex_rollout_message(&line).expect("user item should parse");
+        assert_eq!(message.role, "user");
+        assert_eq!(message.content, "帮我看下这个 bug");
+        assert!(message.timestamp > 0);
+    }
+
+    #[test]
+    fn ignores_non_user_completed_items() {
+        let line = serde_json::json!({
+            "timestamp": "2026-09-21T02:16:55.123Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "item_completed",
+                "item": { "type": "AgentMessage", "id": "item-2", "content": [{ "type": "text", "text": "hi" }] }
+            }
+        });
+        assert!(parse_codex_rollout_message(&line).is_none());
+    }
+
+    #[test]
+    fn repeated_user_prompt_is_dropped_but_a_later_repeat_is_kept() {
+        let user = SessionMessage::new("user", "继续", 1);
+        let assistant = SessionMessage::new("assistant", "好的", 2);
+
+        assert!(!is_repeated_user_message(None, &user));
+        // Same prompt twice with nothing in between: the second is the
+        // legacy/current duplicate and must go.
+        assert!(is_repeated_user_message(Some("继续"), &user));
+        // A genuine repeat after a reply still shows: the reader clears the
+        // tracker whenever an assistant message is emitted.
+        assert!(!is_repeated_user_message(None, &user));
+        assert!(!is_repeated_user_message(Some("好的"), &assistant));
+    }
+
+    #[test]
+    fn legacy_user_message_event_still_parses() {
+        let line = serde_json::json!({
+            "timestamp": "2025-05-01T02:16:55.123Z",
+            "type": "event_msg",
+            "payload": { "type": "user_message", "message": "老格式的提问" }
+        });
+        let message = parse_codex_rollout_message(&line).expect("legacy event should parse");
+        assert_eq!(message.role, "user");
+        assert_eq!(message.content, "老格式的提问");
     }
 }

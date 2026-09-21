@@ -1613,6 +1613,15 @@ onBeforeUnmount(() => {
   --tray-success-soft: rgba(90, 143, 107, .12);
   --tray-warning-soft: rgba(176, 122, 62, .10);
   --tray-danger-soft: rgba(176, 82, 74, .10);
+  /* Orb Dual Fluid (Left HP / Right MP) - Ink-wash muted palette */
+  --tray-orb-hp-light: #CF7E77;
+  --tray-orb-hp-mid: #B0524A;
+  --tray-orb-hp-dark: #7A332D;
+  --tray-orb-hp-text: #963A33;
+  --tray-orb-mp-light: #5E8CAE;
+  --tray-orb-mp-mid: #3A6B8C;
+  --tray-orb-mp-dark: #224762;
+  --tray-orb-mp-text: #2C5775;
   /* Orb ring track: faint tint of the ring color, stronger in dark mode. */
   --tray-ring-track: color-mix(in srgb, currentColor 14%, transparent);
 
@@ -1766,8 +1775,8 @@ onBeforeUnmount(() => {
   border-radius: 2px;
   transition: height 300ms var(--ease-soft, ease);
 }
-.tray-dock-bar--tank .tray-dock-bar__fill { background: var(--tray-success); }
-.tray-dock-bar--ring .tray-dock-bar__fill { background: var(--tray-accent); }
+.tray-dock-bar--tank .tray-dock-bar__fill { background: var(--tray-orb-hp-mid, #B0524A); }
+.tray-dock-bar--ring .tray-dock-bar__fill { background: var(--tray-orb-mp-mid, #3A6B8C); }
 
 /* No title bar: the content gets a slim top band instead, which hosts the
    pin button and doubles as a comfortable drag area. */
@@ -2340,6 +2349,15 @@ onBeforeUnmount(() => {
   --tray-success-soft: rgba(143, 184, 154, .14);
   --tray-warning-soft: rgba(214, 153, 99, .13);
   --tray-danger-soft: rgba(216, 128, 120, .13);
+  /* Orb Dual Fluid (Left HP / Right MP) - Dark ink-wash muted palette */
+  --tray-orb-hp-light: #E08A84;
+  --tray-orb-hp-mid: #D88078;
+  --tray-orb-hp-dark: #7E3731;
+  --tray-orb-hp-text: #E08A84;
+  --tray-orb-mp-light: #9EC2DC;
+  --tray-orb-mp-mid: #7DA8C9;
+  --tray-orb-mp-dark: #375F7F;
+  --tray-orb-mp-text: #9EC2DC;
   --tray-ring-track: color-mix(in srgb, currentColor 24%, transparent);
 }
 
@@ -2376,6 +2394,15 @@ onBeforeUnmount(() => {
     --tray-success-soft: rgba(143, 184, 154, .14);
     --tray-warning-soft: rgba(214, 153, 99, .13);
     --tray-danger-soft: rgba(216, 128, 120, .13);
+    /* Orb Dual Fluid (Left HP / Right MP) - Dark ink-wash muted palette */
+    --tray-orb-hp-light: #E08A84;
+    --tray-orb-hp-mid: #D88078;
+    --tray-orb-hp-dark: #7E3731;
+    --tray-orb-hp-text: #E08A84;
+    --tray-orb-mp-light: #9EC2DC;
+    --tray-orb-mp-mid: #7DA8C9;
+    --tray-orb-mp-dark: #375F7F;
+    --tray-orb-mp-text: #9EC2DC;
     --tray-ring-track: color-mix(in srgb, currentColor 24%, transparent);
   }
 }

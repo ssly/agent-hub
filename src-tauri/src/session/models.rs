@@ -23,6 +23,55 @@ pub struct SessionSummary {
     pub source: Option<String>,
 }
 
+/// Message tally for one session or one Agent, counted the way the transcript
+/// renders it: every user record is one bubble (`user`), and consecutive
+/// assistant records belong to one turn and are therefore counted once
+/// (`assistant`) — mirroring `groupSessionMessages` in the message panel.
+#[derive(Debug, Clone, Copy, Default, serde::Serialize)]
+pub struct SessionMessageStats {
+    pub total: u32,
+    pub user: u32,
+    pub assistant: u32,
+}
+
+impl SessionMessageStats {
+    pub fn add(&mut self, other: SessionMessageStats) {
+        self.total = self.total.saturating_add(other.total);
+        self.user = self.user.saturating_add(other.user);
+        self.assistant = self.assistant.saturating_add(other.assistant);
+    }
+}
+
+/// One Agent's row in the Sessions "All" statistics view.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AgentSessionStats {
+    pub platform_id: String,
+    pub display_name: String,
+    /// Sessions whose latest activity falls inside the selected window.
+    pub session_count: u32,
+    pub messages: SessionMessageStats,
+    /// Newest session activity inside the window (epoch ms).
+    pub last_active_at: i64,
+    /// Sessions that could not be read (deleted mid-scan, corrupt file). The
+    /// tally above simply leaves them out; the UI only mentions them when > 0.
+    pub failed_sessions: u32,
+}
+
+/// Whole-library statistics behind the Sessions "All" tab.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SessionStatsReport {
+    /// Window size that produced this report (days).
+    pub days: u32,
+    /// Window start (epoch ms) — sessions active before it are left out.
+    pub since: i64,
+    pub generated_at: i64,
+    pub session_count: u32,
+    pub totals: SessionMessageStats,
+    pub agents: Vec<AgentSessionStats>,
+    /// Agents that have sessions on disk but none inside the window.
+    pub inactive_agents: u32,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SessionListPage {
     pub paths: Vec<String>,

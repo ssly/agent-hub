@@ -380,6 +380,44 @@ export async function exportSessionsHtml(
   }
   return { path: outputPath, session_count: sessionIds.length, message_count: sessionIds.length * 2 }
 }
+export async function getSessionMessageStats(_platformId: string, _sessionId: string) {
+  await delay()
+  return { total: 8, user: 4, assistant: 4 }
+}
+export async function getSessionStats(days: number, _pathFilter?: string) {
+  await delay(300)
+  const scale = days <= 1 ? 0.2 : days <= 7 ? 0.6 : 1
+  const agents = SESSION_PLATFORMS.map((platform, index) => {
+    const sessionCount = Math.max(1, Math.round(platform.session_count * scale))
+    const user = sessionCount * (4 + (index % 5))
+    const assistant = sessionCount * (4 + ((index + 2) % 5))
+    return {
+      platform_id: platform.id,
+      display_name: platform.display_name,
+      session_count: sessionCount,
+      messages: { total: user + assistant, user, assistant },
+      last_active_at: Date.now() - index * 3600 * 1000,
+      failed_sessions: 0,
+    }
+  })
+  const totals = agents.reduce(
+    (acc, agent) => ({
+      total: acc.total + agent.messages.total,
+      user: acc.user + agent.messages.user,
+      assistant: acc.assistant + agent.messages.assistant,
+    }),
+    { total: 0, user: 0, assistant: 0 },
+  )
+  return {
+    days,
+    since: Date.now() - days * 86400 * 1000,
+    generated_at: Date.now(),
+    session_count: agents.reduce((sum, agent) => sum + agent.session_count, 0),
+    totals,
+    agents: agents.sort((a, b) => b.messages.total - a.messages.total),
+    inactive_agents: days <= 1 ? 4 : 1,
+  }
+}
 export async function searchSessionMessages(platformId: string, query: string) {
   await delay();
   const q = query.toLowerCase();

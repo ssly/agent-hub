@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Activity, Blocks, FolderOpen, Gauge, Globe2, MessagesSquare, Settings, UserRound, X } from 'lucide-vue-next'
+import { Activity, Blocks, ChartColumn, FolderOpen, Gauge, Globe2, MessagesSquare, Settings, UserRound, X } from 'lucide-vue-next'
 import { useAppStore } from '@/stores/app'
 import { useSkillsStore } from '@/stores/skills'
 import { usePluginsStore } from '@/stores/plugins'
-import { useSessionsStore } from '@/stores/sessions'
+import { STATS_PLATFORM_ID, useSessionsStore } from '@/stores/sessions'
 import {
   useSessionMonitorStore,
   monitorStatusRank,
@@ -149,7 +149,20 @@ async function handleRefresh() {
 }
 
 function getSidebarItems() {
-  if (appStore.currentTab === 'sessions') return sessionsStore.platforms
+  if (appStore.currentTab === 'sessions') {
+    // "All" is the statistics view: it aggregates every Agent, so it leads the
+    // list and carries the sum of the per-platform counts next to it. With no
+    // sessions at all there is nothing to aggregate — keep the empty state.
+    if (sessionsStore.platforms.length === 0) return []
+    const total = sessionsStore.platforms.reduce(
+      (sum, platform) => sum + (Number(platform.session_count) || 0),
+      0,
+    )
+    return [
+      { id: STATS_PLATFORM_ID, display_name: t('session.stats_all'), session_count: total },
+      ...sessionsStore.platforms,
+    ]
+  }
   if (appStore.currentTab === 'monitor') return [
     { id: 'all', display_name: t('session_monitor.agent_all') },
     ...sessionMonitorStore.visibleAgents.map(agent => ({
@@ -369,7 +382,12 @@ function handleSessionSearch(e: Event) {
         >
           <div class="flex items-center justify-between">
             <span class="ah-platform-item__label">
-              <AgentIcon :agent-id="item.id" class="ah-platform-item__icon" />
+              <ChartColumn
+                v-if="item.id === STATS_PLATFORM_ID"
+                :size="15"
+                class="ah-platform-item__icon"
+              />
+              <AgentIcon v-else :agent-id="item.id" class="ah-platform-item__icon" />
               <span class="ah-platform-item__name">{{ platformLabel(item) }}</span>
             </span>
             <span v-if="appStore.currentTab === 'sessions' && item.session_count != null" class="ah-platform-item__count">
@@ -399,8 +417,12 @@ function handleSessionSearch(e: Event) {
         />
       </div>
 
-      <!-- Search (sessions tab only) -->
-      <div v-if="appStore.currentTab === 'sessions' && sessionsStore.selectedPlatformId" class="p-2.5" style="border-top: 1px solid var(--hairline)">
+      <!-- Search (sessions tab only — the "All" statistics view has no search) -->
+      <div
+        v-if="appStore.currentTab === 'sessions' && sessionsStore.selectedPlatformId && sessionsStore.selectedPlatformId !== STATS_PLATFORM_ID"
+        class="p-2.5"
+        style="border-top: 1px solid var(--hairline)"
+      >
         <input
           type="text"
           :placeholder="t('session.search_placeholder', { agent: sessionsStore.platforms.find(p => p.id === sessionsStore.selectedPlatformId)?.display_name || '' })"

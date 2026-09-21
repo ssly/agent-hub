@@ -45,6 +45,8 @@ const props = withDefaults(defineProps<{
   unread?: boolean
   selectable?: boolean
   selected?: boolean
+  /** Current session of the wide-screen reading pane (not a batch checkbox). */
+  active?: boolean
   resumable?: boolean
   deletable?: boolean
 }>(), {
@@ -57,6 +59,8 @@ const props = withDefaults(defineProps<{
   tokens: null,
   unread: false,
   selectable: false,
+  selected: false,
+  active: false,
   resumable: true,
   deletable: true,
 })
@@ -158,6 +162,7 @@ function handleDelete() {
     :class="{
       'session-card--selectable': selectable,
       'session-card--selected': selectable && selected,
+      'session-card--active': active,
       'session-card--unread': unread,
       'session-card--running': status === 'running',
       'session-card--waiting': status === 'waiting',
@@ -502,6 +507,21 @@ function handleDelete() {
 }
 .session-card--unread {
   border-color: color-mix(in srgb, var(--signal-red) 35%, var(--hairline));
+}
+/* Reading-pane cursor: a quiet left rail instead of the checkbox background, so
+   it never reads as "checked for a batch action". */
+.session-card--active {
+  border-color: var(--accent-mid);
+  background: color-mix(in srgb, var(--accent-soft) 45%, var(--surface));
+}
+.session-card--active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent);
 }
 .session-card--selected {
   background: var(--accent-soft);

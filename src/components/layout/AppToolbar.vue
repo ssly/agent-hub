@@ -5,7 +5,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useAppStore } from '@/stores/app'
 import { useSkillsStore } from '@/stores/skills'
 import { usePluginsStore } from '@/stores/plugins'
-import { useSessionsStore } from '@/stores/sessions'
+import { useSessionsStore, STATS_PLATFORM_ID } from '@/stores/sessions'
 import { useSwitchStore } from '@/stores/switch'
 import { platform } from '@/lib/utils'
 import * as api from '@/lib/api'
@@ -47,6 +47,7 @@ const breadcrumb = computed(() => {
     return `${t('session_monitor.title')} — Codex`
   }
   if (appStore.currentTab === 'sessions') {
+    if (sessionsStore.selectedPlatformId === STATS_PLATFORM_ID) return t('session.stats_title')
     const p = sessionsStore.platforms.find(p => p.id === sessionsStore.selectedPlatformId)
     return p?.display_name || t('session.title')
   }

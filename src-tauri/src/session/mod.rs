@@ -16,10 +16,14 @@ mod zcode;
 #[cfg(target_os = "macos")]
 use std::path::PathBuf;
 use std::process::Command;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 pub use models::{
-    BatchDeleteFailure, BatchDeleteResult, SessionExportResult, SessionListPage, SessionMessage,
-    SessionPlatform, SessionResumePreview, SessionSearchResult, SessionTerminalOption,
+    AgentSessionStats, BatchDeleteFailure, BatchDeleteResult, SessionExportResult, SessionListPage,
+    SessionMessage, SessionMessageStats, SessionPlatform, SessionResumePreview,
+    SessionSearchResult, SessionStatsReport, SessionTerminalOption,
 };
 
 #[cfg(target_os = "windows")]
@@ -29,193 +33,59 @@ const MAX_SESSION_PAGE_SIZE: usize = 1000;
 const PATH_FILTER_ALL: &str = "all";
 const PATH_FILTER_UNKNOWN: &str = "unknown";
 
+/// Sessions-capable platforms in sidebar order (mirrors platform/registry.rs).
+/// `count_sessions` is the cheap existence probe shared by the sidebar badges
+/// and the statistics report.
+struct SessionPlatformSpec {
+    id: &'static str,
+    display_name: &'static str,
+    count_sessions: fn() -> Result<usize, String>,
+}
+
+const SESSION_PLATFORM_SPECS: &[SessionPlatformSpec] = &[
+    SessionPlatformSpec { id: "codex", display_name: "Codex", count_sessions: codex::count_codex_sessions },
+    SessionPlatformSpec { id: "claude-code", display_name: "Claude Code", count_sessions: claude::count_claude_sessions },
+    SessionPlatformSpec { id: "cursor", display_name: "Cursor", count_sessions: cursor::count_cursor_sessions },
+    SessionPlatformSpec { id: "antigravity", display_name: "Antigravity", count_sessions: antigravity::count_antigravity_sessions },
+    SessionPlatformSpec { id: "grok", display_name: "Grok Build", count_sessions: grok::count_grok_sessions },
+    SessionPlatformSpec { id: "kimi", display_name: "Kimi Code", count_sessions: kimi::count_kimi_sessions },
+    SessionPlatformSpec { id: "qwen", display_name: "Qwen Code", count_sessions: qwen::count_qwen_sessions },
+    SessionPlatformSpec { id: "zcode", display_name: "ZCode", count_sessions: zcode::count_zcode_sessions },
+    SessionPlatformSpec { id: "workbuddy", display_name: "WorkBuddy", count_sessions: workbuddy::count_workbuddy_sessions },
+    SessionPlatformSpec { id: "kiro", display_name: "Kiro", count_sessions: kiro::count_kiro_sessions },
+    SessionPlatformSpec { id: "dsh", display_name: "DeepSeek Harness", count_sessions: dsh::count_dsh_sessions },
+    SessionPlatformSpec { id: "omp", display_name: "Oh My Pi", count_sessions: omp::count_omp_sessions },
+];
+
+/// Normalized path filter: `None` means "every directory".
+fn path_filter_value(path_filter: Option<&str>) -> Option<&str> {
+    path_filter
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != PATH_FILTER_ALL)
+}
+
 pub fn list_session_platforms(path_filter: Option<&str>) -> Result<Vec<SessionPlatform>, String> {
-    let is_filtered = match path_filter {
-        Some(filter) => {
-            let t = filter.trim();
-            !t.is_empty() && t != PATH_FILTER_ALL
-        }
-        None => false,
-    };
-
-    if !is_filtered {
-        let mut platforms = Vec::new();
-
-        let codex_count = codex::count_codex_sessions()?;
-        if codex_count > 0 {
-            platforms.push(SessionPlatform {
-                id: "codex".to_string(),
-                display_name: "Codex".to_string(),
-                session_count: codex_count,
-            });
-        }
-
-        // Order mirrors platform/registry.rs (session subset only).
-        let claude_count = claude::count_claude_sessions()?;
-        if claude_count > 0 {
-            platforms.push(SessionPlatform {
-                id: "claude-code".to_string(),
-                display_name: "Claude Code".to_string(),
-                session_count: claude_count,
-            });
-        }
-
-        let cursor_count = cursor::count_cursor_sessions()?;
-        if cursor_count > 0 {
-            platforms.push(SessionPlatform {
-                id: "cursor".to_string(),
-                display_name: "Cursor".to_string(),
-                session_count: cursor_count,
-            });
-        }
-
-        let antigravity_count = antigravity::count_antigravity_sessions()?;
-        if antigravity_count > 0 {
-            platforms.push(SessionPlatform {
-                id: "antigravity".to_string(),
-                display_name: "Antigravity".to_string(),
-                session_count: antigravity_count,
-            });
-        }
-
-        let grok_count = grok::count_grok_sessions()?;
-        if grok_count > 0 {
-            platforms.push(SessionPlatform {
-                id: "grok".to_string(),
-                display_name: "Grok Build".to_string(),
-                session_count: grok_count,
-            });
-        }
-
-        let kimi_count = kimi::count_kimi_sessions()?;
-        if kimi_count > 0 {
-            platforms.push(SessionPlatform {
-                id: "kimi".to_string(),
-                display_name: "Kimi Code".to_string(),
-                session_count: kimi_count,
-            });
-        }
-
-        let qwen_count = qwen::count_qwen_sessions()?;
-        if qwen_count > 0 {
-            platforms.push(SessionPlatform {
-                id: "qwen".to_string(),
-                display_name: "Qwen Code".to_string(),
-                session_count: qwen_count,
-            });
-        }
-
-        let zcode_count = zcode::count_zcode_sessions()?;
-        if zcode_count > 0 {
-            platforms.push(SessionPlatform {
-                id: "zcode".to_string(),
-                display_name: "ZCode".to_string(),
-                session_count: zcode_count,
-            });
-        }
-
-        let workbuddy_count = workbuddy::count_workbuddy_sessions()?;
-        if workbuddy_count > 0 {
-            platforms.push(SessionPlatform {
-                id: "workbuddy".to_string(),
-                display_name: "WorkBuddy".to_string(),
-                session_count: workbuddy_count,
-            });
-        }
-
-        let kiro_count = kiro::count_kiro_sessions()?;
-        if kiro_count > 0 {
-            platforms.push(SessionPlatform {
-                id: "kiro".to_string(),
-                display_name: "Kiro".to_string(),
-                session_count: kiro_count,
-            });
-        }
-
-        let dsh_count = dsh::count_dsh_sessions()?;
-        if dsh_count > 0 {
-            platforms.push(SessionPlatform {
-                id: "dsh".to_string(),
-                display_name: "DeepSeek Harness".to_string(),
-                session_count: dsh_count,
-            });
-        }
-
-        let omp_count = omp::count_omp_sessions()?;
-        if omp_count > 0 {
-            platforms.push(SessionPlatform {
-                id: "omp".to_string(),
-                display_name: "Oh My Pi".to_string(),
-                session_count: omp_count,
-            });
-        }
-
-        return Ok(platforms);
-    }
-
-    let filter = path_filter.unwrap().trim();
+    let filter = path_filter_value(path_filter);
     let mut platforms = Vec::new();
 
-    let check_platform = |id: &str,
-                          display_name: &str,
-                          count_fn: fn() -> Result<usize, String>|
-     -> Result<Option<SessionPlatform>, String> {
-        let total = count_fn()?;
+    for spec in SESSION_PLATFORM_SPECS {
+        let total = (spec.count_sessions)()?;
         if total == 0 {
-            return Ok(None);
+            continue;
         }
-        let all_sessions = list_sessions_all(id)?;
-        let matching = filter_sessions_by_path(all_sessions, filter).len();
-        Ok(Some(SessionPlatform {
-            id: id.to_string(),
-            display_name: display_name.to_string(),
-            session_count: matching,
-        }))
-    };
-
-    if let Some(p) = check_platform("codex", "Codex", codex::count_codex_sessions)? {
-        platforms.push(p);
-    }
-    if let Some(p) = check_platform("claude-code", "Claude Code", claude::count_claude_sessions)? {
-        platforms.push(p);
-    }
-    if let Some(p) = check_platform("cursor", "Cursor", cursor::count_cursor_sessions)? {
-        platforms.push(p);
-    }
-    if let Some(p) = check_platform(
-        "antigravity",
-        "Antigravity",
-        antigravity::count_antigravity_sessions,
-    )? {
-        platforms.push(p);
-    }
-    if let Some(p) = check_platform("grok", "Grok Build", grok::count_grok_sessions)? {
-        platforms.push(p);
-    }
-    if let Some(p) = check_platform("kimi", "Kimi Code", kimi::count_kimi_sessions)? {
-        platforms.push(p);
-    }
-    if let Some(p) = check_platform("qwen", "Qwen Code", qwen::count_qwen_sessions)? {
-        platforms.push(p);
-    }
-    if let Some(p) = check_platform("zcode", "ZCode", zcode::count_zcode_sessions)? {
-        platforms.push(p);
-    }
-    if let Some(p) = check_platform(
-        "workbuddy",
-        "WorkBuddy",
-        workbuddy::count_workbuddy_sessions,
-    )? {
-        platforms.push(p);
-    }
-    if let Some(p) = check_platform("kiro", "Kiro", kiro::count_kiro_sessions)? {
-        platforms.push(p);
-    }
-    if let Some(p) = check_platform("dsh", "DeepSeek Harness", dsh::count_dsh_sessions)? {
-        platforms.push(p);
-    }
-    if let Some(p) = check_platform("omp", "Oh My Pi", omp::count_omp_sessions)? {
-        platforms.push(p);
+        // Unfiltered: the probe already answered. Filtered: the count that
+        // matters is the one inside the selected directory, which needs the
+        // full list (a platform may legitimately end up at zero and still be
+        // listed, so the user sees the scope emptied it).
+        let session_count = match filter {
+            None => total,
+            Some(path) => filter_sessions_by_path(list_sessions_all(spec.id)?, path).len(),
+        };
+        platforms.push(SessionPlatform {
+            id: spec.id.to_string(),
+            display_name: spec.display_name.to_string(),
+            session_count,
+        });
     }
 
     Ok(platforms)
@@ -322,6 +192,285 @@ fn filter_sessions_by_path(
             }
         })
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Statistics (Sessions → All)
+// ---------------------------------------------------------------------------
+// Counting means walking every transcript in the window, which is the one
+// genuinely expensive read in this module. Two things keep it affordable:
+// the window is applied to the session list *before* any file is opened, and
+// counts are memoized per session keyed by `updated_at`, so switching between
+// windows only counts what changed.
+
+/// Transcript page size while counting. Pages bound peak memory (one page of
+/// message bodies) while keeping the re-read cost per session at one pass for
+/// everything but the very largest transcripts.
+const STATS_PAGE_SIZE: usize = 1000;
+/// Upper bound of parallel transcript readers. Sessions are independent files
+/// (or rows), so this is a plain work-stealing split of the session list.
+const STATS_MAX_WORKERS: usize = 6;
+
+struct CachedMessageStats {
+    /// Session `updated_at` the tally was computed from — a session that grew
+    /// since then has a different value and is recounted.
+    updated_at: i64,
+    stats: SessionMessageStats,
+}
+
+fn message_stats_cache() -> &'static Mutex<HashMap<String, CachedMessageStats>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, CachedMessageStats>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Session ids are only unique per platform, so the cache key carries both.
+fn stats_cache_key(platform_id: &str, session_id: &str) -> String {
+    format!("{platform_id}\u{1f}{session_id}")
+}
+
+/// Some storages record seconds (Cursor), the rest milliseconds. Window
+/// comparisons must normalize first.
+fn session_time_millis(value: i64) -> i64 {
+    if value > 0 && value < 1_000_000_000_000 {
+        value.saturating_mul(1000)
+    } else {
+        value
+    }
+}
+
+fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or(0)
+}
+
+/// Fold one page of roles into the running tally. `in_assistant_turn` carries
+/// the "still inside the same assistant turn" state across pages, so a turn
+/// split by paging is still counted once.
+fn fold_role_counts<'a>(
+    roles: impl IntoIterator<Item = &'a str>,
+    stats: &mut SessionMessageStats,
+    in_assistant_turn: &mut bool,
+) {
+    for role in roles {
+        if role == "user" {
+            stats.user = stats.user.saturating_add(1);
+            *in_assistant_turn = false;
+        } else if !*in_assistant_turn {
+            stats.assistant = stats.assistant.saturating_add(1);
+            *in_assistant_turn = true;
+        }
+    }
+}
+
+/// Tally one session by paging through the same records the message panel
+/// renders, so the footer always agrees with the bubbles on screen: every
+/// user record is one message, and consecutive assistant records form one
+/// turn (tool round-trips inside a turn are not separate replies).
+pub fn count_session_messages(
+    platform_id: &str,
+    session_id: &str,
+) -> Result<SessionMessageStats, String> {
+    let mut stats = SessionMessageStats::default();
+    let mut offset = 0usize;
+    let mut in_assistant_turn = false;
+
+    loop {
+        let page = get_session_messages(platform_id, session_id, offset, STATS_PAGE_SIZE)?;
+        if page.is_empty() {
+            break;
+        }
+        let received = page.len();
+        fold_role_counts(
+            page.iter().map(|message| message.role.as_str()),
+            &mut stats,
+            &mut in_assistant_turn,
+        );
+        offset = offset.saturating_add(received);
+        if received < STATS_PAGE_SIZE {
+            break;
+        }
+    }
+
+    stats.total = stats.user.saturating_add(stats.assistant);
+    Ok(stats)
+}
+
+fn cached_session_message_stats(
+    platform_id: &str,
+    session: &models::SessionSummary,
+) -> Result<SessionMessageStats, String> {
+    let key = stats_cache_key(platform_id, &session.id);
+    if let Ok(cache) = message_stats_cache().lock() {
+        if let Some(entry) = cache.get(&key) {
+            if entry.updated_at == session.updated_at {
+                return Ok(entry.stats);
+            }
+        }
+    }
+
+    let stats = count_session_messages(platform_id, &session.id)?;
+    if let Ok(mut cache) = message_stats_cache().lock() {
+        cache.insert(
+            key,
+            CachedMessageStats {
+                updated_at: session.updated_at,
+                stats,
+            },
+        );
+    }
+    Ok(stats)
+}
+
+/// Drop cache entries for sessions that no longer exist. Keyed per platform so
+/// a scan of one platform never evicts another's tallies.
+fn prune_stats_cache(platform_id: &str, sessions: &[models::SessionSummary]) {
+    let live = sessions
+        .iter()
+        .map(|session| session.id.as_str())
+        .collect::<HashSet<_>>();
+    if let Ok(mut cache) = message_stats_cache().lock() {
+        cache.retain(|key, _| match key.split_once('\u{1f}') {
+            Some((platform, session_id)) => platform != platform_id || live.contains(session_id),
+            None => false,
+        });
+    }
+}
+
+fn stats_worker_count(sessions: usize) -> usize {
+    let cpus = std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(2);
+    cpus.min(STATS_MAX_WORKERS).min(sessions.max(1)).max(1)
+}
+
+/// Sum the tallies of every session of one Agent. Sessions are counted on a
+/// few threads at once; a session that cannot be read (deleted mid-scan,
+/// corrupt transcript) is skipped and reported through the failure count
+/// instead of failing the whole report.
+fn agent_message_stats(
+    platform_id: &str,
+    sessions: &[models::SessionSummary],
+) -> (SessionMessageStats, u32, i64) {
+    if sessions.is_empty() {
+        return (SessionMessageStats::default(), 0, 0);
+    }
+
+    let next = AtomicUsize::new(0);
+    let partials = std::thread::scope(|scope| {
+        let handles = (0..stats_worker_count(sessions.len()))
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut stats = SessionMessageStats::default();
+                    let mut failed = 0u32;
+                    let mut last_active_at = 0i64;
+                    loop {
+                        let index = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(session) = sessions.get(index) else {
+                            break;
+                        };
+                        last_active_at = last_active_at.max(session_time_millis(session.updated_at));
+                        match cached_session_message_stats(platform_id, session) {
+                            Ok(counted) => stats.add(counted),
+                            Err(_) => failed = failed.saturating_add(1),
+                        }
+                    }
+                    (stats, failed, last_active_at)
+                })
+            })
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap_or_default())
+            .collect::<Vec<(SessionMessageStats, u32, i64)>>()
+    });
+
+    partials
+        .into_iter()
+        .fold(
+            (SessionMessageStats::default(), 0u32, 0i64),
+            |(mut stats, failed, last_active_at), (part_stats, part_failed, part_last)| {
+                stats.add(part_stats);
+                (stats, failed.saturating_add(part_failed), last_active_at.max(part_last))
+            },
+        )
+}
+
+/// Per-Agent session/message statistics for the trailing `days` window,
+/// optionally scoped to one workspace directory. A session counts as inside
+/// the window when its latest activity is; its messages are then counted in
+/// full (transcripts have no per-record window semantics that survive every
+/// storage format — several adapters record no usable per-message timestamp).
+pub fn session_stats_report(
+    days: u32,
+    path_filter: Option<&str>,
+) -> Result<SessionStatsReport, String> {
+    let days = days.clamp(1, 3650);
+    let generated_at = now_millis();
+    let since = generated_at.saturating_sub(i64::from(days).saturating_mul(86_400_000));
+    let filter = path_filter_value(path_filter);
+
+    let mut agents = Vec::new();
+    let mut totals = SessionMessageStats::default();
+    let mut session_count = 0u32;
+    let mut inactive_agents = 0u32;
+
+    for spec in SESSION_PLATFORM_SPECS {
+        let mut sessions = match list_sessions_all(spec.id) {
+            Ok(sessions) => sessions,
+            Err(error) => {
+                // One unreadable storage (locked DB, missing directory) must
+                // not sink the other Agents' statistics.
+                log::warn!("session stats: listing {} failed: {}", spec.id, error);
+                continue;
+            }
+        };
+        if sessions.is_empty() {
+            continue;
+        }
+        prune_stats_cache(spec.id, &sessions);
+        if let Some(path) = filter {
+            sessions = filter_sessions_by_path(sessions, path);
+        }
+        sessions.retain(|session| session_time_millis(session.updated_at) >= since);
+        if sessions.is_empty() {
+            inactive_agents = inactive_agents.saturating_add(1);
+            continue;
+        }
+
+        let counted = u32::try_from(sessions.len()).unwrap_or(u32::MAX);
+        let (messages, failed_sessions, last_active_at) = agent_message_stats(spec.id, &sessions);
+        session_count = session_count.saturating_add(counted);
+        totals.add(messages);
+        agents.push(AgentSessionStats {
+            platform_id: spec.id.to_string(),
+            display_name: spec.display_name.to_string(),
+            session_count: counted,
+            messages,
+            last_active_at,
+            failed_sessions,
+        });
+    }
+
+    agents.sort_by(|left, right| {
+        right
+            .messages
+            .total
+            .cmp(&left.messages.total)
+            .then(right.session_count.cmp(&left.session_count))
+            .then(left.display_name.cmp(&right.display_name))
+    });
+
+    Ok(SessionStatsReport {
+        days,
+        since,
+        generated_at,
+        session_count,
+        totals,
+        agents,
+        inactive_agents,
+    })
 }
 
 pub fn list_session_terminals() -> Vec<SessionTerminalOption> {
@@ -1256,5 +1405,108 @@ mod tests {
             normalize_project_path("file:///D:/feishu-bot-go").as_deref(),
             Some(r"D:\feishu-bot-go")
         );
+    }
+
+    #[test]
+    fn role_counts_merge_assistant_turns_but_not_user_messages() {
+        // Mirrors what the panel renders: 2 user bubbles, 2 assistant turns
+        // (the middle pair is one turn split by a tool round-trip).
+        let roles = ["user", "assistant", "assistant", "user", "assistant"];
+        let mut stats = SessionMessageStats::default();
+        let mut in_assistant_turn = false;
+        fold_role_counts(roles, &mut stats, &mut in_assistant_turn);
+        stats.total = stats.user + stats.assistant;
+        assert_eq!(
+            (stats.total, stats.user, stats.assistant),
+            (4, 2, 2),
+            "consecutive assistant records must fold into one turn"
+        );
+    }
+
+    #[test]
+    fn role_counts_carry_the_turn_across_pages() {
+        // A turn split by the page boundary must not be counted twice.
+        let mut stats = SessionMessageStats::default();
+        let mut in_assistant_turn = false;
+        fold_role_counts(["user", "assistant"], &mut stats, &mut in_assistant_turn);
+        fold_role_counts(["assistant", "user"], &mut stats, &mut in_assistant_turn);
+        stats.total = stats.user + stats.assistant;
+        assert_eq!((stats.total, stats.user, stats.assistant), (3, 2, 1));
+    }
+
+    #[test]
+    fn empty_transcript_counts_as_zero() {
+        let mut stats = SessionMessageStats::default();
+        let mut in_assistant_turn = false;
+        fold_role_counts([], &mut stats, &mut in_assistant_turn);
+        assert_eq!((stats.total, stats.user, stats.assistant), (0, 0, 0));
+    }
+
+    #[test]
+    fn session_time_accepts_seconds_and_millis() {
+        assert_eq!(session_time_millis(1_787_845_175), 1_787_845_175_000);
+        assert_eq!(session_time_millis(1_787_845_175_316), 1_787_845_175_316);
+        assert_eq!(session_time_millis(0), 0);
+    }
+
+    #[test]
+    fn path_filter_all_and_blank_mean_every_directory() {
+        assert_eq!(path_filter_value(None), None);
+        assert_eq!(path_filter_value(Some("all")), None);
+        assert_eq!(path_filter_value(Some("  ")), None);
+        assert_eq!(path_filter_value(Some(" /tmp/a ")), Some("/tmp/a"));
+    }
+
+    /// The tally pages a transcript 1000 records at a time; the message panel
+    /// pages the same transcript 30 at a time. Both must fold to the same
+    /// numbers — that is what keeps the footer in step with the bubbles on
+    /// screen, including assistant turns straddling a page boundary.
+    #[test]
+    fn message_stats_match_the_panel_paging() {
+        let Ok(platforms) = list_session_platforms(None) else {
+            return;
+        };
+        for platform in platforms.iter().take(4) {
+            let Ok(sessions) = list_sessions_all(&platform.id) else {
+                continue;
+            };
+            let Some(session) = sessions.first() else {
+                continue;
+            };
+            let Ok(stats) = count_session_messages(&platform.id, &session.id) else {
+                continue;
+            };
+
+            let mut manual = SessionMessageStats::default();
+            let mut in_assistant_turn = false;
+            let mut offset = 0usize;
+            loop {
+                let Ok(page) = get_session_messages(&platform.id, &session.id, offset, 30) else {
+                    break;
+                };
+                if page.is_empty() {
+                    break;
+                }
+                let received = page.len();
+                fold_role_counts(
+                    page.iter().map(|message| message.role.as_str()),
+                    &mut manual,
+                    &mut in_assistant_turn,
+                );
+                offset += received;
+                if received < 30 {
+                    break;
+                }
+            }
+            manual.total = manual.user + manual.assistant;
+
+            assert_eq!(
+                (stats.total, stats.user, stats.assistant),
+                (manual.total, manual.user, manual.assistant),
+                "platform {} session {}",
+                platform.id,
+                session.id
+            );
+        }
     }
 }
