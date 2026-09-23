@@ -48,6 +48,7 @@ const SHARED_PLATFORMS: SharedPlatformInfo[] = [
   { id: 'qwen', name: 'Qwen Code' },
   { id: 'zcode', name: 'ZCode' },
   { id: 'dsh', name: 'DeepSeek Harness' },
+  { id: 'opencode', name: 'OpenCode' },
 ]
 
 const currentSharedPlatform = computed(() =>

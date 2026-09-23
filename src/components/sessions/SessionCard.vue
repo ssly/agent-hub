@@ -245,8 +245,8 @@ function handleDelete() {
       </div>
     </div>
 
-    <h3 v-if="title" v-tooltip.clamp="title" class="ah-session-card__title session-card__title truncate">{{ title }}</h3>
-    <div v-if="subtitle" v-tooltip.clamp="subtitle" class="ah-session-card__path">{{ subtitle }}</div>
+    <h3 v-if="title" class="ah-session-card__title session-card__title truncate">{{ title }}</h3>
+    <div v-if="subtitle" class="ah-session-card__path">{{ subtitle }}</div>
 
     <slot />
 

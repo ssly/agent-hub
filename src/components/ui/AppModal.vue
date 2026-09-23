@@ -2,14 +2,16 @@
 import { onMounted, onUnmounted, watch } from 'vue'
 import { X } from 'lucide-vue-next'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   show: boolean
   title?: string
   widthClass?: string // e.g. 'w-[48rem]'
   bare?: boolean // omit header/footer chrome; render only the body slot (edge-to-edge)
   closeOnOutside?: boolean // whether clicking the backdrop closes the modal (default true)
   fillHeight?: boolean // fixed 88vh height; body stops scrolling so a slotted region can own the single scrollbar
-}>()
+}>(), {
+  closeOnOutside: true,
+})
 
 const emit = defineEmits<{
   (e: 'close'): void

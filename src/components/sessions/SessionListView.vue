@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 import { useSessionsStore } from '@/stores/sessions'
-import { formatInt, formatSessionTime } from '@/lib/utils'
+import { formatInt, formatSessionTime, isPlatformResumable } from '@/lib/utils'
 import { useToast } from '@/composables/useToast'
 import { useHoverResetBool } from '@/composables/useHoverReset'
 import * as api from '@/lib/api'
@@ -402,6 +402,7 @@ function clearSessionSearch() {
                   {{ t('session.view_messages') }}
                 </button>
                 <button
+                  v-if="isPlatformResumable(result.platform_id)"
                   class="btn btn-primary btn-sm"
                   @click="store.openResume({ id: result.session_id, title: result.session_title, project_path: result.project_path, platform_id: result.platform_id })"
                 >
@@ -532,6 +533,7 @@ function clearSessionSearch() {
               :selectable="true"
               :selected="!!store.selectedMap[session.id]"
               :active="isSplit && !paneCollapsed && !store.isStatsView && store.previewSession?.id === session.id"
+              :resumable="isPlatformResumable(session.platform_id || store.selectedPlatformId)"
               @open="handleOpen(session)"
               @resume="store.openResume(session)"
               @delete="handleDelete(session)"
@@ -583,6 +585,7 @@ function clearSessionSearch() {
                 </h3>
                 <div class="session-preview__actions">
                   <button
+                    v-if="isPlatformResumable(store.previewSession?.platform_id || store.selectedPlatformId)"
                     class="btn btn-secondary btn-sm"
                     @click="store.openResume(store.previewSession)"
                   >

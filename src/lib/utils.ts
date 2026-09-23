@@ -79,3 +79,16 @@ export function shortenPath(path?: string | null): string {
   if (!path) return ''
   return path.replace(/^(\/Users\/[^/]+|C:\\Users\\[^\\]+)/, '~')
 }
+
+const NON_RESUMABLE_PLATFORMS = new Set(['zcode', 'dsh'])
+
+/**
+ * Returns true if the platform supports CLI terminal session resume.
+ * Platforms like ZCode (Electron GUI) and DeepSeek Harness (browser/dsh web)
+ * have no CLI resume flag and should not render resume buttons.
+ */
+export function isPlatformResumable(platformId?: string | null): boolean {
+  if (!platformId) return false
+  return !NON_RESUMABLE_PLATFORMS.has(platformId)
+}
+

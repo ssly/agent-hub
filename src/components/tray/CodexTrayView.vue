@@ -21,6 +21,7 @@ import {
   getQwenSessionMonitorSnapshot,
   getWorkbuddySessionMonitorSnapshot,
   getDshSessionMonitorSnapshot,
+  getOpencodeSessionMonitorSnapshot,
   getUsageProviderAvailability,
   locateMonitorSession,
   getUsageMonitorSettings,
@@ -105,7 +106,7 @@ let resizeSequence = 0
 // Same data the Monitor tab shows (backend snapshots + change events), but
 // reduced to one line per session: status dot + agent + user question.
 // Same order as MONITOR_AGENTS / platform registry (monitor subset).
-const MONITOR_AGENTS_LIST: MonitorAgent[] = ['codex', 'claude', 'cursor', 'antigravity', 'grok', 'kimi', 'qwen', 'zcode', 'workbuddy', 'kiro', 'dsh', 'omp']
+const MONITOR_AGENTS_LIST: MonitorAgent[] = ['codex', 'claude', 'cursor', 'antigravity', 'grok', 'kimi', 'qwen', 'zcode', 'workbuddy', 'kiro', 'dsh', 'omp', 'opencode']
 const MONITOR_CHANGED_EVENTS: Record<MonitorAgent, string> = {
   codex: 'session-monitor:codex-changed',
   claude: 'session-monitor:claude-changed',
@@ -119,6 +120,7 @@ const MONITOR_CHANGED_EVENTS: Record<MonitorAgent, string> = {
   kiro: 'session-monitor:kiro-changed',
   dsh: 'session-monitor:dsh-changed',
   omp: 'session-monitor:omp-changed',
+  opencode: 'session-monitor:opencode-changed',
 }
 const MONITOR_SNAPSHOT_API: Record<MonitorAgent, () => Promise<MonitorSnapshot>> = {
   codex: getCodexSessionMonitorSnapshot,
@@ -133,6 +135,7 @@ const MONITOR_SNAPSHOT_API: Record<MonitorAgent, () => Promise<MonitorSnapshot>>
   kiro: getKiroSessionMonitorSnapshot,
   dsh: getDshSessionMonitorSnapshot,
   omp: getOmpSessionMonitorSnapshot,
+  opencode: getOpencodeSessionMonitorSnapshot,
 }
 const monitorSnapshots = ref<Record<MonitorAgent, MonitorSnapshot>>({
   codex: { revision: 0, sessions: [] },
@@ -147,6 +150,7 @@ const monitorSnapshots = ref<Record<MonitorAgent, MonitorSnapshot>>({
   kiro: { revision: 0, sessions: [] },
   dsh: { revision: 0, sessions: [] },
   omp: { revision: 0, sessions: [] },
+  opencode: { revision: 0, sessions: [] },
 })
 
 // A snapshot request may finish after a newer monitor event. Revisions are

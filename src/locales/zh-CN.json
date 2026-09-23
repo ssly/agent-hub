@@ -91,7 +91,7 @@
     "expand_pane": "展开区块",
     "jump_to_pool": "前往 Shared 查看",
     "notes": {
-      "shared": "以下 Agent 默认读取此目录：Codex、Cursor、Antigravity（仅项目级）、Grok Build、Kimi Code、Qwen Code、ZCode、DeepSeek Harness。",
+      "shared": "以下 Agent 默认读取此目录：Codex、Cursor、Antigravity（仅项目级）、Grok Build、Kimi Code、Qwen Code、ZCode、DeepSeek Harness、OpenCode。",
       "codex": "官方用户级 Skills 仅 Shared 目录；~/.codex/skills 为社区误传，Codex 并不读取。",
       "claude-code": "独立插件体系：用户级插件可在下方启停，项目级插件通过 settings.json 声明。",
       "antigravity": "agy 与 Antigravity 2.0 共享 ~/.gemini/config；插件目录 ~/.gemini/config/plugins（暂只读）。",
@@ -101,7 +101,8 @@
       "zcode": "同时读取 Shared（~/.agents/skills）；MCP 配置位于 ~/.zcode/cli/config.json；插件市场（~/.zcode/cli/plugins）见下方只读列表，启停请在 ZCode 设置中操作。",
       "workbuddy": "Skills 位于 ~/.workbuddy/skills；MCP 配置位于 ~/.workbuddy/mcp.json；原生技能生态请在 WorkBuddy 界面中管理。",
       "dsh": "同时读取 Shared（~/.agents/skills）；Skills 在 ~/.dsh/skills（含单文件 Markdown Skill）。DeepSeek Harness 没有独立的 MCP 配置；如通过官方 @deepseek-ai/dsh-mcp-client 连接工具，它属于 profile 的 Cordis 插件，应在 dsh plugin 或 cordis.patch.yml 中管理，本工具不在 MCP 区展示或管理。",
-      "omp": "Skills 在 ~/.omp/agent/skills（项目级 .omp/skills），omp 还会自行读取 Claude/Cursor 等目录的 skills，本工具只管理 ~/.omp 自己的文件；MCP 在 ~/.omp/agent/mcp.json（标准 mcpServers，支持读写）。"
+      "omp": "Skills 在 ~/.omp/agent/skills（项目级 .omp/skills），omp 还会自行读取 Claude/Cursor 等目录的 skills，本工具只管理 ~/.omp 自己的文件；MCP 在 ~/.omp/agent/mcp.json（标准 mcpServers，支持读写）。",
+      "opencode": "同时读取 Shared（~/.agents/skills）；Skills 在 ~/.config/opencode/skills（项目级 .opencode/skills）；MCP 在 ~/.config/opencode/opencode.json（\"mcp\" 字段，支持读写）。"
     },
     "no_agents": "未发现可管理插件的 Agent。"
   },
@@ -573,6 +574,7 @@
     "agent_kiro": "Kiro",
     "agent_dsh": "DeepSeek Harness",
     "agent_omp": "Oh My Pi",
+    "agent_opencode": "OpenCode",
     "agent_all": "全部",
     "empty_all_hint": "任意 Agent 发起新会话后，都会实时出现在这里；进行中的排在最上面。",
     "hook_installed": "{agent} Hook 已完整安装",

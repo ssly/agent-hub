@@ -70,14 +70,17 @@ const selectedFormat = computed(() => {
 const isReadOnlyPlatform = computed(() => props.readonly)
 
 // Default config template based on platform format
-function defaultConfigTemplate(format: string): string {
+function defaultConfigTemplate(format: string, platformId?: string): string {
+  if (platformId === 'opencode') {
+    return '{\n  "type": "local",\n  "command": [\n    "npx",\n    "-y",\n    "@modelcontextprotocol/server-everything"\n  ],\n  "environment": {}\n}'
+  }
   if (format === 'toml') return 'command = ""\nargs = []\n'
   return '{\n  "command": "",\n  "args": [],\n  "env": {}\n}'
 }
 
 // Update default when platform changes
 watch(() => store.selectedPlatformId, () => {
-  newServerConfig.value = defaultConfigTemplate(selectedFormat.value)
+  newServerConfig.value = defaultConfigTemplate(selectedFormat.value, store.selectedPlatformId || undefined)
 }, { immediate: true })
 
 // --- Add flow: direct create without preview ---
@@ -89,7 +92,7 @@ async function handleCreateServer() {
     await store.createServer(name, config)
     store.addModalOpen = false
     newServerName.value = ''
-    newServerConfig.value = defaultConfigTemplate(selectedFormat.value)
+    newServerConfig.value = defaultConfigTemplate(selectedFormat.value, store.selectedPlatformId || undefined)
     showToast(t('mcp.saved'), 'success')
   } catch (e: any) {
     const msg = String(e?.message || e)

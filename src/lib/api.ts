@@ -340,6 +340,16 @@ export const previewOmpHookChange = (action: 'install' | 'uninstall') =>
 export const applyOmpHookChange = (action: 'install' | 'uninstall', expectedBeforeHash: string) =>
   invoke<any>('apply_omp_hook_change', { action, expectedBeforeHash })
 
+export const getOpencodeSessionMonitorSnapshot = () =>
+  invoke<any>('get_opencode_session_monitor_snapshot')
+export const deleteOpencodeSessionMonitorSession = (sessionId: string) =>
+  invoke<void>('delete_opencode_session_monitor_session', { sessionId })
+export const getOpencodeHookStatus = () => invoke<any>('get_opencode_hook_status')
+export const previewOpencodeHookChange = (action: 'install' | 'uninstall') =>
+  invoke<any>('preview_opencode_hook_change', { action })
+export const applyOpencodeHookChange = (action: 'install' | 'uninstall', expectedBeforeHash: string) =>
+  invoke<any>('apply_opencode_hook_change', { action, expectedBeforeHash })
+
 export interface DshWebStatus {
   state: 'stopped' | 'starting' | 'running'
   url?: string | null

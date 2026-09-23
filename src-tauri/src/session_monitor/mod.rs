@@ -3,6 +3,7 @@ mod dsh_launch;
 mod dsh_plugin;
 mod hooks;
 mod omp_plugin;
+mod opencode_plugin;
 mod service;
 mod types;
 

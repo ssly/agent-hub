@@ -36,6 +36,7 @@ export type MonitorAgent =
   | 'kiro'
   | 'dsh'
   | 'omp'
+  | 'opencode'
 /** Same relative order as platform/registry.rs (skip Shared). */
 export const MONITOR_AGENTS: MonitorAgent[] = [
   'codex',
@@ -50,6 +51,7 @@ export const MONITOR_AGENTS: MonitorAgent[] = [
   'kiro',
   'dsh',
   'omp',
+  'opencode',
 ]
 /** Sidebar tab: one of the agents, or the merged "all" view. */
 export type MonitorTab = MonitorAgent | 'all'
@@ -71,6 +73,7 @@ export const MONITOR_AGENT_PLATFORM: Partial<Record<MonitorAgent, string>> = {
   kiro: 'kiro',
   dsh: 'dsh',
   omp: 'omp',
+  opencode: 'opencode',
 }
 
 export interface SessionState {
@@ -132,6 +135,7 @@ const CHANGED_EVENTS: Record<MonitorAgent, string> = {
   kiro: 'session-monitor:kiro-changed',
   dsh: 'session-monitor:dsh-changed',
   omp: 'session-monitor:omp-changed',
+  opencode: 'session-monitor:opencode-changed',
 }
 
 const snapshotApi: Record<MonitorAgent, () => Promise<MonitorSnapshot>> = {
@@ -147,6 +151,7 @@ const snapshotApi: Record<MonitorAgent, () => Promise<MonitorSnapshot>> = {
   kiro: api.getKiroSessionMonitorSnapshot,
   dsh: api.getDshSessionMonitorSnapshot,
   omp: api.getOmpSessionMonitorSnapshot,
+  opencode: api.getOpencodeSessionMonitorSnapshot,
 }
 
 const deleteSessionApi: Record<MonitorAgent, (sessionId: string) => Promise<void>> = {
@@ -162,6 +167,7 @@ const deleteSessionApi: Record<MonitorAgent, (sessionId: string) => Promise<void
   kiro: api.deleteKiroSessionMonitorSession,
   dsh: api.deleteDshSessionMonitorSession,
   omp: api.deleteOmpSessionMonitorSession,
+  opencode: api.deleteOpencodeSessionMonitorSession,
 }
 
 const hookApi: Record<HookAgent, {
@@ -229,6 +235,11 @@ const hookApi: Record<HookAgent, {
     preview: api.previewOmpHookChange,
     apply: api.applyOmpHookChange,
   },
+  opencode: {
+    status: api.getOpencodeHookStatus,
+    preview: api.previewOpencodeHookChange,
+    apply: api.applyOpencodeHookChange,
+  },
 }
 
 function emptySnapshot(): MonitorSnapshot {
@@ -254,6 +265,7 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     kiro: emptySnapshot(),
     dsh: emptySnapshot(),
     omp: emptySnapshot(),
+    opencode: emptySnapshot(),
   })
   const hookStatuses = ref<Record<HookAgent, HookStatus | null>>({
     codex: null,
@@ -268,6 +280,7 @@ export const useSessionMonitorStore = defineStore('session-monitor', () => {
     kiro: null,
     dsh: null,
     omp: null,
+    opencode: null,
   })
   const loading = ref(false)
   const hookLoading = ref(false)

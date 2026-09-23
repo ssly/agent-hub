@@ -4,7 +4,6 @@ import {
   Bot,
   Network,
   PanelsTopLeft,
-  Triangle,
 } from 'lucide-vue-next'
 import kimiCodeMask from '@/assets/agent-icons/kimi-code.png'
 import kiroMask from '@/assets/agent-icons/kiro.png'
@@ -16,6 +15,7 @@ import cursorMask from '@/assets/agent-icons/cursor.png'
 import deepseekMask from '@/assets/agent-icons/deepseek.png'
 import grokBuildMask from '@/assets/agent-icons/grok-build.png'
 import ompMask from '@/assets/agent-icons/omp.png'
+import opencodeMask from '@/assets/agent-icons/opencode.png'
 import qwenMask from '@/assets/agent-icons/qwen.png'
 import workbuddyMask from '@/assets/agent-icons/workbuddy.png'
 import zcodeMask from '@/assets/agent-icons/zcode.png'
@@ -51,6 +51,7 @@ const brandMasks: Record<string, string> = {
   deepseek: deepseekMask,
   grok: grokBuildMask,
   omp: ompMask,
+  opencode: opencodeMask,
   qwen: qwenMask,
   workbuddy: workbuddyMask,
   zcode: zcodeMask,
@@ -64,7 +65,6 @@ const icons: Record<string, Component> = {
   // Shared is a shared skill directory, not a branded Agent.
   shared: Network,
   all: PanelsTopLeft,
-  opencode: Triangle,
 }
 
 const agentKey = computed(() => aliases[props.agentId] ?? props.agentId)

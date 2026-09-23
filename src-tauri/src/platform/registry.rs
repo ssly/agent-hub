@@ -118,6 +118,13 @@ pub fn builtin_platforms() -> Vec<PlatformDef> {
             // <workspace>/.omp/skills (see workspace_skill_dir below).
             skill_dir: join_relative(home.clone(), ".omp/agent/skills"),
         },
+        PlatformDef {
+            id: "opencode".into(),
+            display_name: "OpenCode".into(),
+            description: "OpenCode AI coding agent skills".into(),
+            presence_path: home.join(".config").join("opencode"),
+            skill_dir: join_relative(home.clone(), ".config/opencode/skills"),
+        },
     ]
 }
 
@@ -136,6 +143,10 @@ pub fn workspace_skill_dir(platform_id: &str, workspace: &std::path::Path) -> Op
     // `agent` segment at project level (<workspace>/.omp/skills).
     if platform_id == "omp" {
         return Some(join_relative(workspace.to_path_buf(), ".omp/skills"));
+    }
+    // OpenCode keeps project-level skills in `.opencode/skills`.
+    if platform_id == "opencode" {
+        return Some(join_relative(workspace.to_path_buf(), ".opencode/skills"));
     }
     let home = dirs::home_dir()?;
     let def = builtin_platforms()
@@ -198,6 +209,13 @@ pub fn get_supported_agents(config: &crate::config::Config) -> Vec<SupportedAgen
                 ("~/.dsh", candidates)
             }
             "omp" => ("~/.omp", vec![home.join(".omp")]),
+            "opencode" => (
+                "~/.config/opencode",
+                vec![
+                    home.join(".config").join("opencode"),
+                    home.join(".local").join("share").join("opencode"),
+                ],
+            ),
             _ => ("~", vec![p.presence_path.clone()]),
         };
 
@@ -332,7 +350,17 @@ mod tests {
                 "kiro",
                 "dsh",
                 "omp",
+                "opencode",
             ]
+        );
+    }
+
+    #[test]
+    fn opencode_workspace_skills_live_in_dot_opencode() {
+        let root = PathBuf::from("/tmp/example-project");
+        assert_eq!(
+            workspace_skill_dir("opencode", &root),
+            Some(root.join(".opencode").join("skills"))
         );
     }
 
@@ -350,7 +378,7 @@ mod tests {
         let config = crate::config::Config::default();
         let agents = get_supported_agents(&config);
         // "shared" is omitted as it is the shared skill directory, not a configurable agent.
-        assert_eq!(agents.len(), 12);
+        assert_eq!(agents.len(), 13);
         assert_eq!(agents[0].id, "codex");
         assert_eq!(agents[0].user_dir_display, "~/.codex");
         assert_eq!(agents[1].id, "claude-code");

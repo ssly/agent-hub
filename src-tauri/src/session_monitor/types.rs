@@ -15,12 +15,13 @@ pub enum AgentKind {
     Kiro,
     Dsh,
     Omp,
+    Opencode,
 }
 
 impl AgentKind {
     /// Same relative order as `platform/registry.rs` builtin platforms
     /// (monitor subset: no Shared).
-    pub const ALL: [AgentKind; 12] = [
+    pub const ALL: [AgentKind; 13] = [
         Self::Codex,
         Self::Claude,
         Self::Cursor,
@@ -33,6 +34,7 @@ impl AgentKind {
         Self::Kiro,
         Self::Dsh,
         Self::Omp,
+        Self::Opencode,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -49,6 +51,7 @@ impl AgentKind {
             Self::Kiro => "kiro",
             Self::Dsh => "dsh",
             Self::Omp => "omp",
+            Self::Opencode => "opencode",
         }
     }
 
@@ -66,6 +69,7 @@ impl AgentKind {
             Self::Kiro => "kiro-state.json",
             Self::Dsh => "dsh-state.json",
             Self::Omp => "omp-state.json",
+            Self::Opencode => "opencode-state.json",
         }
     }
 
@@ -83,6 +87,7 @@ impl AgentKind {
             Self::Kiro => "session-monitor:kiro-changed",
             Self::Dsh => "session-monitor:dsh-changed",
             Self::Omp => "session-monitor:omp-changed",
+            Self::Opencode => "session-monitor:opencode-changed",
         }
     }
 }

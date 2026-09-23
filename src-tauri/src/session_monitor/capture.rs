@@ -491,6 +491,10 @@ fn payload_matches_agent(agent: AgentKind, input: &serde_json::Value) -> bool {
             string_field(input, "hook_event_name").is_some()
                 && string_field(input, "session_id").is_some()
         }
+        AgentKind::Opencode => {
+            string_field(input, "hook_event_name").is_some()
+                && string_field(input, "session_id").is_some()
+        }
         _ => true,
     }
 }

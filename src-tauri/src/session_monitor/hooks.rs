@@ -109,6 +109,7 @@ fn managed_events(agent: AgentKind) -> &'static [&'static str] {
         // omp has no hooks.json; install is an auto-discovered extension
         // (omp_plugin.rs).
         AgentKind::Omp => &[],
+        AgentKind::Opencode => &[],
     }
 }
 
@@ -152,6 +153,7 @@ fn hook_arg(agent: AgentKind) -> Result<&'static str, String> {
         AgentKind::Kiro => Ok(KIRO_HOOK_ARG),
         AgentKind::Dsh => Err("DeepSeek Harness uses a Cordis plugin, not a command hook".into()),
         AgentKind::Omp => Err("Oh My Pi uses an extension, not a command hook".into()),
+        AgentKind::Opencode => Err("OpenCode uses an extension plugin, not a command hook".into()),
     }
 }
 
@@ -188,6 +190,11 @@ fn config_path(agent: AgentKind) -> Result<PathBuf, String> {
             .join("agent")
             .join("extensions")
             .join("agent-hub-omp-monitor")),
+        AgentKind::Opencode => Ok(home
+            .join(".config")
+            .join("opencode")
+            .join("plugins")
+            .join("agent-hub-opencode-monitor")),
     }
 }
 
@@ -205,6 +212,7 @@ fn config_label(agent: AgentKind) -> &'static str {
         AgentKind::Kiro => "Kiro Hook 文件",
         AgentKind::Dsh => "DeepSeek Harness 插件配置",
         AgentKind::Omp => "Oh My Pi 插件目录",
+        AgentKind::Opencode => "OpenCode 插件目录",
     }
 }
 
@@ -222,6 +230,7 @@ fn agent_label(agent: AgentKind) -> &'static str {
         AgentKind::Kiro => "Kiro",
         AgentKind::Dsh => "DeepSeek Harness",
         AgentKind::Omp => "Oh My Pi",
+        AgentKind::Opencode => "OpenCode",
     }
 }
 
@@ -244,6 +253,7 @@ pub fn agent_presence_path(agent: AgentKind) -> Option<PathBuf> {
         AgentKind::Kiro => home.join(".kiro"),
         AgentKind::Dsh => crate::session::dsh::dsh_home().unwrap_or_else(|| home.join(".dsh")),
         AgentKind::Omp => home.join(".omp"),
+        AgentKind::Opencode => home.join(".config").join("opencode"),
     })
 }
 
@@ -262,6 +272,9 @@ pub fn get_hook_status(agent: AgentKind) -> Result<HookStatus, String> {
     }
     if agent == AgentKind::Omp {
         return super::omp_plugin::omp_hook_status();
+    }
+    if agent == AgentKind::Opencode {
+        return super::opencode_plugin::opencode_hook_status();
     }
     if agent == AgentKind::Kimi {
         return kimi_hook_status();
@@ -347,6 +360,9 @@ pub fn preview_hook_change(
     if agent == AgentKind::Omp {
         return super::omp_plugin::omp_preview(action);
     }
+    if agent == AgentKind::Opencode {
+        return super::opencode_plugin::opencode_preview(action);
+    }
     let path = config_path(agent)?;
     let arg = hook_arg(agent)?;
     let command = expected_command(arg)?;
@@ -410,6 +426,9 @@ pub fn apply_hook_change(
     }
     if agent == AgentKind::Omp {
         return super::omp_plugin::omp_apply(action, expected_before_hash);
+    }
+    if agent == AgentKind::Opencode {
+        return super::opencode_plugin::opencode_apply(action, expected_before_hash);
     }
     let path = config_path(agent)?;
     let arg = hook_arg(agent)?;
@@ -2842,7 +2861,7 @@ enabled = false
     fn agent_presence_path_covers_every_agent() {
         // The mapping must stay exhaustive (compiler-enforced) and aligned
         // with platform/registry.rs presence_path values.
-        let expected: [(AgentKind, &str); 12] = [
+        let expected: [(AgentKind, &str); 13] = [
             (AgentKind::Codex, ".codex"),
             (AgentKind::Claude, ".claude"),
             (AgentKind::Cursor, ".cursor"),
@@ -2855,6 +2874,7 @@ enabled = false
             (AgentKind::Kiro, ".kiro"),
             (AgentKind::Dsh, ".dsh"),
             (AgentKind::Omp, ".omp"),
+            (AgentKind::Opencode, ".config/opencode"),
         ];
         assert_eq!(AgentKind::ALL.len(), expected.len());
         for (agent, suffix) in expected {

@@ -110,6 +110,14 @@ pub fn builtin_mcp_platforms() -> Vec<McpPlatformDef> {
             format: McpFormat::Json,
             mcp_key: "mcpServers".into(),
         },
+        McpPlatformDef {
+            id: "opencode".into(),
+            display_name: "OpenCode".into(),
+            presence_path: home.join(".config").join("opencode"),
+            config_path: join_relative(home.clone(), ".config/opencode/opencode.json"),
+            format: McpFormat::Json,
+            mcp_key: "mcp".into(),
+        },
     ]
 }
 
@@ -135,6 +143,14 @@ pub fn find_workspace_mcp_platform(
         "cursor" => workspace.join(".cursor").join("mcp.json"),
         "workbuddy" => workspace.join(".workbuddy").join("mcp.json"),
         "kiro" => workspace.join(".kiro").join("settings").join("mcp.json"),
+        "opencode" => {
+            let dot_opencode = workspace.join(".opencode").join("opencode.json");
+            if dot_opencode.exists() {
+                dot_opencode
+            } else {
+                workspace.join("opencode.json")
+            }
+        }
         _ => return None,
     };
     Some(def)
@@ -183,6 +199,19 @@ mod tests {
                 .config_path,
             root.join(".qwen").join("settings.json")
         );
+        assert_eq!(
+            find_workspace_mcp_platform("opencode", &root)
+                .unwrap()
+                .config_path,
+            root.join("opencode.json")
+        );
+    }
+
+    #[test]
+    fn opencode_uses_mcp_key() {
+        let opencode = find_mcp_platform("opencode").expect("opencode MCP platform");
+        assert_eq!(opencode.format, McpFormat::Json);
+        assert_eq!(opencode.mcp_key, "mcp");
     }
 
     #[test]

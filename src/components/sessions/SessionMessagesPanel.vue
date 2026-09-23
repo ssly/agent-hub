@@ -466,8 +466,65 @@ watch(messagesSentinel, () => {
   setupMessagesObserver()
 })
 
+let autoScrollPinned = false
+let pinTimer: ReturnType<typeof setTimeout> | null = null
+let contentObserver: MutationObserver | null = null
+
+function scrollToBottomInstant() {
+  if (!msgListRef.value) return
+  msgListRef.value.scrollTop = msgListRef.value.scrollHeight
+}
+
+function scrollToBottom() {
+  autoScrollPinned = true
+  if (pinTimer) clearTimeout(pinTimer)
+  pinTimer = setTimeout(() => {
+    autoScrollPinned = false
+  }, 600)
+
+  nextTick(() => {
+    scrollToBottomInstant()
+    requestAnimationFrame(() => {
+      scrollToBottomInstant()
+    })
+  })
+}
+
+function handleListScroll() {
+  if (!msgListRef.value) return
+  const { scrollTop, scrollHeight, clientHeight } = msgListRef.value
+  if (scrollHeight - scrollTop - clientHeight > 80) {
+    autoScrollPinned = false
+  }
+}
+
+function isNearBottom(): boolean {
+  if (!msgListRef.value) return true
+  const { scrollTop, scrollHeight, clientHeight } = msgListRef.value
+  return scrollHeight - scrollTop - clientHeight < 120
+}
+
+function setupContentObserver() {
+  if (typeof MutationObserver === 'undefined' || !msgListRef.value) return
+  if (contentObserver) contentObserver.disconnect()
+  contentObserver = new MutationObserver(() => {
+    if (autoScrollPinned && msgListRef.value) {
+      scrollToBottomInstant()
+    }
+  })
+  contentObserver.observe(msgListRef.value, { childList: true, subtree: true })
+}
+
+watch(msgListRef, el => {
+  if (el) {
+    setupMessagesObserver()
+    setupContentObserver()
+  }
+})
+
 async function loadMessages(append: boolean) {
   if (!props.platformId || !props.sessionId) return
+  const wasNearBottom = !append || isNearBottom()
   if (append) loadingMore.value = true
   else loading.value = true
   try {
@@ -486,6 +543,11 @@ async function loadMessages(append: boolean) {
   } finally {
     loading.value = false
     loadingMore.value = false
+    if (!append) {
+      scrollToBottom()
+    } else if (wasNearBottom) {
+      nextTick(() => scrollToBottomInstant())
+    }
   }
 }
 
@@ -606,8 +668,10 @@ onMounted(() => {
 
 onUnmounted(() => {
   clearLoadTimers()
+  if (pinTimer) clearTimeout(pinTimer)
   window.removeEventListener('keydown', handleKeyDown, true)
   messagesObserver?.disconnect()
+  contentObserver?.disconnect()
 })
 </script>
 
@@ -737,7 +801,7 @@ onUnmounted(() => {
         </div>
       </Transition>
 
-      <div ref="msgListRef" class="ah-msg-list h-full">
+      <div ref="msgListRef" class="ah-msg-list h-full" @scroll="handleListScroll">
         <AppLoading v-if="loading" class="py-8">{{ t('session.loading_messages') }}</AppLoading>
         <div v-else-if="loadError" class="text-center py-8" style="color: var(--danger)">
           {{ loadError }}

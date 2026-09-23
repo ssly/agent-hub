@@ -9,6 +9,7 @@ mod kimi;
 mod kiro;
 mod models;
 mod omp;
+mod opencode;
 mod qwen;
 mod workbuddy;
 mod zcode;
@@ -55,6 +56,7 @@ const SESSION_PLATFORM_SPECS: &[SessionPlatformSpec] = &[
     SessionPlatformSpec { id: "kiro", display_name: "Kiro", count_sessions: kiro::count_kiro_sessions },
     SessionPlatformSpec { id: "dsh", display_name: "DeepSeek Harness", count_sessions: dsh::count_dsh_sessions },
     SessionPlatformSpec { id: "omp", display_name: "Oh My Pi", count_sessions: omp::count_omp_sessions },
+    SessionPlatformSpec { id: "opencode", display_name: "OpenCode", count_sessions: opencode::count_opencode_sessions },
 ];
 
 /// Normalized path filter: `None` means "every directory".
@@ -132,6 +134,7 @@ fn list_sessions_all(platform_id: &str) -> Result<Vec<models::SessionSummary>, S
         "workbuddy" => workbuddy::list_workbuddy_sessions_all(),
         "dsh" => dsh::list_dsh_sessions_all(),
         "omp" => omp::list_omp_sessions_all(),
+        "opencode" => opencode::list_opencode_sessions_all(),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }?;
     // Normalize once for path filters, cards, and resume `cd` so every agent
@@ -632,6 +635,7 @@ fn last_session_messages(
         "workbuddy" => workbuddy::last_workbuddy_messages(session_id),
         "dsh" => dsh::last_dsh_messages(session_id),
         "omp" => omp::last_omp_messages(session_id),
+        "opencode" => opencode::last_opencode_messages(session_id),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
 }
@@ -922,6 +926,7 @@ pub fn get_session_messages(
         "workbuddy" => workbuddy::get_workbuddy_messages(session_id, offset, limit),
         "dsh" => dsh::get_dsh_messages(session_id, offset, limit),
         "omp" => omp::get_omp_messages(session_id, offset, limit),
+        "opencode" => opencode::get_opencode_messages(session_id, offset, limit),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
 }
@@ -944,6 +949,7 @@ pub fn search_session_messages(
         "workbuddy" => workbuddy::search_workbuddy_messages(&query_lower),
         "dsh" => dsh::search_dsh_messages(&query_lower),
         "omp" => omp::search_omp_messages(&query_lower),
+        "opencode" => opencode::search_opencode_messages(&query_lower),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
 }
@@ -962,6 +968,7 @@ pub fn delete_session(platform_id: &str, session_id: &str) -> Result<(), String>
         "workbuddy" => workbuddy::delete_workbuddy_session(session_id),
         "dsh" => dsh::delete_dsh_session(session_id),
         "omp" => omp::delete_omp_session(session_id),
+        "opencode" => opencode::delete_opencode_session(session_id),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
 }
@@ -1066,6 +1073,7 @@ fn build_resume_command(platform_id: &str, session_id: &str) -> Result<String, S
                 .to_string(),
         ),
         "omp" => Ok(format!("omp -r {}", shell_quote(session_id))),
+        "opencode" => Ok(format!("opencode -s {}", shell_quote(session_id))),
         _ => Err(format!("Unsupported platform: {}", platform_id)),
     }
 }
@@ -1507,6 +1515,27 @@ mod tests {
                 platform.id,
                 session.id
             );
+        }
+    }
+
+    #[test]
+    fn build_resume_command_for_opencode_contains_session_flag() {
+        let command = build_resume_command("opencode", "ses_test123").expect("resume command");
+        assert!(command.contains("opencode -s"));
+        assert!(command.contains("ses_test123"));
+    }
+
+    #[test]
+    fn opencode_sessions_real_data_smoke_test() {
+        let Ok(sessions) = list_sessions_all("opencode") else {
+            return;
+        };
+        for session in sessions.iter().take(3) {
+            let messages = get_session_messages("opencode", &session.id, 0, 10).unwrap_or_default();
+            for msg in messages {
+                assert!(!msg.role.is_empty());
+                assert!(!msg.content.is_empty() || msg.thinking.is_some());
+            }
         }
     }
 }

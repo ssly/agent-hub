@@ -8,6 +8,7 @@ import SessionCard from '@/components/sessions/SessionCard.vue'
 import SessionMessagesModal from '@/components/sessions/SessionMessagesModal.vue'
 import SessionResumeModal from '@/components/sessions/SessionResumeModal.vue'
 import { useToast } from '@/composables/useToast'
+import { isPlatformResumable } from '@/lib/utils'
 import {
   useSessionMonitorStore,
   HOOK_AGENTS,
@@ -49,6 +50,7 @@ const HOOK_CONFIG_PATHS: Record<string, string> = {
   kiro: '~/.kiro/hooks/agent-hub.json',
   dsh: '~/.dsh/profiles/web/cordis.patch.yml',
   omp: '~/.omp/agent/extensions/agent-hub-omp-monitor',
+  opencode: '~/.config/opencode/plugins/agent-hub-opencode-monitor',
 }
 const defaultConfigPath = computed(() => HOOK_CONFIG_PATHS[store.activeAgent] ?? '')
 const runningCount = computed(
@@ -78,11 +80,11 @@ const primaryNotice = computed<{ kind: 'info' | 'warning' | 'error'; text: strin
   if (store.error) return { kind: 'error', text: store.error }
   if (store.hookStatus?.issue) return { kind: 'warning', text: store.hookStatus.issue }
   if (outdatedHookAgents.value.length) {
-    const onlyDsh = outdatedHookAgents.value.length === 1 && outdatedHookAgents.value[0] === 'dsh'
+    const onlyPlugin = outdatedHookAgents.value.length === 1 && usesPlugin(outdatedHookAgents.value[0])
     return {
       kind: 'warning',
       text: t(
-        onlyDsh ? 'session_monitor.plugin_upgrade_hint' : 'session_monitor.hook_upgrade_hint',
+        onlyPlugin ? 'session_monitor.plugin_upgrade_hint' : 'session_monitor.hook_upgrade_hint',
         { agents: outdatedHookAgentNames.value },
       ),
     }
@@ -100,10 +102,9 @@ function agentLabel(agent: MonitorAgent): string {
   return t(`session_monitor.agent_${agent}`)
 }
 
-/** DSH installs an observe-only Cordis plugin; omp an auto-discovered
- *  extension. Neither has command hooks. */
+/** DSH, omp and opencode install observe-only plugins/extensions. None have command hooks. */
 function usesPlugin(agent: string): boolean {
-  return agent === 'dsh' || agent === 'omp'
+  return agent === 'dsh' || agent === 'omp' || agent === 'opencode'
 }
 
 function tMech(hookKey: string, pluginKey: string, agent?: string, params?: Record<string, unknown>) {
@@ -563,14 +564,14 @@ onUnmounted(() => {
           :delete-note="t('session_monitor.delete_note')"
           :title="session.userPrompt || t('session_monitor.no_prompt')"
           :unread="session.unread"
-          :resumable="sessionPlatform(session) !== null"
+          :resumable="isPlatformResumable(sessionPlatform(session))"
           @open="handleOpenSession(session)"
           @resume="store.openResume(session)"
           @delete="store.deleteSession(session.sessionId, session.agent)"
           @read="markSessionRead(session)"
         >
           <div class="session-row__line">
-            <p v-tooltip.clamp="session.assistantReply || (session.status === 'waiting' ? t('session_monitor.waiting_confirm') : session.status === 'running' ? t('session_monitor.waiting_reply', { agent: agentLabel(session.agent) }) : t('session_monitor.no_reply'))">
+            <p>
               {{ session.assistantReply || (session.status === 'waiting' ? t('session_monitor.waiting_confirm') : session.status === 'running' ? t('session_monitor.waiting_reply', { agent: agentLabel(session.agent) }) : t('session_monitor.no_reply')) }}
             </p>
           </div>

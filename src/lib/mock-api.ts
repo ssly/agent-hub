@@ -81,6 +81,12 @@ const PLATFORMS = [
     skill_dir: '~/.omp/agent/skills',
     skill_count: 2,
   },
+  {
+    id: 'opencode',
+    display_name: 'OpenCode',
+    skill_dir: '~/.config/opencode/skills',
+    skill_count: 2,
+  },
 ]
 
 function makeSkills(platformId: string) {
@@ -122,6 +128,7 @@ const MCP_PLATFORMS = [
   { id: 'zcode', display_name: 'ZCode', server_count: 1, config_path: '~/.zcode/cli/config.json', format: 'json' },
   { id: 'workbuddy', display_name: 'WorkBuddy', server_count: 2, config_path: '~/.workbuddy/mcp.json', format: 'json' },
   { id: 'omp', display_name: 'Oh My Pi', server_count: 1, config_path: '~/.omp/agent/mcp.json', format: 'json' },
+  { id: 'opencode', display_name: 'OpenCode', server_count: 1, config_path: '~/.config/opencode/opencode.json', format: 'json' },
 ]
 
 const CLAUDE_PLUGINS = [
@@ -171,15 +178,16 @@ const SESSION_PLATFORMS = [
   { id: 'kiro', display_name: 'Kiro', session_count: 3 },
   { id: 'dsh', display_name: 'DeepSeek Harness', session_count: 2 },
   { id: 'omp', display_name: 'Oh My Pi', session_count: 1 },
+  { id: 'opencode', display_name: 'OpenCode', session_count: 2 },
 ]
 
-function makeSessions(offset: number, limit: number) {
+function makeSessions(offset: number, limit: number, platformId = 'claude-code') {
   const total = 28
   const sessions = []
   for (let i = offset; i < Math.min(offset + limit, total); i++) {
     sessions.push({
       id: `session-${i}`,
-      platform_id: 'claude-code',
+      platform_id: platformId,
       title: i === 0 ? 'Vue 3 frontend refactor' : i === 1 ? 'Fix auth token refresh' : `Session #${i + 1}`,
       project_path: i % 3 === 0 ? '/Users/demo/projects/agent-hub' : i % 3 === 1 ? '/Users/demo/projects/api-server' : '',
       model: i % 2 === 0 ? 'claude-sonnet-4' : 'claude-opus-4',
@@ -313,8 +321,8 @@ export async function listSessionPlatforms(pathFilter?: string) {
   }
   return SESSION_PLATFORMS
 }
-export async function listSessions(_platformId: string, _pathFilter: string, offset: number, limit: number) {
-  await delay(200); return makeSessions(offset, limit)
+export async function listSessions(platformId: string, _pathFilter: string, offset: number, limit: number) {
+  await delay(200); return makeSessions(offset, limit, platformId)
 }
 export async function listSessionTerminals() {
   await delay()
@@ -610,6 +618,7 @@ const mockSupportedAgents: SupportedAgentInfo[] = [
   { id: 'kiro', display_name: 'Kiro', user_dir_display: '~/.kiro', user_dir_resolved: '/Users/mock/.kiro', exists: false, enabled: false },
   { id: 'dsh', display_name: 'DeepSeek Harness', user_dir_display: '~/.dsh', user_dir_resolved: '/Users/mock/.dsh', exists: true, enabled: true },
   { id: 'omp', display_name: 'Oh My Pi', user_dir_display: '~/.omp', user_dir_resolved: '/Users/mock/.omp', exists: false, enabled: false },
+  { id: 'opencode', display_name: 'OpenCode', user_dir_display: '~/.config/opencode', user_dir_resolved: '/Users/mock/.config/opencode', exists: true, enabled: true },
 ]
 
 export async function getSupportedAgents(): Promise<SupportedAgentInfo[]> {
@@ -1365,6 +1374,36 @@ export async function deleteOmpSessionMonitorSession(sessionId: string) {
   ompMonitorSessions = ompMonitorSessions.filter(session => session.sessionId !== sessionId)
 }
 
+const OPENCODE_PLUGIN_COMMAND = 'agent-hub-opencode-monitor'
+const OPENCODE_PLUGIN_DIR = '~/.config/opencode/plugins/agent-hub-opencode-monitor'
+let opencodeHookInstalled = false
+let opencodeMonitorSessions = [
+  {
+    sessionId: 'opencode-mock-1',
+    turnId: 'turn-1',
+    source: 'terminal',
+    status: 'running',
+    cwd: '/Users/demo/projects/agent-hub',
+    userPrompt: '把 OpenCode 的会话监听与技能管理接进来。',
+    assistantReply: null,
+    updatedAt: Date.now() - 15_000,
+    unread: false,
+  },
+]
+
+export async function getOpencodeSessionMonitorSnapshot() {
+  await delay()
+  return {
+    revision: 1,
+    sessions: opencodeMonitorSessions,
+  }
+}
+
+export async function deleteOpencodeSessionMonitorSession(sessionId: string) {
+  await delay()
+  opencodeMonitorSessions = opencodeMonitorSessions.filter(session => session.sessionId !== sessionId)
+}
+
 type MockMonitorSession = { sessionId: string; updatedAt: number; unread: boolean }
 
 function mockMonitorSessionList(agent: string): MockMonitorSession[] {
@@ -1381,6 +1420,7 @@ function mockMonitorSessionList(agent: string): MockMonitorSession[] {
     case 'kiro': return kiroMonitorSessions
     case 'dsh': return dshMonitorSessions
     case 'omp': return ompMonitorSessions
+    case 'opencode': return opencodeMonitorSessions
     default: return []
   }
 }
@@ -1433,6 +1473,42 @@ export async function applyOmpHookChange(action: 'install' | 'uninstall', _expec
   return getOmpHookStatus()
 }
 
+export async function getOpencodeHookStatus() {
+  await delay()
+  return makeHookStatus(opencodeHookInstalled, OPENCODE_PLUGIN_DIR, OPENCODE_PLUGIN_COMMAND, 1)
+}
+
+export async function previewOpencodeHookChange(action: 'install' | 'uninstall') {
+  await delay()
+  const adding = action === 'install'
+  return {
+    action,
+    configPath: OPENCODE_PLUGIN_DIR,
+    command: OPENCODE_PLUGIN_COMMAND,
+    beforeHash: 'mock-before-hash',
+    added: adding ? 2 : 1,
+    removed: adding ? 1 : 2,
+    changed: true,
+    diffLines: adding
+      ? [
+          { tag: 'removed', content: 'missing' },
+          { tag: 'added', content: 'current' },
+          { tag: 'context', content: `# Also writes ${OPENCODE_PLUGIN_COMMAND}/ (index.js + package.json) into ~/.config/opencode/plugins` },
+        ]
+      : [
+          { tag: 'removed', content: 'current' },
+          { tag: 'added', content: 'missing' },
+          { tag: 'context', content: `# Also removes ${OPENCODE_PLUGIN_COMMAND}/ from ~/.config/opencode/plugins` },
+        ],
+  }
+}
+
+export async function applyOpencodeHookChange(action: 'install' | 'uninstall', _expectedBeforeHash: string) {
+  await delay(300)
+  opencodeHookInstalled = action === 'install'
+  return getOpencodeHookStatus()
+}
+
 let dshWebState: 'stopped' | 'starting' | 'running' = 'stopped'
 
 export async function getDshWebStatus() {
@@ -1459,7 +1535,7 @@ export async function stopDshWeb() {
 // Browser preview shows every monitor agent (no real home directory to probe).
 export async function listAvailableMonitorAgents() {
   await delay()
-  return ['codex', 'claude', 'cursor', 'antigravity', 'grok', 'kimi', 'qwen', 'zcode', 'workbuddy', 'kiro', 'dsh', 'omp']
+  return ['codex', 'claude', 'cursor', 'antigravity', 'grok', 'kimi', 'qwen', 'zcode', 'workbuddy', 'kiro', 'dsh', 'omp', 'opencode']
 }
 
 let mockPendingLocateSession: any = null
