@@ -33,15 +33,15 @@ static DOCK_EDGE: std::sync::Mutex<Option<&'static str>> = std::sync::Mutex::new
 /// must not retrigger snap detection.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 static TRAY_ANIMATING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-/// Timestamp of the last programmatic geometry change (set_size / set_position
-/// from dock expand/collapse/snap/resize). Windows synthesizes Moved + a
+/// Timestamp of the last programmatic geometry change from dock
+/// expand/collapse/snap/resize. Windows synthesizes Moved + a
 /// spurious Focused(false) for those; treating them as user drags expands the
 /// strip and can collapse again before outer_size catches up, poisoning
 /// DOCK_PANEL with strip dimensions so the next hover expands to a tiny panel.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 static LAST_OWNED_GEOMETRY: std::sync::Mutex<Option<std::time::Instant>> =
     std::sync::Mutex::new(None);
-/// How long after our own set_size/set_position we ignore Moved / focus-collapse.
+/// How long after our own geometry updates we ignore Moved / focus-collapse.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 const OWNED_GEOMETRY_GUARD_MS: u128 = 250;
 /// Floating rect (physical) before docking; its size is reused for hover-expand.
@@ -469,6 +469,64 @@ fn set_tray_physical_frame(window: &tauri::WebviewWindow, x: i32, y: i32, w: u32
     let _ = window.set_size(tauri::PhysicalSize::new(w.max(1), h.max(1)));
     let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
     mark_owned_geometry();
+}
+
+/// Apply an animation frame as one native geometry update. Tauri exposes size
+/// and position separately, which can paint an intermediate frame and enqueue
+/// stale geometry while the transparent tray is transitioning at screen edge.
+#[cfg(target_os = "windows")]
+fn set_tray_animation_frame(window: &tauri::WebviewWindow, x: i32, y: i32, w: u32, h: u32) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
+
+    let Ok(hwnd) = window.hwnd() else {
+        return false;
+    };
+    let width = w.clamp(1, i32::MAX as u32) as i32;
+    let height = h.clamp(1, i32::MAX as u32) as i32;
+    // SAFETY: hwnd is obtained from the live Tauri window and this is called
+    // on its UI thread. SetWindowPos updates the full rect in one operation.
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            None,
+            x,
+            y,
+            width,
+            height,
+            SWP_NOACTIVATE | SWP_NOZORDER,
+        )
+        .is_ok()
+    }
+}
+
+/// AppKit's frame uses a bottom-left origin and points; tray geometry is in
+/// physical pixels with a top-left origin, matching Tauri's public API.
+#[cfg(target_os = "macos")]
+fn set_tray_animation_frame(window: &tauri::WebviewWindow, x: i32, y: i32, w: u32, h: u32) -> bool {
+    use core_graphics::display::CGDisplay;
+    use objc2_app_kit::NSWindow;
+    use objc2_foundation::{NSPoint, NSRect, NSSize};
+
+    let (Ok(ns_window), Ok(scale)) = (window.ns_window(), window.scale_factor()) else {
+        return false;
+    };
+    if !scale.is_finite() || scale <= 0.0 {
+        return false;
+    }
+
+    let frame_width = (w.max(1) as f64) / scale;
+    let frame_height = (h.max(1) as f64) / scale;
+    let frame = NSRect::new(
+        NSPoint::new(
+            x as f64 / scale,
+            CGDisplay::main().pixels_high() as f64 - y as f64 / scale - frame_height,
+        ),
+        NSSize::new(frame_width, frame_height),
+    );
+    // SAFETY: the native handle belongs to this live Tauri window and the
+    // caller runs this function on the AppKit main thread.
+    unsafe { (&*(ns_window as *const NSWindow)).setFrame_display(frame, true) };
+    true
 }
 
 /// Remember the slid-out panel rect only when it is a plausible full panel
@@ -1073,58 +1131,91 @@ fn animate_tray_window(
     mark_owned_geometry();
     let window = window.clone();
 
-    // Windows: a transparent WebView2 HWND sitting flush on the screen edge
-    // as a 20px strip will, after sitting idle, get inflated by Snap / the
-    // compositor if we tween it with ~18 rapid set_size calls. Jump once,
-    // wait a frame, then force the target again so a hijack cannot stick.
-    #[cfg(target_os = "windows")]
-    {
-        let _ = from;
-        std::thread::spawn(move || {
-            set_tray_physical_frame(&window, to.0, to.1, to.2, to.3);
-            std::thread::sleep(std::time::Duration::from_millis(32));
-            set_tray_physical_frame(&window, to.0, to.1, to.2, to.3);
-            TRAY_ANIMATING.store(false, Ordering::Relaxed);
-            done(&window);
-            mark_owned_geometry();
-        });
-        return;
-    }
+    std::thread::spawn(move || {
+        use std::sync::mpsc::sync_channel;
+        use std::time::{Duration, Instant};
 
-    #[cfg(not(target_os = "windows"))]
-    {
-        // NOTE: NSWindow.setFrame:display:animate: was tried here and reverted —
-        // on a transparent, shadowless borderless window the system frame
-        // animation visibly flickers. The per-frame IPC tween stays.
-        std::thread::spawn(move || {
-            const STEPS: u32 = 18;
-            for i in 1..=STEPS {
-                let t = i as f64 / STEPS as f64;
-                let k = 1.0 - (1.0 - t).powi(3); // easeOutCubic
-                let lerp = |a: f64, b: f64| a + (b - a) * k;
+        const ANIMATION_DURATION: Duration = Duration::from_millis(220);
+        const FRAME_INTERVAL: Duration = Duration::from_micros(16_667);
+        let started = Instant::now();
+        let animation_ends = started + ANIMATION_DURATION;
+        let mut next_frame = started;
+        let mut applied_final_frame = false;
+
+        loop {
+            let (ack_tx, ack_rx) = sync_channel(0);
+            let frame_window = window.clone();
+            let scheduled = window.run_on_main_thread(move || {
+                // Compute progress when this callback actually runs. If the
+                // UI thread was busy, this skips directly to the current
+                // frame instead of applying an already stale one.
+                let progress =
+                    (started.elapsed().as_secs_f64() / ANIMATION_DURATION.as_secs_f64()).min(1.0);
+                // Ease-out cubic keeps the edge strip responsive while
+                // settling gently into the panel (or back into the strip).
+                let eased = 1.0 - (1.0 - progress).powi(3);
+                let lerp_i32 =
+                    |a: i32, b: i32| (a as f64 + (b as f64 - a as f64) * eased).round() as i32;
+                let lerp_u32 = |a: u32, b: u32| {
+                    (a as f64 + (b as f64 - a as f64) * eased).round().max(1.0) as u32
+                };
+                let frame = (
+                    lerp_i32(from.0, to.0),
+                    lerp_i32(from.1, to.1),
+                    lerp_u32(from.2, to.2),
+                    lerp_u32(from.3, to.3),
+                );
                 mark_owned_geometry();
-                let _ = window.set_size(tauri::PhysicalSize::new(
-                    lerp(from.2 as f64, to.2 as f64).round().max(1.0) as u32,
-                    lerp(from.3 as f64, to.3 as f64).round().max(1.0) as u32,
-                ));
-                let _ = window.set_position(tauri::PhysicalPosition::new(
-                    lerp(from.0 as f64, to.0 as f64).round() as i32,
-                    lerp(from.1 as f64, to.1 as f64).round() as i32,
-                ));
-                std::thread::sleep(std::time::Duration::from_millis(10));
+                let applied =
+                    set_tray_animation_frame(&frame_window, frame.0, frame.1, frame.2, frame.3);
+                if !applied {
+                    set_tray_physical_frame(&frame_window, frame.0, frame.1, frame.2, frame.3);
+                }
+                mark_owned_geometry();
+                let _ = ack_tx.send((applied, progress >= 1.0));
+            });
+            if scheduled.is_err() {
+                break;
             }
-            // Hold the owned-geometry guard past the last frame so residual
-            // Moved / Focused(false) from the final set_size are ignored.
-            mark_owned_geometry();
-            TRAY_ANIMATING.store(false, Ordering::Relaxed);
-            done(&window);
-            mark_owned_geometry();
-        });
-    }
+            match ack_rx.recv() {
+                Ok((applied, finished)) => {
+                    applied_final_frame = finished && applied;
+                    if finished {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+
+            // Pace against a steady clock. If the UI thread misses a frame,
+            // the next iteration jumps to the current progress instead of
+            // replaying a backlog of obsolete window sizes.
+            next_frame += FRAME_INTERVAL;
+            next_frame = next_frame.min(animation_ends);
+            let now = Instant::now();
+            if next_frame > now {
+                std::thread::sleep(next_frame - now);
+            } else {
+                next_frame = now;
+            }
+        }
+
+        if !applied_final_frame {
+            // Keep the final bounds correct if the UI loop was shutting down
+            // or the native call failed during the transition.
+            set_tray_physical_frame(&window, to.0, to.1, to.2, to.3);
+        }
+        // Hold the owned-geometry guard past the final native resize so
+        // synthetic Moved / Focused(false) events cannot be treated as drags.
+        mark_owned_geometry();
+        TRAY_ANIMATING.store(false, Ordering::Relaxed);
+        done(&window);
+        mark_owned_geometry();
+    });
 }
 
 /// If Windows Snap / WebView2 changed our HWND after we finished a dock
-/// transition, snap it back. Ignored mid-tween and during our own set_size.
+/// transition, snap it back. Ignored mid-tween and during owned geometry updates.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn reject_implausible_tray_frame(window: &tauri::WebviewWindow) {
     use std::sync::atomic::Ordering;

@@ -4,6 +4,7 @@ import { useSessionsStore } from '@/stores/sessions'
 import { formatInt, formatSessionTime, isPlatformResumable } from '@/lib/utils'
 import { useToast } from '@/composables/useToast'
 import { useHoverResetBool } from '@/composables/useHoverReset'
+import { compactSessionPreview } from '@/lib/session-display'
 import * as api from '@/lib/api'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import AppLoading from '@/components/ui/AppLoading.vue'
@@ -82,7 +83,7 @@ function handleOpen(session: any) {
 }
 
 function previewTitle(session: any): string {
-  return session?.title || t('session.untitled')
+  return compactSessionPreview(session?.title) || t('session.untitled')
 }
 
 /** Same badge resolution as the list cards, so the pane names the client the
@@ -362,7 +363,7 @@ function clearSessionSearch() {
               <div class="flex items-center justify-between gap-3 border-b pb-2" style="border-color: var(--hairline)">
                 <div>
                   <span class="text-xs" style="color: var(--ink-3)">{{ t('session.search_match_in') }}</span>
-                  <span class="text-sm font-semibold" style="color: var(--ink)">{{ result.session_title || t('session.untitled') }}</span>
+                  <span class="text-sm font-semibold" style="color: var(--ink)">{{ compactSessionPreview(result.session_title) || t('session.untitled') }}</span>
                 </div>
                 <span class="text-[10px]" style="color: var(--ink-4)">
                   {{ result.message.timestamp ? formatSessionTime(result.message.timestamp, locale) : '' }}
@@ -390,7 +391,7 @@ function clearSessionSearch() {
                 <pre
                   class="text-xs font-mono whitespace-pre-wrap break-words m-0 leading-relaxed select-text"
                   style="color: var(--ink)"
-                  v-html="highlightText(result.message.content, store.searchQuery)"
+                  v-html="highlightText(compactSessionPreview(result.message.content), store.searchQuery)"
                 ></pre>
               </div>
 

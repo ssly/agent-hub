@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "agent-hub"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -24,6 +24,7 @@ dependencies = [
  "minisign-verify",
  "notify",
  "objc2-app-kit",
+ "objc2-foundation",
  "pulldown-cmark",
  "reqwest 0.12.28",
  "rusqlite",
@@ -45,6 +46,7 @@ dependencies = [
  "toml 0.8.2",
  "uuid",
  "walkdir",
+ "windows 0.61.3",
 ]
 
 [[package]]

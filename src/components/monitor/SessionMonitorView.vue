@@ -9,6 +9,7 @@ import SessionMessagesModal from '@/components/sessions/SessionMessagesModal.vue
 import SessionResumeModal from '@/components/sessions/SessionResumeModal.vue'
 import { useToast } from '@/composables/useToast'
 import { isPlatformResumable } from '@/lib/utils'
+import { compactSessionPreview } from '@/lib/session-display'
 import {
   useSessionMonitorStore,
   HOOK_AGENTS,
@@ -344,6 +345,15 @@ function sourceLabel(session: SessionState): string {
   return t('session_monitor.source_terminal')
 }
 
+function monitorReply(session: AgentSessionState): string {
+  return compactSessionPreview(session.assistantReply)
+    || (session.status === 'waiting'
+      ? t('session_monitor.waiting_confirm')
+      : session.status === 'running'
+        ? t('session_monitor.waiting_reply', { agent: agentLabel(session.agent) })
+        : t('session_monitor.no_reply'))
+}
+
 /** Platform id of the sessions adapter backing a monitor row's full history.
  *  Null when the agent has no sessions adapter. */
 function sessionPlatform(session: { agent: MonitorAgent } | null): string | null {
@@ -572,7 +582,7 @@ onUnmounted(() => {
         >
           <div class="session-row__line">
             <p>
-              {{ session.assistantReply || (session.status === 'waiting' ? t('session_monitor.waiting_confirm') : session.status === 'running' ? t('session_monitor.waiting_reply', { agent: agentLabel(session.agent) }) : t('session_monitor.no_reply')) }}
+              {{ monitorReply(session) }}
             </p>
           </div>
         </SessionCard>

@@ -240,6 +240,7 @@ function formatReset(resetAt: number) {
 /* Wave Animations: softened translucent fluid */
 .orb-wave {
   animation: orb-drift 5.5s linear infinite;
+  transform-box: fill-box;
 }
 .orb-wave--front {
   opacity: .74;
@@ -251,13 +252,15 @@ function formatReset(resetAt: number) {
 }
 @keyframes orb-drift {
   from { transform: translateX(0); }
-  to { transform: translateX(-60px); }
+  to { transform: translateX(-16.666667%); }
 }
 
 /* Micro-Bubbles: delicate and semi-transparent */
 .orb-bubble {
   fill: #FFFFFF;
   opacity: .50;
+  transform-box: fill-box;
+  transform-origin: center;
   animation-name: orb-rise;
   animation-timing-function: ease-in;
   animation-iteration-count: infinite;

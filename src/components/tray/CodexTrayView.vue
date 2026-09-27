@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { Activity, BarChart3, Blend, Maximize2, Minimize2, RefreshCw, Timer, X } from 'lucide-vue-next'
+import { Activity, BarChart3, Blend, CreditCard, Maximize2, Minimize2, RefreshCw, Timer, X } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { useToast } from '@/composables/useToast'
 import AppToast from '@/components/layout/AppToast.vue'
@@ -51,6 +51,7 @@ import UsageOrb, { type OrbTone, type OrbWindow } from './UsageOrb.vue'
 import UsageOrbPlaceholder from './UsageOrbPlaceholder.vue'
 import TrayWaveLoader from './TrayWaveLoader.vue'
 import { useTrayDock } from './useTrayDock'
+import { compactSessionPreview } from '@/lib/session-display'
 
 const { t, locale } = useI18n()
 const { showToast } = useToast()
@@ -62,7 +63,12 @@ const claudeUsage = ref<ClaudeUsage | null>(null)
 const kiroUsage = ref<KiroUsage | null>(null)
 // The real tray window starts hidden and compact. Defaulting to loading avoids
 // a flash of the empty-state layout before the first tray-click event arrives.
-const loading = ref(import.meta.env.MODE !== 'web')
+const providerLoading = ref<Record<UsageProvider, boolean>>({
+  codex: false,
+  'claude-code': false,
+  kiro: false,
+})
+const loading = computed(() => providerLoading.value[selectedProvider.value])
 const compactLoading = ref(import.meta.env.MODE !== 'web')
 const providerErrors = ref<Record<UsageProvider, string | null>>({
   codex: null,
@@ -70,6 +76,7 @@ const providerErrors = ref<Record<UsageProvider, string | null>>({
   kiro: null,
 })
 const error = computed(() => providerErrors.value[selectedProvider.value])
+const errorMessage = computed(() => error.value?.trim() || t('tray.failed_hint'))
 // Last successful query time for the visible provider, shown in the top band
 // next to the refresh/pin buttons (no footer row needed).
 const lastQueryAt = computed(() => {
@@ -85,7 +92,6 @@ const queriedProviders = ref<Record<UsageProvider, boolean>>({
   kiro: false,
 })
 const unlisteners: UnlistenFn[] = []
-const initialLoading = computed(() => compactLoading.value)
 // Compact tray layout: ring-only usage, short labels, no opacity control.
 const MINI_STORAGE_KEY = 'ah-tray-mini'
 const miniMode = ref(localStorage.getItem(MINI_STORAGE_KEY) === '1')
@@ -99,7 +105,11 @@ function setMiniMode(next: boolean) {
 // future re-enable). Never leave a stored mini=1 behind with no way out.
 const SHOW_MINI_TOGGLE = false
 if (!SHOW_MINI_TOGGLE && miniMode.value) setMiniMode(false)
-let refreshSequence = 0
+const refreshSequences: Record<UsageProvider, number> = {
+  codex: 0,
+  'claude-code': 0,
+  kiro: 0,
+}
 let resizeSequence = 0
 
 // --- Mini monitor strip ---------------------------------------------------
@@ -380,6 +390,10 @@ function monitorStatusLabel(row: AgentSessionState): string {
   return t('session_monitor.status_ended')
 }
 
+function monitorPrompt(row: AgentSessionState): string {
+  return compactSessionPreview(row.userPrompt) || t('session_monitor.no_prompt')
+}
+
 // Row identity for hover detection and row tracking. Deliberately
 // session-scoped, NOT turn-scoped.
 function monitorRowKey(row: AgentSessionState) {
@@ -581,6 +595,16 @@ function persistOpacity() {
 function isListened(provider: UsageProvider) {
   return monitorSettings.value?.listening?.[provider] ?? false
 }
+// Keep the full tray visible while usage is loading if the selected provider
+// is being monitored, so the live monitor strip remains available below it.
+const keepPanelVisibleDuringLoading = computed(
+  () => !monitorHidden.value && isListened(selectedProvider.value),
+)
+const initialLoading = computed(
+  () => compactLoading.value
+    && !keepPanelVisibleDuringLoading.value
+    && visibleProviders.value.length <= 1,
+)
 /** Applies a settings snapshot; follows a selected-agent change from the
  *  other window like a local tab click (queries when unheard). A paused
  *  agent is never followed — its tab is not even visible. */
@@ -790,6 +814,7 @@ const resetCards = computed<ResetCreditEntry[]>(() => {  const detailed = snapsh
     title: null,
   }))
 })
+const visibleResetCards = computed(() => resetCards.value.slice(0, 6))
 
 // Kiro exposes monthly credits via usage_windows.
 const kiroWindows = computed<TrayUsageWindow[]>(() => {
@@ -986,61 +1011,83 @@ function splitExpiry(value?: string | null) {
 
 // force=true bypasses the shared 10-minute backend cache (Retry button).
 // force=false uses the same snapshot as the Accounts view when still fresh.
-async function refresh(compact = false, syncWithAccounts = false, force = false) {
-  const sequence = ++refreshSequence
-  let provider = selectedProvider.value
-  if (compact) {
+async function refresh(
+  compact = false,
+  syncWithAccounts = false,
+  force = false,
+  requestedProvider: UsageProvider = selectedProvider.value,
+) {
+  // A slow response from one Agent must not block another tab or invalidate
+  // the first Agent's eventual result. Also avoid duplicate requests per Agent.
+  if (providerLoading.value[requestedProvider]) return
+  const sequence = ++refreshSequences[requestedProvider]
+  const isLatest = () => sequence === refreshSequences[requestedProvider]
+  const loadingProviders: UsageProvider[] = [requestedProvider]
+  let provider = requestedProvider
+  if (compact && !keepPanelVisibleDuringLoading.value) {
     compactLoading.value = true
     try { await resizeUsageTray(120) } catch {}
+  } else if (keepPanelVisibleDuringLoading.value) {
+    compactLoading.value = false
   }
-  loading.value = true
-  loginUnavailable.value = false
+  providerLoading.value[requestedProvider] = true
+  if (selectedProvider.value === requestedProvider) loginUnavailable.value = false
   try {
     const status = await getUsageProviderAvailability()
-    if (sequence !== refreshSequence) return
+    if (!isLatest()) return
     availability.value = status
 
     const preferred = syncWithAccounts
       ? preferredProviderFromAccounts()
-      : selectedProvider.value
+      : requestedProvider
     const available = availableProvider(preferred, status)
     if (!available) {
-      snapshot.value = null
-      claudeUsage.value = null
-      kiroUsage.value = null
-      loginUnavailable.value = true
+      if (selectedProvider.value === requestedProvider) loginUnavailable.value = true
       return
     }
 
-    provider = available
-    selectedProvider.value = provider
+    if (!syncWithAccounts && !providerAvailable(requestedProvider, status)) return
+    provider = syncWithAccounts ? available : requestedProvider
+    if (provider !== requestedProvider) {
+      if (providerLoading.value[provider]) {
+        if (selectedProvider.value === requestedProvider) selectedProvider.value = provider
+        return
+      }
+      providerLoading.value[provider] = true
+      loadingProviders.push(provider)
+    }
+    if (syncWithAccounts && selectedProvider.value === requestedProvider) {
+      selectedProvider.value = provider
+    }
     providerErrors.value[provider] = null
     queriedProviders.value[provider] = true
     // Keep the previous payload until the response arrives so tab switches
     // never flash an empty layout. Backend cache keeps Accounts + tray aligned.
     if (provider === 'codex') {
       const result = await getCodexTrayUsage(force)
-      if (sequence !== refreshSequence) return
+      if (!isLatest()) return
       snapshot.value = result
     } else if (provider === 'claude-code') {
       const result = await getClaudeUsage(force)
-      if (sequence !== refreshSequence) return
+      if (!isLatest()) return
       claudeUsage.value = result
     } else if (provider === 'kiro') {
       const result = await getKiroUsage(force)
-      if (sequence !== refreshSequence) return
+      if (!isLatest()) return
       kiroUsage.value = result
     }
     void broadcastUsageRefreshed(provider)
   } catch (reason: any) {
-    if (sequence !== refreshSequence) return
+    if (!isLatest()) return
     providerErrors.value[provider] = String(reason?.message || reason)
     // Keep the previous successful payload so a transient error does not blank
     // the orb. Only clear when there was never any data for this provider.
   } finally {
-    if (sequence === refreshSequence) {
+    if (isLatest()) {
+      for (const activeProvider of loadingProviders) {
+        providerLoading.value[activeProvider] = false
+      }
       compactLoading.value = false
-      loading.value = false
     }
   }
 }
@@ -1067,7 +1114,6 @@ async function handleTrayOpened() {
   if (!available) {
     loginUnavailable.value = true
     compactLoading.value = false
-    loading.value = false
     return
   }
   loginUnavailable.value = false
@@ -1079,9 +1125,9 @@ async function handleTrayOpened() {
     selectedProvider.value = available
   }
 
-  // Show compact loading only when we have nothing to display yet. When local
-  // data already exists, soft-refresh from the shared backend cache so timers
-  // stay current without a full loading flash.
+  // Show compact loading only when we have nothing to display yet and the
+  // monitor strip does not need to stay visible. Existing local data uses a
+  // soft refresh from the shared cache without a loading flash.
   const hasLocal = available === 'codex'
     ? snapshot.value !== null
     : available === 'claude-code'
@@ -1091,14 +1137,15 @@ async function handleTrayOpened() {
   await refresh(!hasLocal, false, false)
 }
 
-async function selectProvider(provider: UsageProvider) {
-  if (provider === selectedProvider.value || loading.value) return
+function selectProvider(provider: UsageProvider) {
+  if (provider === selectedProvider.value) return
   if (availability.value && !providerAvailable(provider, availability.value)) return
   selectedProvider.value = provider
+  loginUnavailable.value = false
   // Share the selection with the Accounts view (backend memory + event).
   void setUsageSelectedAgent(provider)
-  if (!queriedProviders.value[provider]) {
-    await refresh(false, false, false)
+  if ((!queriedProviders.value[provider] || providerErrors.value[provider]) && !providerLoading.value[provider]) {
+    void refresh(false, false, false, provider)
   }
 }
 
@@ -1360,7 +1407,6 @@ onBeforeUnmount(() => {
                 role="tab"
                 :aria-selected="selectedProvider === provider"
                 :aria-label="providerLabel(provider)"
-                :disabled="loading"
                 @click="selectProvider(provider)"
               >
                 <AgentIcon v-if="miniMode" :agent-id="provider" :size="13" />
@@ -1378,27 +1424,42 @@ onBeforeUnmount(() => {
           <template v-if="visibleProviders.length">
             <template v-if="selectedProvider === 'codex'">
               <div class="quota-wrap" :class="{ 'is-loading': loading, 'is-mini': miniMode }">
-                <UsageOrb v-if="usageWindows.length" :windows="usageWindows" :mini="miniMode">
-                  <div v-if="!miniMode && snapshot && !error && resetCards.length" class="credit-inline">
-                    <span class="credit-inline__title">{{ t('tray.reset_credit') }}</span>
-                    <div class="credit-chips">
-                      <div v-for="(card, index) in resetCards" :key="`${card.expires_at ?? 'unknown'}-${index}`" class="credit-chip">
-                        <span class="credit-chip__tooltip">
-                          <span>{{ t('tray.reset_credit_expiry') }}</span>
+                <div v-if="!miniMode && snapshot && !error && usageWindows.length && resetCards.length" class="reset-credit-menu">
+                  <button
+                    class="reset-credit-trigger"
+                    type="button"
+                    aria-describedby="reset-credit-popover"
+                  >
+                    <CreditCard :size="13" :stroke-width="1.8" aria-hidden="true" />
+                    <span>{{ t('tray.reset_credit') }}</span>
+                    <span class="reset-credit-trigger__count">{{ resetCards.length }}</span>
+                  </button>
+                  <div id="reset-credit-popover" class="reset-credit-popover" role="tooltip">
+                    <div class="reset-credit-popover__title">{{ t('tray.reset_credit_expiry') }}</div>
+                    <div class="reset-credit-grid">
+                      <div
+                        v-for="(card, index) in visibleResetCards"
+                        :key="`${card.expires_at ?? 'unknown'}-${index}`"
+                        class="reset-credit-card"
+                      >
+                        <span class="reset-credit-card__expiry">
                           <span>{{ splitExpiry(card.expires_at).date }}</span>
                           <span v-if="splitExpiry(card.expires_at).time">{{ splitExpiry(card.expires_at).time }}</span>
                         </span>
-                        <span class="credit-chip__date">{{ splitExpiry(card.expires_at).date }}</span>
                       </div>
                     </div>
+                    <div v-if="resetCards.length > visibleResetCards.length" class="reset-credit-more">
+                      {{ t('tray.reset_credit_more', { n: resetCards.length - visibleResetCards.length }) }}
+                    </div>
                   </div>
-                </UsageOrb>
+                </div>
+                <UsageOrb v-if="usageWindows.length" :windows="usageWindows" :mini="miniMode" />
                 <UsageOrbPlaceholder
                   v-else-if="error"
                   kind="error"
                   :mini="miniMode"
                   :title="t('tray.failed')"
-                  :message="t('tray.failed_hint')"
+                  :message="errorMessage"
                 />
                 <TrayWaveLoader v-else-if="loading">{{ t('tray.query_wait') }}</TrayWaveLoader>
                 <UsageOrbPlaceholder
@@ -1420,7 +1481,7 @@ onBeforeUnmount(() => {
                   kind="error"
                   :mini="miniMode"
                   :title="t('tray.failed')"
-                  :message="t('tray.failed_hint')"
+                  :message="errorMessage"
                 />
                 <TrayWaveLoader v-else-if="loading">{{ t('tray.query_wait') }}</TrayWaveLoader>
                 <UsageOrbPlaceholder
@@ -1446,7 +1507,7 @@ onBeforeUnmount(() => {
                   kind="error"
                   :mini="miniMode"
                   :title="t('tray.failed')"
-                  :message="t('tray.failed_hint')"
+                  :message="errorMessage"
                 />
                 <TrayWaveLoader v-else-if="loading">{{ t('tray.query_wait') }}</TrayWaveLoader>
                 <UsageOrbPlaceholder
@@ -1530,12 +1591,12 @@ onBeforeUnmount(() => {
               <!-- Long prompts: clamp tooltip to 3 lines (no ghost 4th line). -->
               <span
                 v-tooltip="miniMode ? '' : {
-                  text: row.userPrompt || t('session_monitor.no_prompt'),
+                  text: monitorPrompt(row),
                   clamp: 3,
                   placement: monitorTipPlacement(index),
                 }"
               >
-                {{ row.userPrompt || t('session_monitor.no_prompt') }}
+                {{ monitorPrompt(row) }}
               </span>
             </span>
             <span
@@ -1632,7 +1693,7 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
   min-width: 0;
-  padding: 8px;
+  padding: 0;
   overflow: hidden;
   color: var(--tray-ink);
   font-family: "SF Pro Text", "Segoe UI", "PingFang SC", sans-serif;
@@ -1654,13 +1715,13 @@ onBeforeUnmount(() => {
   box-shadow: var(--tray-panel-shadow);
 }
 
-/* Dock size tweens: the window card keeps its background and shrinks/grows
-   as before; only the inner content hides for the duration so nothing looks
-   squeezed (notably the traffic-light dots). The new state's content appears
-   when the tween lands (dock-changed event). */
+/* Dock size tweens: keep the panel background visible while taking the inner
+   subtrees out of layout and paint. This avoids repeatedly reflowing provider
+   rows as the native window changes size; the settled content returns with
+   the dock-changed event. */
 .tray-shell--dock-anim .tray-panel > *,
 .tray-shell--dock-anim .tray-dock-strip > * {
-  visibility: hidden;
+  display: none;
 }
 
 /* Docked edge strip: thin bar at the screen edge showing one status dot per
@@ -2119,6 +2180,7 @@ onBeforeUnmount(() => {
 .monitor-empty__icon svg { width: 13px; height: 13px; }
 
 .quota-wrap {
+  position: relative;
   flex: 0 0 auto;
   min-height: 112px;
   padding: 6px 0;
@@ -2126,62 +2188,121 @@ onBeforeUnmount(() => {
 }
 .quota-wrap.is-loading { opacity: .72; }
 
-/* Reset credits sit in the orb's side column under the legend, titled like a
-   legend row, so all three provider panels share the same overall height. */
-.credit-inline { display: flex; flex-direction: column; gap: 4px; }
-.credit-inline__title {
-  color: var(--tray-ink-2);
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-}
-.credit-chips { display: flex; flex-wrap: wrap; gap: 4px; }
-.credit-chip {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 2px 6px;
-  border: 1px solid var(--tray-hairline);
-  border-radius: 2px;
-  background: var(--tray-inset);
-}
-/* Full validity floats above the chip on hover; the chip itself stays a
-   compact one-line YYYY-MM-DD tag and never reflows.
-   Colors match app tooltips (ink/canvas invert): light theme → dark bubble,
-   night theme → light bubble. Do NOT use --tray-on-accent here — night mode
-   never redefines it, so text would stay cream-on-cream. */
-.credit-chip__tooltip {
+.reset-credit-menu {
   position: absolute;
-  bottom: calc(100% + 6px);
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 4;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 1px;
-  padding: 5px 9px;
-  border-radius: 2px;
-  background: var(--tray-ink);
-  color: var(--tray-canvas);
-  font-size: 10px;
-  line-height: 1.5;
-  white-space: nowrap;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, .18);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity .15s ease;
+  top: 2px;
+  right: 0;
+  z-index: 8;
 }
-.credit-chip:hover .credit-chip__tooltip { opacity: 0.96; }
-.credit-chip__date {
-  color: var(--tray-ink);
+.reset-credit-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 28px;
+  height: 24px;
+  padding: 0 7px;
+  border: 1px solid var(--tray-hairline);
+  border-radius: 999px;
+  background: var(--tray-panel-bg);
+  color: var(--tray-ink-2);
+  cursor: default;
+  font-variant-numeric: tabular-nums;
   font-size: 10px;
   font-weight: 650;
+  transition: color .15s ease, border-color .15s ease, background-color .15s ease;
+}
+.reset-credit-trigger__count {
+  display: grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--tray-inset);
+  color: var(--tray-accent);
+  line-height: 1;
+}
+.reset-credit-trigger:hover,
+.reset-credit-trigger:focus-visible {
+  color: var(--tray-accent);
+  border-color: var(--tray-accent);
+  outline: none;
+}
+.reset-credit-popover {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  box-sizing: border-box;
+  width: 264px;
+  max-height: 230px;
+  overflow-y: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--tray-hairline);
+  border-radius: 8px;
+  background: var(--tray-panel-bg);
+  color: var(--tray-ink);
+  font-size: 10px;
+  line-height: 1.45;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .2);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-3px);
+  transition: opacity .15s ease, transform .15s ease, visibility .15s ease;
+}
+.reset-credit-menu:hover .reset-credit-popover,
+.reset-credit-menu:focus-within .reset-credit-popover {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+.reset-credit-popover__title {
+  padding-bottom: 7px;
+  color: var(--tray-ink-3);
+  font-weight: 600;
+}
+.reset-credit-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+.reset-credit-card {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  padding: 5px 4px;
+  border: 1px solid var(--tray-hairline);
+  border-radius: 7px;
+  background: var(--tray-inset);
+  transition: border-color .15s ease, background-color .15s ease, transform .15s ease;
+}
+.reset-credit-card:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--tray-accent) 45%, var(--tray-hairline));
+  background: var(--tray-panel-bg);
+}
+.reset-credit-card__expiry {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 3px;
+  white-space: nowrap;
+  color: var(--tray-ink-2);
+  font-size: 8px;
   font-variant-numeric: tabular-nums;
+}
+.reset-credit-card__expiry span:first-child {
+  color: var(--tray-ink);
+  font-size: 9px;
+  font-weight: 650;
   white-space: nowrap;
 }
-.credit-empty { margin: 0; color: var(--tray-ink-3); font-size: 11px; }
+.reset-credit-more {
+  padding-top: 7px;
+  color: var(--tray-ink-3);
+  font-size: 9px;
+  text-align: right;
+}
 
 /* Monitor strip under the quota area. */
 .monitor-strip {

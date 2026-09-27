@@ -2,9 +2,8 @@
 import { CircleAlert, Gauge } from 'lucide-vue-next'
 
 /**
- * Empty / error stand-in for UsageOrb.
- * Same 112px graph footprint (+ optional side column) so the tray does not
- * collapse when a provider returns no usage windows or the query fails.
+ * Empty / error stand-in for UsageOrb. Both states keep the same 112px-tall
+ * usage area; failures use a centered icon and concise error message.
  */
 withDefaults(defineProps<{
   /** `empty` = no windows; `error` = query failed */
@@ -23,28 +22,35 @@ withDefaults(defineProps<{
     class="usage-orb-ph"
     :class="{ 'is-mini': mini, 'is-error': kind === 'error' }"
     role="status"
+    :aria-label="kind === 'error' ? `${title}: ${message}` : undefined"
   >
-    <div class="usage-orb-ph__graph" aria-hidden="true">
-      <svg viewBox="0 0 180 180">
-        <!-- Thin echo of the orb sphere: keeps the footprint without alarm. -->
-        <circle class="ph-ring" cx="90" cy="90" r="76" />
-        <!-- Soft inner bezel hint -->
-        <circle class="ph-dash" cx="90" cy="90" r="74.5" />
-        <!-- Soft badge disc anchoring the center icon -->
-        <circle v-if="kind !== 'error'" class="ph-badge" cx="90" cy="90" r="38" />
-      </svg>
-      <div class="usage-orb-ph__center">
-        <CircleAlert v-if="kind === 'error'" :size="mini ? 26 : 28" class="usage-orb-ph__icon" />
-        <Gauge v-else :size="mini ? 22 : 24" class="usage-orb-ph__icon" />
-      </div>
+    <div v-if="kind === 'error'" class="usage-orb-ph__failure">
+      <span class="usage-orb-ph__failure-icon" aria-hidden="true">
+        <CircleAlert :size="20" />
+      </span>
+      <p class="usage-orb-ph__title">{{ title }}</p>
+      <p v-if="!mini" class="usage-orb-ph__message">{{ message }}</p>
     </div>
 
-    <!-- Mini mode shows no message text at all: the orb alone carries the
-         state, and the strip below already lists what happened. -->
-    <div v-if="!mini" class="usage-orb-ph__side">
-      <p class="usage-orb-ph__title">{{ title }}</p>
-      <p class="usage-orb-ph__message">{{ message }}</p>
-    </div>
+    <template v-else>
+      <div class="usage-orb-ph__graph" aria-hidden="true">
+        <svg viewBox="0 0 180 180">
+          <!-- Thin echo of the orb sphere: keeps the footprint without alarm. -->
+          <circle class="ph-ring" cx="90" cy="90" r="76" />
+          <!-- Soft inner bezel hint -->
+          <circle class="ph-dash" cx="90" cy="90" r="74.5" />
+          <circle class="ph-badge" cx="90" cy="90" r="38" />
+        </svg>
+        <div class="usage-orb-ph__center">
+          <Gauge :size="mini ? 22 : 24" class="usage-orb-ph__icon" />
+        </div>
+      </div>
+
+      <div v-if="!mini" class="usage-orb-ph__side">
+        <p class="usage-orb-ph__title">{{ title }}</p>
+        <p class="usage-orb-ph__message">{{ message }}</p>
+      </div>
+    </template>
   </div>
 </template>
 
@@ -59,6 +65,31 @@ withDefaults(defineProps<{
   flex-direction: column;
   justify-content: center;
   gap: 8px;
+}
+.usage-orb-ph.is-error {
+  box-sizing: border-box;
+  height: 112px;
+  justify-content: center;
+  padding: 4px 12px;
+  text-align: center;
+}
+.usage-orb-ph__failure {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+}
+.usage-orb-ph__failure-icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 1px;
+  border-radius: 50%;
+  color: color-mix(in srgb, var(--tray-danger, #d46666) 82%, var(--tray-ink-2));
+  background: color-mix(in srgb, var(--tray-danger, #d46666) 11%, transparent);
 }
 
 /* Match UsageOrb graph size exactly. Child combinator: the center overlay's
@@ -94,13 +125,6 @@ withDefaults(defineProps<{
   fill: var(--tray-inset, var(--tray-sunken));
 }
 
-.is-error .ph-ring {
-  stroke: color-mix(in srgb, var(--tray-danger, #e05) 30%, transparent);
-}
-.is-error .ph-dash {
-  stroke: color-mix(in srgb, var(--tray-danger, #e05) 22%, transparent);
-}
-
 .usage-orb-ph__center {
   position: absolute;
   inset: 0;
@@ -113,11 +137,6 @@ withDefaults(defineProps<{
   color: var(--tray-ink-3);
   opacity: .72;
 }
-.is-error .usage-orb-ph__icon {
-  color: color-mix(in srgb, var(--tray-danger, #e05) 68%, var(--tray-ink-3));
-  opacity: .85;
-}
-
 .usage-orb-ph__side {
   flex: 1 1 auto;
   min-width: 0;
@@ -140,5 +159,21 @@ withDefaults(defineProps<{
   color: var(--tray-ink-3);
   font-size: 12px;
   line-height: 1.45;
+}
+.is-error .usage-orb-ph__title {
+  color: var(--tray-ink-2);
+  font-size: 12px;
+  line-height: 1.25;
+}
+.is-error .usage-orb-ph__message {
+  max-width: 100%;
+  color: var(--tray-ink-3);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
 }
 </style>

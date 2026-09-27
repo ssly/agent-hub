@@ -18,7 +18,8 @@ pub const KIRO_HOOK_ARG: &str = "--agent-hub-kiro-hook";
 pub const OMP_HOOK_ARG: &str = "--agent-hub-omp-hook";
 /// Runaway-stdin guard, not a payload policy: Kimi embeds pasted images as
 /// base64 in the prompt content parts, so a legitimate UserPromptSubmit can
-/// reach several MiB. The monitor only extracts the text parts anyway.
+/// reach several MiB. The monitor reads text and emits an image marker without
+/// copying the base64 payload into its snapshot.
 const MAX_HOOK_INPUT_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_IGNORED_SESSIONS: usize = 200;
 /// Kimi sub-agent markers older than this are treated as stale: the matching
@@ -27,14 +28,35 @@ const MAX_IGNORED_SESSIONS: usize = 200;
 const KIMI_SUBAGENT_MARKER_TTL_MILLIS: i64 = 60 * 60 * 1000;
 
 /// Prompt signatures of Codex desktop's internal background turns. The
-/// desktop app runs its own hidden turns (ambient-suggestion generation, the
-/// safety/compliance reviewer for those suggestions, memory consolidation),
-/// and they fire UserPromptSubmit/Stop hooks just like real user turns. They
-/// are never persisted to the Codex threads DB, so prompt matching is the
-/// only way to recognize them. Automation prompts are user-configured and
-/// intentionally NOT filtered here.
+/// desktop app runs hidden turns (ambient suggestions, safety review, memory
+/// consolidation, and heartbeat automation invocations) that fire hooks like
+/// ordinary user turns. They are never persisted to the Codex threads DB, so
+/// prompt matching is the only way to recognize them. User-authored
+/// automation prompts without the heartbeat wrapper remain visible.
 pub fn is_internal_system_prompt(prompt: &str) -> bool {
     let trimmed = prompt.trim_start();
+    let heartbeat_prefix = trimmed
+        .get(..10)
+        .map(|prefix| prefix.eq_ignore_ascii_case("<heartbeat"))
+        .unwrap_or(false);
+    if heartbeat_prefix
+        && trimmed
+            .as_bytes()
+            .get(10)
+            .is_some_and(|byte| matches!(*byte, b'>' | b'/' | b' ' | b'\n' | b'\r' | b'\t'))
+    {
+        return true;
+    }
+    let automation_prefix = trimmed
+        .get(..14)
+        .map(|prefix| prefix.eq_ignore_ascii_case("<automation_id"))
+        .unwrap_or(false);
+    if automation_prefix {
+        let lower = trimmed.to_ascii_lowercase();
+        if lower.contains("<current_time_iso") {
+            return true;
+        }
+    }
     // Ambient-suggestion generator ("# Overview\n\nGenerate 0 to 3 hyperpersonalized…").
     if trimmed.starts_with("# Overview") && trimmed.contains("hyperpersonalized suggestions") {
         return true;
@@ -519,7 +541,8 @@ fn is_grok_session_close(input: &serde_json::Value) -> bool {
 
 /// Extract the user prompt from the hook payload. Codex/Claude/Grok send a
 /// plain string; Kimi Code sends an array of content parts
-/// (`[{type: "text", text: "…"}, …]`), whose text parts are joined here.
+/// (`[{type: "text", text: "…"}, …]`). Text is joined and images become a
+/// small marker without reading or copying their potentially large payload.
 fn prompt_field(input: &serde_json::Value) -> Option<String> {
     for key in ["prompt", "promptText"] {
         let Some(value) = input.get(key) else {
@@ -531,10 +554,25 @@ fn prompt_field(input: &serde_json::Value) -> Option<String> {
         if let Some(parts) = value.as_array() {
             let text = parts
                 .iter()
-                .filter(|part| part.get("type").and_then(serde_json::Value::as_str) == Some("text"))
-                .filter_map(|part| part.get("text").and_then(serde_json::Value::as_str))
-                .map(str::trim)
-                .filter(|text| !text.is_empty())
+                .filter_map(|part| {
+                    let kind = part
+                        .get("type")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default();
+                    if kind == "text" {
+                        return part
+                            .get("text")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::trim)
+                            .filter(|text| !text.is_empty())
+                            .map(ToOwned::to_owned);
+                    }
+                    let has_image = kind.to_ascii_lowercase().contains("image")
+                        || part.get("image").is_some()
+                        || part.get("image_url").is_some()
+                        || part.get("imageUrl").is_some();
+                    has_image.then(|| "[图片]".to_string())
+                })
                 .collect::<Vec<_>>()
                 .join("\n");
             if !text.is_empty() {
@@ -976,7 +1014,10 @@ mod tests {
                 {"type": "text", "text": "第二段"}
             ]
         });
-        assert_eq!(prompt_field(&input).as_deref(), Some("第一段\n第二段"));
+        assert_eq!(
+            prompt_field(&input).as_deref(),
+            Some("第一段\n[图片]\n第二段")
+        );
     }
 
     #[test]
@@ -985,13 +1026,14 @@ mod tests {
         assert_eq!(prompt_field(&serde_json::json!({"prompt": "  "})), None);
         assert_eq!(prompt_field(&serde_json::json!({"prompt": []})), None);
         assert_eq!(
-            prompt_field(&serde_json::json!({"prompt": [{"type": "image", "source": {}}]})),
-            None
+            prompt_field(&serde_json::json!({"prompt": [{"type": "image", "source": {}}]}))
+                .as_deref(),
+            Some("[图片]")
         );
     }
 
     #[test]
-    fn prompt_field_skips_kimi_image_url_parts() {
+    fn prompt_field_marks_kimi_image_url_parts() {
         // Real Kimi payload when the user pastes a screenshot: the image rides
         // along as a base64 image_url part, the text part still carries the
         // question (this payload shape is also why the stdin cap is 8 MiB).
@@ -1001,7 +1043,10 @@ mod tests {
                 {"type": "text", "text": "这张图里哪里不对"}
             ]
         });
-        assert_eq!(prompt_field(&input).as_deref(), Some("这张图里哪里不对"));
+        assert_eq!(
+            prompt_field(&input).as_deref(),
+            Some("[图片]\n这张图里哪里不对")
+        );
     }
 
     #[test]

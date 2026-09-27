@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppModal from '@/components/ui/AppModal.vue'
 import AppLoading from '@/components/ui/AppLoading.vue'
 import { useToast } from '@/composables/useToast'
 import { platform } from '@/lib/utils'
+import { compactSessionPreview } from '@/lib/session-display'
 import * as api from '@/lib/api'
 
 const isWindows = platform === 'windows'
@@ -24,6 +25,7 @@ const emit = defineEmits<{ close: [] }>()
 
 const { t } = useI18n()
 const { showToast } = useToast()
+const displayTitle = computed(() => compactSessionPreview(props.title) || t('session.untitled'))
 
 const preview = ref<api.SessionResumePreview | null>(null)
 const loading = ref(false)
@@ -77,19 +79,19 @@ watch(() => props.show, async open => {
       <div class="ah-resume-row">
         <span class="ah-resume-row__label">{{ t('session.resume_field_title') }}</span>
         <span class="ah-resume-row__value select-text">
-          {{ title || t('session.untitled') }}
+          {{ displayTitle }}
         </span>
       </div>
       <div class="ah-resume-row">
         <span class="ah-resume-row__label">{{ t('session.resume_last_question') }}</span>
         <span class="ah-resume-row__value select-text">
-          {{ preview.last_user_message || t('session.resume_empty') }}
+          {{ compactSessionPreview(preview.last_user_message) || t('session.resume_empty') }}
         </span>
       </div>
       <div class="ah-resume-row">
         <span class="ah-resume-row__label">{{ t('session.resume_last_answer') }}</span>
         <span class="ah-resume-row__value select-text">
-          {{ preview.last_assistant_message || t('session.resume_empty') }}
+          {{ compactSessionPreview(preview.last_assistant_message) || t('session.resume_empty') }}
         </span>
       </div>
       <div class="ah-resume-row ah-resume-row--command">

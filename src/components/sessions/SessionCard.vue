@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { Check, Monitor, Play, Terminal, Trash2 } from 'lucide-vue-next'
 import { useHoverResetBool } from '@/composables/useHoverReset'
 import { formatInt, formatSessionTime } from '@/lib/utils'
+import { compactSessionPreview } from '@/lib/session-display'
 import AgentIcon from '@/components/agents/AgentIcon.vue'
 import SessionClientIcon from '@/components/sessions/SessionClientIcon.vue'
 
@@ -75,6 +76,7 @@ const emit = defineEmits<{
 
 const { t, locale } = useI18n()
 const { armed: confirmDelete, arm: armDelete, reset: resetDelete } = useHoverResetBool()
+const displayTitle = computed(() => compactSessionPreview(props.title))
 
 /** Hide source when the primary badge already names the same client/source. */
 const showSource = computed(() => {
@@ -245,7 +247,7 @@ function handleDelete() {
       </div>
     </div>
 
-    <h3 v-if="title" class="ah-session-card__title session-card__title truncate">{{ title }}</h3>
+    <h3 v-if="displayTitle" class="ah-session-card__title session-card__title truncate">{{ displayTitle }}</h3>
     <div v-if="subtitle" class="ah-session-card__path">{{ subtitle }}</div>
 
     <slot />

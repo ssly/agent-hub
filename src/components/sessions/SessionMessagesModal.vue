@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppModal from '@/components/ui/AppModal.vue'
 import SessionMessagesPanel from '@/components/sessions/SessionMessagesPanel.vue'
 import { formatInt } from '@/lib/utils'
+import { compactSessionPreview } from '@/lib/session-display'
 import type { SessionMessageStats } from '@/lib/api'
 
 // Modal chrome around the shared message panel: the Sessions browser uses it
@@ -23,6 +24,7 @@ const props = defineProps<{
 const emit = defineEmits<{ close: [] }>()
 
 const { t } = useI18n()
+const modalTitle = computed(() => compactSessionPreview(props.title) || t('session.untitled'))
 
 // Tally of the open session, printed on the left of the Close row. The panel
 // owns the fetch (it is the only place that knows the identity) and hands the
@@ -41,7 +43,7 @@ watch(
 <template>
   <AppModal
     :show="show"
-    :title="title || t('session.untitled')"
+    :title="modalTitle"
     width-class="w-[94vw]"
     fill-height
     @close="emit('close')"

@@ -497,7 +497,7 @@
     "limit": "限额",
     "monthly": "月",
     "reset_credit": "重置卡",
-    "reset_credit_item": "第 {n} 张",
+    "reset_credit_more": "另有 {n} 张",
     "no_reset_credit": "当前没有可用重置卡",
     "expiry_dh": "{d} 天 {h} 小时后到期",
     "expiry_hm": "{h} 小时 {m} 分钟后到期",

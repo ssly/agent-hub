@@ -16,6 +16,7 @@ import {
 import { useSwitchStore } from '@/stores/switch'
 import { useToast } from '@/composables/useToast'
 import { openUsageTray, pickPluginDirectory } from '@/lib/api'
+import { compactSessionPreview } from '@/lib/session-display'
 import AgentIcon from '@/components/agents/AgentIcon.vue'
 import SettingsModal from '@/components/settings/SettingsModal.vue'
 
@@ -243,7 +244,8 @@ function getAgentLatestTooltip(agentId: string): string {
   } else {
     statusText = t('session_monitor.status_ended')
   }
-  const prompt = session.userPrompt ? ` · ${session.userPrompt}` : ''
+  const promptText = compactSessionPreview(session.userPrompt)
+  const prompt = promptText ? ` · ${promptText}` : ''
   return `${statusText}${prompt}`
 }
 

@@ -256,12 +256,20 @@ fn extract_item_text_content(content: &Value) -> Option<String> {
     };
     let mut parts = Vec::new();
     for item in items {
-        let Some(text) = item.get("text").and_then(|value| value.as_str()) else {
-            continue;
-        };
-        let trimmed = text.trim();
-        if !trimmed.is_empty() {
-            parts.push(trimmed.to_string());
+        if let Some(text) = item.get("text").and_then(|value| value.as_str()) {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                parts.push(trimmed.to_string());
+            }
+        } else {
+            let kind = item.get("type").and_then(Value::as_str).unwrap_or_default();
+            if kind.to_ascii_lowercase().contains("image")
+                || item.get("image").is_some()
+                || item.get("image_url").is_some()
+                || item.get("imageUrl").is_some()
+            {
+                parts.push("[图片]".to_string());
+            }
         }
     }
     if parts.is_empty() {
