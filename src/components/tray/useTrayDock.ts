@@ -34,12 +34,30 @@ export function useTrayDock(options: TrayDockOptions = {}) {
   let unlisten: UnlistenFn | null = null
   let unlistenAnimating: UnlistenFn | null = null
 
+  let animTimeout: ReturnType<typeof setTimeout> | null = null
+
+  function clearAnimTimeout() {
+    if (animTimeout) {
+      clearTimeout(animTimeout)
+      animTimeout = null
+    }
+  }
+
+  function startAnimTimeout() {
+    clearAnimTimeout()
+    animTimeout = setTimeout(() => {
+      dockAnimating.value = false
+      animTimeout = null
+    }, 600)
+  }
+
   async function init() {
     if (isWeb) return
     try {
       unlisten = await listen<{ edge: DockEdge | null; expanded: boolean }>(
         'usage-tray-dock-changed',
         event => {
+          clearAnimTimeout()
           dockAnimating.value = false
           docked.value = event.payload.edge
           dockExpanded.value = event.payload.expanded
@@ -48,6 +66,7 @@ export function useTrayDock(options: TrayDockOptions = {}) {
       )
       unlistenAnimating = await listen('usage-tray-dock-animating', () => {
         dockAnimating.value = true
+        startAnimTimeout()
       })
     } catch {
       // No native tray window (browser preview): docking stays unavailable.
@@ -57,6 +76,8 @@ export function useTrayDock(options: TrayDockOptions = {}) {
   /** Cursor entered the strip → ask the backend to slide the panel out. */
   function expand() {
     if (!docked.value || dockExpanded.value) return
+    dockAnimating.value = true
+    startAnimTimeout()
     void expandUsageTray().catch(() => {})
   }
 
@@ -64,10 +85,13 @@ export function useTrayDock(options: TrayDockOptions = {}) {
    *  The backend ignores this while a drag is in progress. */
   function collapse() {
     if (!docked.value || !dockExpanded.value) return
+    dockAnimating.value = true
+    startAnimTimeout()
     void collapseUsageTray().catch(() => {})
   }
 
   function dispose() {
+    clearAnimTimeout()
     unlisten?.()
     unlisten = null
     unlistenAnimating?.()

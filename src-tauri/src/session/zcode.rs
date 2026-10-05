@@ -89,17 +89,19 @@ fn list_zcode_sessions_in_db(db_path: &Path) -> Result<Vec<SessionSummary>, Stri
     let rows = stmt
         .query_map([], |row| {
             let id: String = row.get(0)?;
-            let title: String = row.get(1)?;
-            let project_path: String = row.get(2)?;
+            let title: Option<String> = row.get(1)?;
+            let project_path: Option<String> = row.get(2)?;
             let model: Option<String> = row.get(3)?;
-            let created_at: i64 = row.get(4)?;
-            let updated_at: i64 = row.get(5)?;
+            let created_at: Option<i64> = row.get(4)?;
+            let updated_at: Option<i64> = row.get(5)?;
 
-            let title = if title.trim().is_empty() {
-                id.clone()
-            } else {
-                title
-            };
+            let title = title
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .unwrap_or_else(|| id.clone());
+            let project_path = project_path.unwrap_or_default();
+            let created_at = created_at.unwrap_or(0);
+            let updated_at = updated_at.unwrap_or(created_at);
 
             Ok(SessionSummary {
                 id,
@@ -155,8 +157,8 @@ fn read_zcode_messages_from_db(
         .query_map([session_id], |row| {
             Ok((
                 row.get::<_, String>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, String>(2)?,
+                row.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                row.get::<_, Option<String>>(2)?.unwrap_or_default(),
             ))
         })
         .map_err(|err| err.to_string())?;
@@ -199,12 +201,12 @@ fn read_zcode_message_text(
     message_id: &str,
 ) -> Result<String, String> {
     let parts = part_stmt
-        .query_map([message_id], |row| row.get::<_, String>(0))
+        .query_map([message_id], |row| row.get::<_, Option<String>>(0))
         .map_err(|err| err.to_string())?;
 
     let mut texts = Vec::new();
     for part in parts {
-        let data: Value = match part.ok().and_then(|raw| serde_json::from_str(&raw).ok()) {
+        let data: Value = match part.ok().flatten().and_then(|raw| serde_json::from_str(&raw).ok()) {
             Some(value) => value,
             None => continue,
         };

@@ -19,7 +19,6 @@ import PluginView from '@/components/plugins/PluginView.vue'
 import SessionListView from '@/components/sessions/SessionListView.vue'
 import SessionMonitorView from '@/components/monitor/SessionMonitorView.vue'
 import SwitchView from '@/components/switch/SwitchView.vue'
-import SearchResults from '@/components/search/SearchResults.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
 import AppLoading from '@/components/ui/AppLoading.vue'
@@ -559,7 +558,6 @@ onBeforeUnmount(() => {
         <template v-if="appStore.currentTab === 'plugins'">
           <PluginView v-if="appStore.currentView === 'plugins'" />
           <SkillDetailView v-else-if="appStore.currentView === 'detail'" />
-          <SearchResults v-else-if="appStore.currentView === 'search'" />
         </template>
         <SessionListView v-else-if="appStore.currentTab === 'sessions'" />
         <SwitchView v-else-if="appStore.currentTab === 'accounts'" />
@@ -991,7 +989,7 @@ onBeforeUnmount(() => {
 }
 .about-name {
   margin: 0;
-  font-family: var(--font-serif);
+  font-family: var(--font-sans);
   font-size: 17px;
   font-weight: 600;
   letter-spacing: -0.01em;

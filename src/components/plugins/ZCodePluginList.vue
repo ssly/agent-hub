@@ -1,10 +1,22 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useZCodePluginsStore, type ZCodePlugin } from '@/stores/zcode-plugins'
+import { usePluginsStore } from '@/stores/plugins'
+import { highlightText } from '@/lib/utils'
 import AppLoading from '@/components/ui/AppLoading.vue'
 
 const { t } = useI18n()
 const store = useZCodePluginsStore()
+const pluginsStore = usePluginsStore()
+
+const displayedPlugins = computed(() => {
+  const q = pluginsStore.searchQuery.toLowerCase().trim()
+  if (!q) return store.plugins
+  return store.plugins.filter((p: ZCodePlugin) =>
+    p.name.toLowerCase().includes(q) || (p.description || '').toLowerCase().includes(q)
+  )
+})
 
 function componentsLabel(plugin: ZCodePlugin) {
   const parts: string[] = []
@@ -30,23 +42,27 @@ function componentsLabel(plugin: ZCodePlugin) {
       {{ t('plugin.zcode_empty') }}
     </div>
 
+    <div v-else-if="displayedPlugins.length === 0" class="ah-zc-plugins__state">
+      {{ t('plugin.no_matching_skills') }}
+    </div>
+
     <template v-else>
       <div class="ah-zc-plugin-list">
         <article
-          v-for="plugin in store.plugins"
+          v-for="plugin in displayedPlugins"
           :key="plugin.id"
           :class="['ah-zc-plugin', plugin.installed ? 'is-installed' : 'is-missing']"
         >
           <span class="ah-zc-plugin__status" aria-hidden="true"></span>
           <div class="ah-zc-plugin__main">
             <div class="ah-zc-plugin__title-row">
-              <strong class="ah-zc-plugin__name">{{ plugin.name }}</strong>
+              <strong class="ah-zc-plugin__name" v-html="highlightText(plugin.name, pluginsStore.searchQuery)"></strong>
               <span v-if="plugin.version" class="ah-version-chip">v{{ plugin.version }}</span>
               <span
                 :class="['ah-zc-plugin__badge', plugin.installed ? 'is-installed' : 'is-missing']"
               >{{ t(plugin.installed ? 'plugin.zcode_installed' : 'plugin.zcode_not_installed') }}</span>
             </div>
-            <p v-if="plugin.description" class="ah-zc-plugin__description">{{ plugin.description }}</p>
+            <p v-if="plugin.description" class="ah-zc-plugin__description" v-html="highlightText(plugin.description, pluginsStore.searchQuery)"></p>
             <div class="ah-zc-plugin__meta">
               <span v-if="plugin.marketplace">{{ plugin.marketplace }}</span>
               <span v-if="plugin.author">{{ plugin.author }}</span>

@@ -111,6 +111,9 @@ const refreshSequences: Record<UsageProvider, number> = {
   kiro: 0,
 }
 let resizeSequence = 0
+// Keep in sync with the .reset-credit-popover transition duration: the native
+// window only shrinks again once the close fade has finished.
+const RESET_CREDIT_FADE_MS = 160
 
 // --- Mini monitor strip ---------------------------------------------------
 // Same data the Monitor tab shows (backend snapshots + change events), but
@@ -196,17 +199,19 @@ const monitorSettings = ref<UsageMonitorSettings | null>(null)
 const refreshMinutes = computed(() => monitorSettings.value?.refreshMinutes ?? 5)
 const monitorLimit = computed(() => monitorSettings.value?.monitorLimit ?? 6)
 
-// Merged like the Monitor tab's "all" view: running first, newest activity
-// first within each group, capped so the strip never dominates the panel.
+// Merged like the Monitor tab's "all" view: unread/newest first, then waiting,
+// then running — shared by the capped panel list and the uncapped strip counts.
+function compareMonitorRows(a: AgentSessionState, b: AgentSessionState): number {
+  const rank = monitorStatusRank(a.status, a.unread) - monitorStatusRank(b.status, b.unread)
+  if (rank !== 0) return rank
+  return b.updatedAt - a.updatedAt
+}
+
 /** Tray strip shows at most monitorLimit (6-12) sessions; tip placement splits at the midpoint. */
 const monitorRows = computed<AgentSessionState[]>(() =>
   visibleMonitorAgents.value
     .flatMap(agent => monitorSnapshots.value[agent].sessions.map(session => ({ ...session, agent })))
-    .sort((a, b) => {
-      const rank = monitorStatusRank(a.status, a.unread) - monitorStatusRank(b.status, b.unread)
-      if (rank !== 0) return rank
-      return b.updatedAt - a.updatedAt
-    })
+    .sort(compareMonitorRows)
     .slice(0, monitorLimit.value),
 )
 
@@ -255,6 +260,7 @@ function handleTrayClosed() {
   trayVisible.value = false
   stopRelativeClock()
   clearNativeMonitorHover()
+  collapseResetCredit(true)
 }
 
 function handleDocumentVisibilityChange() {
@@ -295,19 +301,22 @@ function cancelDockCollapse() {
   }
 }
 
-/** Strip content: usage bar on top (smallest quota window of the visible
- *  provider) + one dot per monitor session below — each half follows the
+/** Strip content: usage bars + counted status lamps — each half follows the
  *  panel's own hide toggles (usageHidden / monitorHidden). The native strip
  *  long axis follows whatever is actually shown (height on left/right,
  *  width on top after a CCW 90° rotate); the watcher lives next to
  *  stripUsage (see below) because watch getters evaluate eagerly and must
- *  not touch TDZ bindings. */
-const STRIP_DOT_PX = 5
-const STRIP_GAP_PX = 4
-const STRIP_PAD_PX = 8
+ *  not touch TDZ bindings. These constants only seed the first paint — the
+ *  strip then re-sizes to the measured content box. */
+const STRIP_GAP_PX = 3
+const STRIP_PAD_PX = 5
 const STRIP_BAR_HEIGHT = 48
 const STRIP_THICK_PX = 20
-const STRIP_UNREAD_PILL_LONG_PX = 16
+const STRIP_MIN_LONG_PX = 24
+/** One lamp is a 15px count badge; the 3px gap that follows it comes from
+ *  STRIP_GAP_PX. Seeded for the first paint only — the strip then re-sizes to
+ *  the measured content box. */
+const STRIP_LAMP_LONG_PX = 15
 
 /** Upper half rows: tip below; lower half: tip above — keeps long prompts inside the panel. */
 function monitorTipPlacement(index: number): 'top' | 'bottom' {
@@ -814,6 +823,10 @@ const resetCards = computed<ResetCreditEntry[]>(() => {  const detailed = snapsh
     title: null,
   }))
 })
+// Six credits (the tray's own ceiling) laid out two per row: three rows fit the
+// popover inside the panel even when the panel is at its shortest, i.e. with
+// the monitor strip hidden — no window resize, no scrolling. Anything beyond
+// six collapses into the "and N more" line.
 const visibleResetCards = computed(() => resetCards.value.slice(0, 6))
 
 // Kiro exposes monthly credits via usage_windows.
@@ -850,33 +863,158 @@ const totalMonitorUnread = computed(() =>
   monitorRows.value.filter(session => session.unread).length,
 )
 const monitorUnreadBadge = computed(() => totalMonitorUnread.value > 9 ? '…' : String(totalMonitorUnread.value))
-const dockUnreadCount = computed(() => monitorHidden.value ? 0 : totalMonitorUnread.value)
-const dockUnreadBadge = computed(() => dockUnreadCount.value > 9 ? '…' : String(dockUnreadCount.value))
 
-// Strip long axis follows its content (bar segment + dots). Registered
-// here, after every referenced binding exists: watch getters run once eagerly.
+/** Every monitored session, merged but NOT capped: the docked strip must count
+ *  states that the panel's newest-N window does not show, otherwise a red pile
+ *  would hide a yellow one. Shares the panel's status ordering. */
+const allMonitorRows = computed<AgentSessionState[]>(() =>
+  visibleMonitorAgents.value
+    .flatMap(agent => monitorSnapshots.value[agent].sessions.map(session => ({ ...session, agent })))
+    .sort(compareMonitorRows),
+)
+
+/** Docked strip status lamps: the per-session dots said "something happens
+ *  somewhere"; two counted lamps say how much needs attention. Yellow = stalled
+ *  (approval pending, or aborted by an error), red = finished but unread —
+ *  running sessions need no lamp, they are visible the moment the panel opens.
+ *  A status with no sessions keeps no lamp, so the strip stays short. */
+const stripStatusLamps = computed<{ key: 'waiting' | 'unread', label: string, count: number, display: string }[]>(() => {
+  if (monitorHidden.value) return []
+  const counts = { waiting: 0, unread: 0 }
+  for (const row of allMonitorRows.value) {
+    const status = rowEffectiveStatus(row)
+    if (status === 'waiting') counts.waiting += 1
+    else if (status === 'unread') counts.unread += 1
+  }
+  // Badge fits one digit inside the 20px strip; more reads as "…", same as the
+  // expanded panel's unread badge.
+  const badge = (count: number) => count > 9 ? '…' : String(count)
+  const lamps = [
+    { key: 'waiting' as const, label: t('session_monitor.status_waiting'), count: counts.waiting, display: badge(counts.waiting) },
+    { key: 'unread' as const, label: t('session_monitor.status_unread'), count: counts.unread, display: badge(counts.unread) },
+  ]
+  return lamps.filter(lamp => lamp.count > 0)
+})
+
+// The strip is sized to what its content actually measures, not to a predicted
+// sum: the content box picks up a 1-2px difference from font metrics and dot
+// sizes, and in a strip only ~100px long every wrong pixel shows as a dead gap
+// at one end or a clipped count at the other. `stripLongPx` stays as the
+// fallback for the first paint, before the box has been measured.
+const stripContentEl = ref<HTMLElement | null>(null)
 const stripLongPx = computed(() => {
   const showBar = !usageHidden.value && stripUsageBars.value.length > 0
-  const dots = monitorHidden.value ? 0 : monitorRows.value.length
-  const unread = dockUnreadCount.value > 0
-  const items = (showBar ? 1 : 0) + dots + (unread ? 1 : 0)
+  const lamps = stripStatusLamps.value.length
+  const items = (showBar ? 1 : 0) + lamps
   return items === 0
-    ? 24
+    ? STRIP_MIN_LONG_PX
     : STRIP_PAD_PX * 2
       + (showBar ? STRIP_BAR_HEIGHT : 0)
-      + dots * STRIP_DOT_PX
-      + (unread ? STRIP_UNREAD_PILL_LONG_PX : 0)
+      + lamps * STRIP_LAMP_LONG_PX
       + STRIP_GAP_PX * (items - 1)
 })
 
-watch(
-  [stripLongPx, docked, dockExpanded],
-  () => {
+function measuredStripLong(): number {
+  const content = stripContentEl.value
+  if (!content) return stripLongPx.value
+  const box = content.getBoundingClientRect()
+  // The content group is rotated for the top dock, so its screen width is the
+  // group's height there — the long axis is the larger of the two.
+  const long = Math.max(box.width, box.height)
+  return Math.round(long + STRIP_PAD_PX * 2)
+}
+
+// The native strip is sized to what its content actually measures. The backend
+// drops dock resizes while it is tweening the panel in or out, and it gives no
+// acknowledgement, so the length is driven by ONE retry chain instead of a
+// fire-and-forget call: `stripTargetLong` is what the content currently needs,
+// `stripSyncedLong` is what the backend last took, and the chain keeps trying
+// until the two agree. That is what fixes a re-opened strip keeping the size the
+// tween left behind and clipping the far badge.
+// `dockAnimating` deliberately plays no part here: it is cleared by the
+// backend's dock-changed event with a 600ms fallback, and one missed event used
+// to leave it stuck true, silently skipping every later resize.
+const STRIP_SYNC_RETRY_DELAYS_MS = [150, 400, 900] as const
+let stripTargetLong: number | null = null
+let stripSyncedLong: number | null = null
+let stripSyncAttempt = 0
+let stripSyncTimer: ReturnType<typeof setTimeout> | undefined
+
+/** Measure the strip content and hand the length to the backend. `flush: post`
+ *  watchers plus nextTick make the box measurable by the time this runs; a pass
+ *  that finds no agreement schedules the next retry. */
+function stripSyncPass() {
+  stripSyncTimer = undefined
+  if (!docked.value || dockExpanded.value) return
+  const content = stripContentEl.value
+  if (!content) return
+  const box = content.getBoundingClientRect()
+  // The content group is rotated for the top dock, so the strip's long axis is
+  // the larger side of its bounding box there.
+  const long = Math.max(STRIP_MIN_LONG_PX, Math.round(Math.max(box.width, box.height) + STRIP_PAD_PX * 2))
+  stripTargetLong = long
+  if (stripSyncedLong === long) {
+    stripSyncAttempt = 0
+    return
+  }
+  // The cache records only a length the backend accepted: a rejected call
+  // clears it, so the next pass sends again.
+  void resizeUsageTrayDock(long)
+    .then(() => {
+      stripSyncedLong = long
+    })
+    .catch(() => {
+      stripSyncedLong = null
+    })
+  // The backend silently drops resizes while it tweens the panel in or out, so
+  // re-assert the same length a few times instead of assuming one call landed —
+  // a dropped one is what left a re-opened strip at the tween's size, clipping
+  // the far badge. Each retry clears the cache so the call really goes out.
+  if (stripSyncAttempt >= STRIP_SYNC_RETRY_DELAYS_MS.length) return
+  const wait = STRIP_SYNC_RETRY_DELAYS_MS[stripSyncAttempt]
+  stripSyncAttempt += 1
+  stripSyncTimer = setTimeout(() => {
     if (!docked.value || dockExpanded.value) return
-    void resizeUsageTrayDock(stripLongPx.value).catch(() => {})
-  },
+    stripSyncedLong = null
+    stripSyncPass()
+  }, wait)
+}
+
+/** Content or dock state changed: drop any retry tail and settle first. */
+async function scheduleStripSync() {
+  if (stripSyncTimer) {
+    clearTimeout(stripSyncTimer)
+    stripSyncTimer = undefined
+  }
+  stripSyncAttempt = 0
+  await nextTick()
+  stripSyncPass()
+}
+
+watch(
+  // Primitives only: `stripLongPx` already folds in the bars, the lamps and the
+  // two section toggles, whereas the lamp list is a computed that hands back a
+  // fresh array on every evaluation — watching it re-fired on each tracker run
+  // and cleared the pending retry timer each time, so retries never ran and a
+  // dropped resize was never re-sent.
+  [stripLongPx, docked, dockExpanded],
+  scheduleStripSync,
   { flush: 'post' },
 )
+
+// While the panel is out (or dock mode is off) the strip is not on screen, so
+// the size the backend holds is unknown — forget it. Without this the next dock
+// compares against a stale length, decides there is nothing to send, and leaves
+// the strip at whatever size the tween ended on.
+watch([docked, dockExpanded], ([edge, expanded]) => {
+  if (edge && !expanded) return
+  stripSyncedLong = null
+  stripTargetLong = null
+  if (stripSyncTimer) {
+    clearTimeout(stripSyncTimer)
+    stripSyncTimer = undefined
+  }
+})
 
 function clampHeight(height: number) {
   return Math.min(620, Math.max(120, height))
@@ -887,6 +1025,35 @@ const TRAY_NORMAL_WIDTH = 400
 const TRAY_MINI_WIDTH = 160
 
 const panelRef = ref<HTMLElement | null>(null)
+// The reset-credit popover opens upward from its trigger and always stays
+// inside the panel's own height — opening it never resizes the window.
+const resetCreditOpen = ref(false)
+let resetCreditCloseTimer: ReturnType<typeof setTimeout> | undefined
+
+function openResetCredit() {
+  if (resetCreditCloseTimer) {
+    clearTimeout(resetCreditCloseTimer)
+    resetCreditCloseTimer = undefined
+  }
+  resetCreditOpen.value = true
+}
+
+/** Closing waits out the fade so re-entering the trigger does not flicker. */
+function collapseResetCredit(immediate = false) {
+  if (resetCreditCloseTimer) {
+    clearTimeout(resetCreditCloseTimer)
+    resetCreditCloseTimer = undefined
+  }
+  if (!resetCreditOpen.value) return
+  if (immediate) {
+    resetCreditOpen.value = false
+    return
+  }
+  resetCreditCloseTimer = setTimeout(() => {
+    resetCreditCloseTimer = undefined
+    resetCreditOpen.value = false
+  }, RESET_CREDIT_FADE_MS)
+}
 
 // Measure the rendered panel instead of maintaining per-state height
 // constants: the window always fits the content exactly, so footer rows
@@ -907,15 +1074,14 @@ async function applyContentHeight() {
   // mini↔normal switch the native window is still at the old width, and
   // content (legend rows, credit chips) wraps taller at the narrow width —
   // measuring there leaves dead space at the bottom once the window widens.
-  panel.style.width = `${width - 16}px` // shell padding 8×2
+  panel.style.width = `${width}px`
   // Force synchronous layout at natural height, then restore before paint.
   panel.style.height = 'auto'
-  const measured = panel.offsetHeight
+  const measured = Math.ceil(panel.getBoundingClientRect().height)
   panel.style.height = ''
   panel.style.width = ''
   try {
-    // + shell padding 8×2 on height
-    await resizeUsageTray(clampHeight(measured + 16), width)
+    await resizeUsageTray(clampHeight(measured), width)
   } catch {
     // Browser preview and unsupported platforms may not own a native tray window.
   }
@@ -993,20 +1159,69 @@ function formatLastQuery(value: number | string) {
   return t('tray.last_query', { time: formatDate(value) })
 }
 
-// Reset-credit chips show the expiry date by default; hovering floats the
-// full validity above the chip ("重置卡有效期:" / date / hh:mm:ss). Current-
-// year dates drop the year (MM/DD) to keep the chips compact; other years
-// keep the full YYYY/MM/DD.
-function splitExpiry(value?: string | null) {
-  if (!value) return { date: t('tray.expiry_unknown'), time: '' }
+// Reset-credit rows show the expiry moment plus how long is left. Current-year
+// dates drop the year (MM/DD) to stay compact; later years keep YYYY/MM/DD.
+function expiryParts(value?: string | null) {
+  if (!value) return { date: t('tray.expiry_unknown'), time: '', valid: false }
   const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return { date: t('tray.expiry_unknown'), time: '', valid: false }
+  }
   const pad = (n: number) => String(n).padStart(2, '0')
   const monthDay = `${pad(date.getMonth() + 1)}/${pad(date.getDate())}`
   const datePart = date.getFullYear() === new Date().getFullYear()
     ? monthDay
     : `${date.getFullYear()}/${monthDay}`
   const timePart = `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
-  return { date: datePart, time: timePart }
+  return { date: datePart, time: timePart, valid: true }
+}
+
+/** Whole days left; drives both the countdown chip and the urgent (≤7d) accent.
+ *  `null` when the backend sent no usable timestamp. */
+function resetCardDays(value?: string | null): number | null {
+  const parsed = value ? new Date(value).getTime() : Number.NaN
+  if (!Number.isFinite(parsed)) return null
+  return Math.max(0, Math.ceil((parsed - relativeNow.value) / 86_400_000))
+}
+
+/** Compact countdown: "今天" / "明天" / "N 天" (zh), "Today" / "Tomorrow" / "Nd"
+ *  (en) — same spirit as the quota-window wording. */
+function resetCardCountdown(value?: string | null): string {
+  const days = resetCardDays(value)
+  if (days === null) return t('tray.expiry_unknown')
+  if (locale.value === 'zh-CN') {
+    if (days === 0) return '今天'
+    if (days === 1) return '明天'
+    return `${days} 天`
+  }
+  if (days === 0) return 'Today'
+  if (days === 1) return 'Tomorrow'
+  return `${days}d`
+}
+
+/** Full timestamp for the row tooltip — the countdown stays short, the exact
+ *  moment is one hover away. */
+function formatResetCardMoment(value?: string | null): string {
+  const parsed = value ? new Date(value) : null
+  if (!parsed || Number.isNaN(parsed.getTime())) return t('tray.expiry_unknown')
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${parsed.getFullYear()}/${pad(parsed.getMonth() + 1)}/${pad(parsed.getDate())} `
+    + `${pad(parsed.getHours())}:${pad(parsed.getMinutes())}:${pad(parsed.getSeconds())}`
+}
+
+function resetCardTitle(card: ResetCreditEntry): string {
+  const exact = formatResetCardMoment(card.expires_at)
+  const days = resetCardDays(card.expires_at)
+  if (days === null) return exact
+  const left = locale.value === 'zh-CN' ? `还有 ${days} 天` : `${days} day${days === 1 ? '' : 's'} left`
+  return `${exact} · ${left}`
+}
+
+/** Credits expiring within a week get the amber treatment — those are the ones
+ *  worth spending before they lapse. */
+function isResetCardUrgent(card: ResetCreditEntry): boolean {
+  const days = resetCardDays(card.expires_at)
+  return days !== null && days <= 7
 }
 
 // force=true bypasses the shared 10-minute backend cache (Retry button).
@@ -1199,6 +1414,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   unlisteners.forEach(unlisten => unlisten())
   window.clearInterval(quotaTimer)
+  if (resetCreditCloseTimer) clearTimeout(resetCreditCloseTimer)
   stopRelativeClock()
   clearNativeMonitorHover()
   document.removeEventListener('visibilitychange', handleDocumentVisibilityChange)
@@ -1215,17 +1431,17 @@ onBeforeUnmount(() => {
     @mouseleave="handleShellMouseLeave"
     @click="opacityOpen = false; intervalOpen = false"
   >
-    <!-- Docked edge strip: one status dot per monitored session (same data
-         as the monitor strip below — green working, yellow waiting for
-         confirm, gray ended). Long axis follows the dot count. Top dock
-         rotates this column 90° CCW into a horizontal bar. Hovering
-         slides the panel out. -->
+    <!-- Docked edge strip: usage bars plus two counted status lamps (yellow =
+         stalled, red = finished unread) instead of one dot per session. Long
+         axis follows the content. Top dock rotates this column 90° CCW into a
+         horizontal bar. Hovering slides the panel out. -->
     <section
       v-if="docked && !dockExpanded"
       class="tray-dock-strip"
       :class="{
         'tray-dock-strip--top': docked === 'top',
-        'tray-dock-strip--has-unread': dockUnreadCount > 0,
+        'tray-dock-strip--left': docked === 'left',
+        'tray-dock-strip--right': docked === 'right',
       }"
       data-tauri-drag-region="deep"
       :style="{
@@ -1234,9 +1450,13 @@ onBeforeUnmount(() => {
         '--strip-thick': `${STRIP_THICK_PX}px`,
       }"
       @mouseenter="expandDock"
+      @click="expandDock"
     >
       <div class="tray-dock-strip__inner">
-        <div class="tray-dock-strip__content">
+        <!-- Measured, not estimated: the native strip is sized to this box, so
+             a formula that overshoots shows up as dead space and one that
+             undershoots clips the counts. -->
+        <div ref="stripContentEl" class="tray-dock-strip__content">
           <span
             v-if="!usageHidden && stripUsageBars.length"
             class="tray-dock-bars"
@@ -1250,20 +1470,14 @@ onBeforeUnmount(() => {
               <span class="tray-dock-bar__fill" :style="{ height: `${bar.percent}%` }" />
             </span>
           </span>
-          <template v-if="!monitorHidden">
-            <span
-              v-for="row in monitorRows"
-              :key="monitorRowKey(row)"
-              class="tray-dock-dot"
-              :class="{
-                'tray-dock-dot--running': rowEffectiveStatus(row) === 'running',
-                'tray-dock-dot--waiting': rowEffectiveStatus(row) === 'waiting',
-                'tray-dock-dot--unread': rowEffectiveStatus(row) === 'unread',
-              }"
-            />
-          </template>
+          <span
+            v-for="lamp in stripStatusLamps"
+            :key="lamp.key"
+            class="tray-dock-lamp"
+            :class="`tray-dock-lamp--${lamp.key}`"
+            :title="`${lamp.label} · ${lamp.count}`"
+          >{{ lamp.display }}</span>
         </div>
-        <span v-if="dockUnreadCount > 0" class="tray-dock-unread">{{ dockUnreadBadge }}</span>
       </div>
     </section>
     <section
@@ -1424,30 +1638,58 @@ onBeforeUnmount(() => {
           <template v-if="visibleProviders.length">
             <template v-if="selectedProvider === 'codex'">
               <div class="quota-wrap" :class="{ 'is-loading': loading, 'is-mini': miniMode }">
-                <div v-if="!miniMode && snapshot && !error && usageWindows.length && resetCards.length" class="reset-credit-menu">
+                <div
+                  v-if="!miniMode && snapshot && !error && usageWindows.length && resetCards.length"
+                  class="reset-credit-menu"
+                  :class="{ 'is-open': resetCreditOpen }"
+                  @mouseenter="openResetCredit()"
+                  @mouseleave="collapseResetCredit()"
+                  @focusin="openResetCredit()"
+                  @focusout="collapseResetCredit()"
+                >
                   <button
                     class="reset-credit-trigger"
                     type="button"
+                    :aria-expanded="resetCreditOpen"
                     aria-describedby="reset-credit-popover"
                   >
-                    <CreditCard :size="13" :stroke-width="1.8" aria-hidden="true" />
+                    <CreditCard :size="12" :stroke-width="1.8" aria-hidden="true" />
                     <span>{{ t('tray.reset_credit') }}</span>
                     <span class="reset-credit-trigger__count">{{ resetCards.length }}</span>
                   </button>
-                  <div id="reset-credit-popover" class="reset-credit-popover" role="tooltip">
-                    <div class="reset-credit-popover__title">{{ t('tray.reset_credit_expiry') }}</div>
-                    <div class="reset-credit-grid">
-                      <div
+                  <!-- Hover/focus popover pinned to the top of the quota area:
+                       three compact cards per row, two rows. No title row (the
+                       trigger above already reads "重置卡 N") and no per-card
+                       ordinal — both would cost height the shortest panel
+                       (monitor strip hidden) does not have. The countdown line
+                       doubles as the urgency cue. -->
+                  <div
+                    id="reset-credit-popover"
+                    class="reset-credit-popover"
+                    role="tooltip"
+                    :aria-label="t('tray.reset_credit_expiry')"
+                  >
+                    <ul class="reset-credit-list">
+                      <li
                         v-for="(card, index) in visibleResetCards"
                         :key="`${card.expires_at ?? 'unknown'}-${index}`"
                         class="reset-credit-card"
+                        :class="{
+                          'is-soonest': index === 0 && Boolean(card.expires_at),
+                          'is-urgent': isResetCardUrgent(card),
+                          'is-unknown': !expiryParts(card.expires_at).valid,
+                        }"
+                        :title="resetCardTitle(card)"
                       >
-                        <span class="reset-credit-card__expiry">
-                          <span>{{ splitExpiry(card.expires_at).date }}</span>
-                          <span v-if="splitExpiry(card.expires_at).time">{{ splitExpiry(card.expires_at).time }}</span>
+                        <span class="reset-credit-card__moment">
+                          <span class="reset-credit-card__date">{{ expiryParts(card.expires_at).date }}</span>
+                          <span v-if="expiryParts(card.expires_at).time" class="reset-credit-card__time">
+                            {{ expiryParts(card.expires_at).time }}
+                          </span>
                         </span>
-                      </div>
-                    </div>
+                        <span class="reset-credit-card__left-value">{{ resetCardCountdown(card.expires_at) }}</span>
+                      </li>
+                    </ul>
                     <div v-if="resetCards.length > visibleResetCards.length" class="reset-credit-more">
                       {{ t('tray.reset_credit_more', { n: resetCards.length - visibleResetCards.length }) }}
                     </div>
@@ -1642,51 +1884,51 @@ onBeforeUnmount(() => {
 }
 
 .tray-shell {
-  /* Ink-wash palette (mirrors src/assets/theme.css). Dark values are applied
+  /* Notion Zen Ink palette (mirrors src/assets/theme.css). Dark values are applied
      at the bottom of this stylesheet, keyed off the shared data-theme
      attribute (with a prefers-color-scheme fallback when no explicit choice
      exists) so the popup always matches the main window. */
-  --tray-canvas: #F8F6F1;
-  --tray-surface: #FFFFFE;
-  --tray-sunken: #F0EDE4;
-  --tray-hover: #EDE9DE;
-  --tray-ink: #2A2A2E;
-  --tray-ink-2: #5B5B61;
-  --tray-ink-3: #8C8B86;
-  --tray-ink-4: #B7B5AC;
-  --tray-accent: #3A6B8C;
-  --tray-accent-strong: #2E5773;
-  --tray-accent-soft: rgba(58, 107, 140, .10);
-  --tray-accent-mid: rgba(58, 107, 140, .20);
-  --tray-highlight: #C9A961;
-  --tray-success: #5A8F6B;
-  --tray-warning: #B07A3E;
-  --tray-danger: #B0524A;
-  --tray-signal-red: #E03131;
-  --tray-signal-yellow: #F5C400;
-  --tray-signal-green: #2BB24A;
-  --tray-hairline: rgba(42, 42, 46, .07);
-  --tray-border: rgba(42, 42, 46, .12);
-  --tray-on-accent: #FDFCF9;
+  --tray-canvas: #FFFFFF;
+  --tray-surface: #FFFFFF;
+  --tray-sunken: #F7F6F3;
+  --tray-hover: #EFEFED;
+  --tray-ink: #191918;
+  --tray-ink-2: #383836;
+  --tray-ink-3: #5C5C58;
+  --tray-ink-4: #8C8C87;
+  --tray-accent: #2C5E8A;
+  --tray-accent-strong: #1D4363;
+  --tray-accent-soft: rgba(44, 94, 138, .08);
+  --tray-accent-mid: rgba(44, 94, 138, .16);
+  --tray-highlight: #C28A3E;
+  --tray-success: #448361;
+  --tray-warning: #C27A2F;
+  --tray-danger: #C44536;
+  --tray-signal-red: #E03E3E;
+  --tray-signal-yellow: #DFAB01;
+  --tray-signal-green: #0F7B6C;
+  --tray-hairline: rgba(55, 53, 47, .09);
+  --tray-border: rgba(55, 53, 47, .14);
+  --tray-on-accent: #FFFFFF;
   --tray-inset: var(--tray-sunken);
   --tray-btn-bg: var(--tray-surface);
-  --tray-btn-bg-hover: var(--tray-surface);
+  --tray-btn-bg-hover: var(--tray-hover);
   --tray-active-bg: var(--tray-surface);
   --tray-panel-bg: color-mix(in srgb, var(--tray-surface) 97%, transparent);
-  --tray-panel-shadow: 0 2px 6px rgba(42, 42, 46, .12);
-  --tray-active-shadow: 0 1px 4px rgba(42, 42, 46, .10);
-  --tray-success-soft: rgba(90, 143, 107, .12);
-  --tray-warning-soft: rgba(176, 122, 62, .10);
-  --tray-danger-soft: rgba(176, 82, 74, .10);
-  /* Orb Dual Fluid (Left HP / Right MP) - Ink-wash muted palette */
+  --tray-panel-shadow: 0 2px 6px rgba(15, 15, 15, .08);
+  --tray-active-shadow: 0 1px 4px rgba(15, 15, 15, .06);
+  --tray-success-soft: rgba(68, 131, 97, .10);
+  --tray-warning-soft: rgba(194, 122, 47, .10);
+  --tray-danger-soft: rgba(196, 69, 54, .10);
+  /* Orb Dual Fluid (Left HP / Right MP) - Notion ink-wash palette */
   --tray-orb-hp-light: #CF7E77;
-  --tray-orb-hp-mid: #B0524A;
+  --tray-orb-hp-mid: #C44536;
   --tray-orb-hp-dark: #7A332D;
-  --tray-orb-hp-text: #963A33;
+  --tray-orb-hp-text: #8E2F23;
   --tray-orb-mp-light: #5E8CAE;
-  --tray-orb-mp-mid: #3A6B8C;
-  --tray-orb-mp-dark: #224762;
-  --tray-orb-mp-text: #2C5775;
+  --tray-orb-mp-mid: #2C5E8A;
+  --tray-orb-mp-dark: #1D4363;
+  --tray-orb-mp-text: #1D4363;
   /* Orb ring track: faint tint of the ring color, stronger in dark mode. */
   --tray-ring-track: color-mix(in srgb, currentColor 14%, transparent);
 
@@ -1721,19 +1963,19 @@ onBeforeUnmount(() => {
    the dock-changed event. */
 .tray-shell--dock-anim .tray-panel > *,
 .tray-shell--dock-anim .tray-dock-strip > * {
-  display: none;
+  display: none !important;
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
 }
 
-/* Docked edge strip: thin bar at the screen edge showing one status dot per
-   monitored session (green working, yellow waiting, gray ended); long axis
-   follows dot count. Fills the whole window (fixed, inset 0) so the shell
-   inset doesn't squeeze the dots. Top dock rotates the same column 90° CCW. */
+/* Docked edge strip: thin bar at the screen edge — usage bars plus the counted
+   status lamps (yellow stalled, red unread). Long axis follows the content.
+   Fills the whole window (fixed, inset 0) so the shell inset doesn't squeeze
+   it. Top dock rotates the same column 90° CCW. */
 .tray-dock-strip {
   position: fixed;
   inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   overflow: hidden;
   cursor: pointer;
   border-radius: 0;
@@ -1757,8 +1999,29 @@ onBeforeUnmount(() => {
   gap: 4px;
 }
 .tray-dock-strip--top .tray-dock-strip__inner {
-  position: relative;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--strip-thick, 20px);
   display: block;
+}
+.tray-dock-strip--left .tray-dock-strip__inner,
+.tray-dock-strip:not(.tray-dock-strip--top):not(.tray-dock-strip--right) .tray-dock-strip__inner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: var(--strip-thick, 20px);
+  height: 100%;
+}
+.tray-dock-strip--right .tray-dock-strip__inner {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: var(--strip-thick, 20px);
+  height: 100%;
 }
 .tray-dock-strip--top .tray-dock-strip__content {
   position: absolute;
@@ -1766,53 +2029,43 @@ onBeforeUnmount(() => {
   top: 50%;
   transform: translate(-50%, -50%) rotate(-90deg);
 }
-.tray-dock-strip--top.tray-dock-strip--has-unread .tray-dock-strip__content {
-  left: calc(50% - 10px);
-}
-.tray-dock-unread {
+/* Counted status lamp: a round count badge in the Monitor tab's signal colours.
+   It runs along the strip's long axis — horizontal on the top dock (the rotated
+   group turns it for us, with the digit stood back up), and a row of its own on
+   the side docks so the badge sits across the 20px strip instead of hanging off
+   it. A badge is 15px wide, so the next value up (20) would clip inside the
+   strip; counts above 9 therefore read as "…". */
+.tray-dock-lamp {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   box-sizing: border-box;
-  flex: 0 0 16px;
-  width: 16px;
-  height: 16px;
-  padding: 0;
+  flex: 0 0 15px;
+  width: 15px;
+  height: 15px;
   border-radius: 50%;
-  background: var(--tray-signal-red);
-  color: #fff;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 750;
-  line-height: 1;
   font-variant-numeric: tabular-nums;
+  line-height: 1;
   white-space: nowrap;
 }
-.tray-dock-strip:not(.tray-dock-strip--top) .tray-dock-unread {
-  flex-basis: 16px;
+.tray-dock-lamp--waiting {
+  /* A touch warmer than the raw signal yellow: the strip sits on the desktop
+     instead of inside the panel, where the pure hue reads as a highlighter. */
+  background: #FFD75E;
+  color: #3A2E12;
+  box-shadow: 0 0 5px color-mix(in srgb, #FFD75E 65%, transparent);
 }
-.tray-dock-strip--top .tray-dock-unread {
-  position: absolute;
-  right: 1px;
-  top: 50%;
-  transform: translateY(-50%);
-}
-.tray-dock-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--tray-ink-4);
-}
-.tray-dock-dot--running {
-  background: var(--tray-signal-green);
-  box-shadow: 0 0 4px var(--tray-signal-green);
-}
-.tray-dock-dot--waiting {
-  background: var(--tray-signal-yellow);
-  box-shadow: 0 0 4px var(--tray-signal-yellow);
-}
-.tray-dock-dot--unread {
+.tray-dock-lamp--unread {
   background: var(--tray-signal-red);
-  box-shadow: 0 0 4px var(--tray-signal-red);
+  color: #fff;
+  box-shadow: 0 0 5px color-mix(in srgb, var(--tray-signal-red) 65%, transparent);
+}
+/* Top dock: the whole group is rotated 90° CCW, so turning the pill the other
+   way keeps the digit upright and the pill across the strip. */
+.tray-dock-strip--top .tray-dock-lamp {
+  transform: rotate(90deg);
 }
 /* Usage half of the strip: up to two slim vertical bars side by side
    (smallest window tank-green, next window accent-blue — mirroring the
@@ -1926,16 +2179,16 @@ onBeforeUnmount(() => {
   padding: 0;
   border: 0;
   border-radius: 2px;
-  color: var(--tray-ink-4);
+  color: var(--tray-ink-3);
   background: transparent;
   cursor: pointer;
   transition: color .15s ease, background-color .15s ease;
 }
-.tray-control-btn:hover { color: var(--tray-ink-2); background: var(--tray-inset); }
+.tray-control-btn:hover { color: var(--tray-ink); background: var(--tray-hover); }
 .tray-control-btn.is-active { color: var(--tray-accent); background: var(--tray-accent-soft); }
 /* Muted = section currently hidden; click again to show. */
-.tray-control-btn.is-muted { color: var(--tray-ink-4); opacity: .42; }
-.tray-control-btn.is-muted:hover { opacity: .72; color: var(--tray-ink-2); }
+.tray-control-btn.is-muted { color: var(--tray-ink-4); opacity: .55; }
+.tray-control-btn.is-muted:hover { opacity: 1; color: var(--tray-ink); }
 /* Compact horizontal opacity slider — one short row, not a tall list. */
 .tray-opacity-popover {
   position: absolute;
@@ -2024,12 +2277,12 @@ onBeforeUnmount(() => {
   padding: 0;
   border: 0;
   border-radius: 2px;
-  color: var(--tray-ink-4);
+  color: var(--tray-ink-3);
   background: transparent;
   cursor: pointer;
   transition: color .15s ease, background-color .15s ease;
 }
-.tray-pin:hover { color: var(--tray-ink-2); background: var(--tray-inset); }
+.tray-pin:hover { color: var(--tray-ink); background: var(--tray-hover); }
 
 /* Refresh sits immediately left of the pin; the icon spins while a query is
    in flight. Force refresh also feeds the shared backend cache the Accounts
@@ -2047,12 +2300,12 @@ onBeforeUnmount(() => {
   padding: 0;
   border: 0;
   border-radius: 2px;
-  color: var(--tray-ink-4);
+  color: var(--tray-ink-3);
   background: transparent;
   cursor: pointer;
   transition: color .15s ease, background-color .15s ease;
 }
-.tray-refresh:hover:not(:disabled) { color: var(--tray-ink-2); background: var(--tray-inset); }
+.tray-refresh:hover:not(:disabled) { color: var(--tray-ink); background: var(--tray-hover); }
 .tray-refresh:disabled { cursor: default; }
 .tray-refresh .is-spinning { animation: tray-spin .8s linear infinite; color: var(--tray-accent); }
 
@@ -2065,7 +2318,7 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   height: 22px;
-  color: var(--tray-ink-4);
+  color: var(--tray-ink-3);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -2153,7 +2406,7 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   gap: 10px;
-  color: var(--tray-ink-3);
+  color: var(--tray-ink-2);
   font-size: 12px;
 }
 .tray-empty__icon {
@@ -2162,10 +2415,15 @@ onBeforeUnmount(() => {
   display: grid;
   place-items: center;
   border-radius: 999px;
-  color: var(--tray-ink-3);
-  background: var(--tray-inset);
+  color: var(--tray-ink-2);
+  background: var(--tray-sunken);
+  border: 1px solid var(--tray-hairline);
 }
 .tray-empty__icon svg { width: 22px; height: 22px; }
+.tray-empty__text {
+  color: var(--tray-ink-2);
+  font-weight: 500;
+}
 
 /* Monitor-strip empty state: single quiet line under the strip title. */
 .monitor-empty {
@@ -2194,6 +2452,8 @@ onBeforeUnmount(() => {
   right: 0;
   z-index: 8;
 }
+/* Trigger: same compact pill as the tray's other chips, but the count is the
+   only accent so it never competes with the quota orb next to it. */
 .reset-credit-trigger {
   display: flex;
   align-items: center;
@@ -2219,86 +2479,135 @@ onBeforeUnmount(() => {
   height: 16px;
   padding: 0 4px;
   border-radius: 999px;
-  background: var(--tray-inset);
+  background: var(--tray-accent-soft);
   color: var(--tray-accent);
   line-height: 1;
 }
 .reset-credit-trigger:hover,
-.reset-credit-trigger:focus-visible {
+.reset-credit-trigger:focus-visible,
+.reset-credit-menu:focus-within .reset-credit-trigger {
   color: var(--tray-accent);
-  border-color: var(--tray-accent);
+  border-color: color-mix(in srgb, var(--tray-accent) 40%, var(--tray-hairline));
   outline: none;
 }
+.reset-credit-trigger:hover .reset-credit-trigger__count,
+.reset-credit-trigger:focus-visible .reset-credit-trigger__count {
+  background: var(--tray-accent-mid);
+}
+
+/* Popover: 3×2 compact cards dropping straight out of the trigger (which sits at
+   y=36, right under the 34px title row as the quota region's own header) and
+   staying inside the panel's height. The panel is never resized to make room for
+   it — that is what keeps it working with the monitor strip hidden, i.e. the
+   shortest the panel ever gets. */
 .reset-credit-popover {
   position: absolute;
-  top: 100%;
+  top: 0;
   right: 0;
   box-sizing: border-box;
-  width: 264px;
-  max-height: 230px;
-  overflow-y: auto;
-  padding: 8px 10px;
-  border: 1px solid var(--tray-hairline);
-  border-radius: 8px;
-  background: var(--tray-panel-bg);
+  width: 292px;
+  padding: 7px;
+  border: 1px solid var(--tray-border);
+  /* Near-square, like the panel itself: a heavy radius on a 292px box this
+     short reads as a bubble and fights the tray's flat ink-wash look. */
+  border-radius: 4px;
+  background: var(--tray-surface);
   color: var(--tray-ink);
-  font-size: 10px;
-  line-height: 1.45;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, .2);
+  box-shadow:
+    0 10px 26px rgba(42, 42, 46, .16),
+    0 2px 6px rgba(42, 42, 46, .08);
   opacity: 0;
   visibility: hidden;
-  transform: translateY(-3px);
+  transform: translateY(-4px);
   transition: opacity .15s ease, transform .15s ease, visibility .15s ease;
 }
-.reset-credit-menu:hover .reset-credit-popover,
-.reset-credit-menu:focus-within .reset-credit-popover {
+.reset-credit-menu.is-open .reset-credit-popover {
   opacity: 1;
   visibility: visible;
   transform: translateY(0);
 }
-.reset-credit-popover__title {
-  padding-bottom: 7px;
-  color: var(--tray-ink-3);
-  font-weight: 600;
-}
-.reset-credit-grid {
+/* Three cards per row, two rows: six credits in ~84px of height. */
+.reset-credit-list {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 .reset-credit-card {
+  position: relative;
   display: flex;
   min-width: 0;
-  align-items: center;
-  padding: 5px 4px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 4px 6px 5px;
   border: 1px solid var(--tray-hairline);
-  border-radius: 7px;
+  /* Barely-rounded rectangles: at 30px tall a 7px radius turns each credit into
+     a lozenge, which is what made the whole grid look soft and clumsy. */
+  border-radius: 3px;
   background: var(--tray-inset);
-  transition: border-color .15s ease, background-color .15s ease, transform .15s ease;
+  transition: border-color .15s ease, background-color .15s ease;
 }
 .reset-credit-card:hover {
-  transform: translateY(-1px);
-  border-color: color-mix(in srgb, var(--tray-accent) 45%, var(--tray-hairline));
-  background: var(--tray-panel-bg);
+  border-color: color-mix(in srgb, var(--tray-accent) 34%, var(--tray-hairline));
+  background: var(--tray-hover);
 }
-.reset-credit-card__expiry {
+.reset-credit-card.is-soonest {
+  border-color: color-mix(in srgb, var(--tray-accent) 26%, var(--tray-hairline));
+  background: color-mix(in srgb, var(--tray-accent) 7%, var(--tray-inset));
+}
+.reset-credit-card.is-soonest::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 0 1px 1px 0;
+  background: var(--tray-accent);
+}
+.reset-credit-card__moment {
   display: flex;
   min-width: 0;
   align-items: baseline;
   gap: 3px;
   white-space: nowrap;
-  color: var(--tray-ink-2);
-  font-size: 8px;
   font-variant-numeric: tabular-nums;
 }
-.reset-credit-card__expiry span:first-child {
+.reset-credit-card__date {
   color: var(--tray-ink);
+  font-size: 10px;
+  font-weight: 650;
+}
+.reset-credit-card__time {
+  color: var(--tray-ink-3);
+  font-size: 8px;
+}
+/* Remaining time doubles as the urgency cue: amber inside the last week. */
+.reset-credit-card__left-value {
+  color: var(--tray-ink-3);
   font-size: 9px;
   font-weight: 650;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+.reset-credit-card.is-soonest .reset-credit-card__left-value {
+  color: var(--tray-accent);
+}
+.reset-credit-card.is-urgent .reset-credit-card__left-value {
+  color: var(--tray-warning);
+}
+.reset-credit-card.is-unknown .reset-credit-card__date {
+  color: var(--tray-ink-3);
+  font-weight: 600;
+}
+.reset-credit-card.is-unknown .reset-credit-card__left-value {
+  color: var(--tray-ink-4);
+}
 .reset-credit-more {
-  padding-top: 7px;
+  padding-top: 6px;
   color: var(--tray-ink-3);
   font-size: 9px;
   text-align: right;
@@ -2321,7 +2630,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  color: var(--tray-ink-2);
+  color: var(--tray-ink);
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
@@ -2431,7 +2740,7 @@ onBeforeUnmount(() => {
 .monitor-time {
   flex: 0 0 auto;
   margin-left: auto;
-  color: var(--tray-ink-4);
+  color: var(--tray-ink-3);
   font: 10px/1.5 var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -2442,92 +2751,92 @@ onBeforeUnmount(() => {
    live inside :global() — a trailing .tray-shell outside the parens gets
    dropped by the scoped-CSS compiler, which silently breaks dark mode. */
 :global(html[data-theme="night"] .tray-shell) {
-  --tray-canvas: #171B25;
-  --tray-surface: #1E2431;
-  --tray-sunken: #131722;
-  --tray-hover: #28303F;
-  --tray-ink: #E7E9F0;
-  --tray-ink-2: #B0B6C4;
-  --tray-ink-3: #7D8496;
-  --tray-ink-4: #50586A;
-  --tray-accent: #7DA8C9;
-  --tray-accent-strong: #9FBED7;
-  --tray-accent-soft: rgba(125, 168, 201, .14);
-  --tray-accent-mid: rgba(125, 168, 201, .24);
+  --tray-canvas: #191919;
+  --tray-surface: #202020;
+  --tray-sunken: #141414;
+  --tray-hover: #2A2A2A;
+  --tray-ink: #F5F5F4;
+  --tray-ink-2: #D6D3D1;
+  --tray-ink-3: #A8A29E;
+  --tray-ink-4: #78716C;
+  --tray-accent: #5C8EB8;
+  --tray-accent-strong: #7EAED6;
+  --tray-accent-soft: rgba(92, 142, 184, .15);
+  --tray-accent-mid: rgba(92, 142, 184, .28);
   --tray-highlight: #D9B97C;
-  --tray-success: #8FB89A;
-  --tray-warning: #D69963;
-  --tray-danger: #D88078;
+  --tray-success: #6CA686;
+  --tray-warning: #D99554;
+  --tray-danger: #D86358;
   --tray-signal-red: #FF4D4D;
   --tray-signal-yellow: #FFD60A;
   --tray-signal-green: #32D74B;
-  --tray-hairline: rgba(231, 233, 240, .06);
-  --tray-border: rgba(231, 233, 240, .10);
+  --tray-hairline: rgba(255, 255, 255, .07);
+  --tray-border: rgba(255, 255, 255, .12);
   /* Text on accent buttons / inverted chips (pairs with light ink). */
-  --tray-on-accent: #171B25;
+  --tray-on-accent: #FFFFFF;
   --tray-inset: var(--tray-hover);
   --tray-btn-bg: var(--tray-hairline);
   --tray-btn-bg-hover: var(--tray-border);
   --tray-active-bg: var(--tray-hover);
-  --tray-panel-shadow: 0 2px 6px rgba(0, 0, 0, .35);
-  --tray-active-shadow: 0 1px 4px rgba(0, 0, 0, .28);
-  --tray-success-soft: rgba(143, 184, 154, .14);
-  --tray-warning-soft: rgba(214, 153, 99, .13);
-  --tray-danger-soft: rgba(216, 128, 120, .13);
-  /* Orb Dual Fluid (Left HP / Right MP) - Dark ink-wash muted palette */
+  --tray-panel-shadow: 0 2px 6px rgba(0, 0, 0, .45);
+  --tray-active-shadow: 0 1px 4px rgba(0, 0, 0, .35);
+  --tray-success-soft: rgba(108, 166, 134, .14);
+  --tray-warning-soft: rgba(217, 149, 84, .14);
+  --tray-danger-soft: rgba(216, 99, 88, .14);
+  /* Orb Dual Fluid (Left HP / Right MP) - Dark ink-wash palette */
   --tray-orb-hp-light: #E08A84;
-  --tray-orb-hp-mid: #D88078;
+  --tray-orb-hp-mid: #D86358;
   --tray-orb-hp-dark: #7E3731;
   --tray-orb-hp-text: #E08A84;
-  --tray-orb-mp-light: #9EC2DC;
-  --tray-orb-mp-mid: #7DA8C9;
+  --tray-orb-mp-light: #8EB7DB;
+  --tray-orb-mp-mid: #5C8EB8;
   --tray-orb-mp-dark: #375F7F;
-  --tray-orb-mp-text: #9EC2DC;
+  --tray-orb-mp-text: #8EB7DB;
   --tray-ring-track: color-mix(in srgb, currentColor 24%, transparent);
 }
 
 @media (prefers-color-scheme: dark) {
   :global(html:not([data-theme]) .tray-shell) {
-    --tray-canvas: #171B25;
-    --tray-surface: #1E2431;
-    --tray-sunken: #131722;
-    --tray-hover: #28303F;
-    --tray-ink: #E7E9F0;
-    --tray-ink-2: #B0B6C4;
-    --tray-ink-3: #7D8496;
-    --tray-ink-4: #50586A;
-    --tray-accent: #7DA8C9;
-    --tray-accent-strong: #9FBED7;
-    --tray-accent-soft: rgba(125, 168, 201, .14);
-    --tray-accent-mid: rgba(125, 168, 201, .24);
+    --tray-canvas: #191919;
+    --tray-surface: #202020;
+    --tray-sunken: #141414;
+    --tray-hover: #2A2A2A;
+    --tray-ink: #F5F5F4;
+    --tray-ink-2: #D6D3D1;
+    --tray-ink-3: #A8A29E;
+    --tray-ink-4: #78716C;
+    --tray-accent: #5C8EB8;
+    --tray-accent-strong: #7EAED6;
+    --tray-accent-soft: rgba(92, 142, 184, .15);
+    --tray-accent-mid: rgba(92, 142, 184, .28);
     --tray-highlight: #D9B97C;
-    --tray-success: #8FB89A;
-    --tray-warning: #D69963;
-    --tray-danger: #D88078;
+    --tray-success: #6CA686;
+    --tray-warning: #D99554;
+    --tray-danger: #D86358;
     --tray-signal-red: #FF4D4D;
     --tray-signal-yellow: #FFD60A;
     --tray-signal-green: #32D74B;
-    --tray-hairline: rgba(231, 233, 240, .06);
-    --tray-border: rgba(231, 233, 240, .10);
-    --tray-on-accent: #171B25;
+    --tray-hairline: rgba(255, 255, 255, .07);
+    --tray-border: rgba(255, 255, 255, .12);
+    --tray-on-accent: #FFFFFF;
     --tray-inset: var(--tray-hover);
     --tray-btn-bg: var(--tray-hairline);
     --tray-btn-bg-hover: var(--tray-border);
     --tray-active-bg: var(--tray-hover);
-    --tray-panel-shadow: 0 2px 6px rgba(0, 0, 0, .35);
-    --tray-active-shadow: 0 1px 4px rgba(0, 0, 0, .28);
-    --tray-success-soft: rgba(143, 184, 154, .14);
-    --tray-warning-soft: rgba(214, 153, 99, .13);
-    --tray-danger-soft: rgba(216, 128, 120, .13);
-    /* Orb Dual Fluid (Left HP / Right MP) - Dark ink-wash muted palette */
+    --tray-panel-shadow: 0 2px 6px rgba(0, 0, 0, .45);
+    --tray-active-shadow: 0 1px 4px rgba(0, 0, 0, .35);
+    --tray-success-soft: rgba(108, 166, 134, .14);
+    --tray-warning-soft: rgba(217, 149, 84, .14);
+    --tray-danger-soft: rgba(216, 99, 88, .14);
+    /* Orb Dual Fluid (Left HP / Right MP) - Dark ink-wash palette */
     --tray-orb-hp-light: #E08A84;
-    --tray-orb-hp-mid: #D88078;
+    --tray-orb-hp-mid: #D86358;
     --tray-orb-hp-dark: #7E3731;
     --tray-orb-hp-text: #E08A84;
-    --tray-orb-mp-light: #9EC2DC;
-    --tray-orb-mp-mid: #7DA8C9;
+    --tray-orb-mp-light: #8EB7DB;
+    --tray-orb-mp-mid: #5C8EB8;
     --tray-orb-mp-dark: #375F7F;
-    --tray-orb-mp-text: #9EC2DC;
+    --tray-orb-mp-text: #8EB7DB;
     --tray-ring-track: color-mix(in srgb, currentColor 24%, transparent);
   }
 }

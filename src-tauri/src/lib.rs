@@ -217,6 +217,7 @@ pub fn run() {
             commands::get_locale,
             commands::set_locale,
             commands::search_skills,
+            commands::search_plugins,
             commands::read_skill_file,
             commands::delete_skill_cmd,
             commands::list_mcp_platforms,

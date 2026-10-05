@@ -10,12 +10,6 @@ import type { SupportedAgentInfo } from './api'
 
 const PLATFORMS = [
   {
-    id: 'shared',
-    display_name: 'Shared',
-    skill_dir: '~/.agents/skills',
-    skill_count: 8,
-  },
-  {
     id: 'codex',
     display_name: 'Codex',
     skill_dir: '~/.agents/skills',
@@ -244,6 +238,25 @@ export async function searchSkills(query: string, workspaceDir?: string) {
     .filter(s => s.name.includes(query) || (s.description || '').includes(query))
     .map(s => ({ skill_name: s.name, folder: s.folder, platform_id: 'claude-code', platform_name: 'Claude Code', description: s.description }))
 }
+export async function searchPlugins(query: string, workspaceDir?: string) {
+  await delay()
+  const q = query.toLowerCase()
+  const results: any[] = []
+  for (const p of PLATFORMS) {
+    const skills = makeSkills(p.id).filter(s => s.name.toLowerCase().includes(q) || (s.description || '').toLowerCase().includes(q))
+    for (const s of skills) {
+      results.push({
+        platform_id: p.id,
+        platform_name: p.display_name,
+        kind: 'skill',
+        name: s.name,
+        folder: s.folder || null,
+        description: s.description || '',
+      })
+    }
+  }
+  return results
+}
 export async function readSkillFile(_platformId: string, _skillName: string, _folder: string, filePath: string, _workspaceDir?: string) {
   await delay()
   if (filePath.endsWith('.md')) {
@@ -429,30 +442,32 @@ export async function getSessionStats(days: number, _pathFilter?: string) {
 export async function searchSessionMessages(platformId: string, query: string) {
   await delay();
   const q = query.toLowerCase();
+  const now = Date.now();
   return [
     {
       session_id: 'session-0',
-      session_title: 'Vue 3 frontend refactor',
+      session_title: '关于页面与电玩城投篮关卡优化',
       project_path: '/Users/demo/projects/agent-hub',
       platform_id: platformId,
       message: {
         role: 'user',
-        content: `I have a question about how to implement ${query} and test it in Vue 3.`,
-        timestamp: Date.now() - 3600 * 1000
+        content: `关于页面，月亮和太阳，请在亮色下展示太阳，暗色下展示月亮。电玩城投篮相关的需求中，这里也提到了 ${query}，请仔细检查 ${query} 的具体处理逻辑，确保界面不会截断，自动到底部时能加载完。`,
+        timestamp: now - 3600 * 1000
       }
     },
     {
       session_id: 'session-0',
-      session_title: 'Vue 3 frontend refactor',
+      session_title: '关于页面与电玩城投篮关卡优化',
       project_path: '/Users/demo/projects/agent-hub',
       platform_id: platformId,
       message: {
         role: 'assistant',
-        content: `Here is the solution to implement ${query} using the existing component library.`,
-        timestamp: Date.now() - 3500 * 1000
+        content: `已针对你提到的 ${query} 进行了深度优化与重构。倒计时紧急态已调整完成，关于 ${query} 的第二处逻辑也同步生效，现在不仅展示简洁的上下文片段，而且点击任意匹配均可瞬达并高亮定位。`,
+        thinking: `检查用户提到的 ${query} 关键词，规划实现逻辑。`,
+        timestamp: now - 3540 * 1000
       }
     }
-  ].filter(item => item.message.content.toLowerCase().includes(q));
+  ].filter(item => item.message.content.toLowerCase().includes(q) || (item.message.thinking && item.message.thinking.toLowerCase().includes(q)));
 }
 
 // Trash

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Folder, Copy, ExternalLink, CircleHelp } from 'lucide-vue-next'
+import { Folder, Copy, ExternalLink, CircleHelp, Search } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import { usePluginsStore } from '@/stores/plugins'
 import { useSkillsStore } from '@/stores/skills'
@@ -30,17 +30,48 @@ const isClaudeCode = computed(() => pluginsStore.selectedPlatformId === 'claude-
 const isCodex = computed(() => pluginsStore.selectedPlatformId === 'codex')
 const isZCode = computed(() => pluginsStore.selectedPlatformId === 'zcode')
 const isQwen = computed(() => pluginsStore.selectedPlatformId === 'qwen')
-const isShared = computed(() => pluginsStore.selectedPlatformId === 'shared')
 
-interface SharedPlatformInfo {
+interface ExternalSkillRef {
   id: string
   name: string
   projectOnly?: boolean
 }
 
-// Platforms supporting .agents/skills in official registry order
-const SHARED_PLATFORMS: SharedPlatformInfo[] = [
-  { id: 'codex', name: 'Codex' },
+// Map of agents to the external skill directories they natively support reading
+const EXTERNAL_SKILL_REFS: Record<string, ExternalSkillRef[]> = {
+  opencode: [
+    { id: 'codex', name: 'Codex' },
+    { id: 'claude-code', name: 'Claude Code' },
+  ],
+  omp: [
+    { id: 'claude-code', name: 'Claude Code' },
+    { id: 'cursor', name: 'Cursor' },
+  ],
+  cursor: [
+    { id: 'codex', name: 'Codex' },
+  ],
+  antigravity: [
+    { id: 'codex', name: 'Codex', projectOnly: true },
+  ],
+  'grok-build': [
+    { id: 'codex', name: 'Codex' },
+  ],
+  'kimi-code': [
+    { id: 'codex', name: 'Codex' },
+  ],
+  qwen: [
+    { id: 'codex', name: 'Codex' },
+  ],
+  zcode: [
+    { id: 'codex', name: 'Codex' },
+  ],
+  dsh: [
+    { id: 'codex', name: 'Codex' },
+  ],
+}
+
+// Agents that natively read from Codex's ~/.agents/skills
+const CODEX_CONSUMING_AGENTS: ExternalSkillRef[] = [
   { id: 'cursor', name: 'Cursor' },
   { id: 'antigravity', name: 'Antigravity', projectOnly: true },
   { id: 'grok-build', name: 'Grok Build' },
@@ -51,9 +82,11 @@ const SHARED_PLATFORMS: SharedPlatformInfo[] = [
   { id: 'opencode', name: 'OpenCode' },
 ]
 
-const currentSharedPlatform = computed(() =>
-  SHARED_PLATFORMS.find(p => p.id === pluginsStore.selectedPlatformId)
-)
+const currentExternalSkillRefs = computed(() => {
+  const currentId = pluginsStore.selectedPlatformId
+  if (!currentId) return []
+  return EXTERNAL_SKILL_REFS[currentId] || []
+})
 
 const showMcpSection = computed(() => Boolean(pluginsStore.selectedPlatform?.supports_mcp)
   && (pluginsStore.isGlobalScope || serverCount.value > 0))
@@ -63,14 +96,20 @@ const showClaudeSection = computed(() => isClaudeCode.value
 const showZCodeSection = computed(() => isZCode.value && pluginsStore.isGlobalScope)
 // Qwen Code 扩展同理：只有用户级（~/.qwen/extensions）。
 const showQwenSection = computed(() => isQwen.value && pluginsStore.isGlobalScope)
-// Codex officially keeps user-level skills in Shared; show a jump
-// note instead of a duplicated skills section.
-const showSkillsSection = computed(() => !isCodex.value
+
+const showSkillsSection = computed(() => Boolean(pluginsStore.selectedPlatform?.supports_skills)
   && (pluginsStore.isGlobalScope || skillCount.value > 0))
-const platformTitle = computed(() => {
-  const p = pluginsStore.selectedPlatform
-  if (!p) return ''
-  return p.id === 'shared' ? t('plugin.platform_shared') : p.display_name
+
+const platformTitle = computed(() => pluginsStore.selectedPlatform?.display_name || '')
+
+const currentPlatformMatches = computed(() => {
+  if (!pluginsStore.searchQuery || !pluginsStore.selectedPlatformId) return 0
+  return pluginsStore.platformMatchCounts[pluginsStore.selectedPlatformId] || 0
+})
+
+const totalMatchesAcrossAll = computed(() => {
+  if (!pluginsStore.searchQuery) return 0
+  return pluginsStore.searchResults.length
 })
 
 function shortenPath(path: string): string {
@@ -88,8 +127,8 @@ async function copyPath(path: string) {
   }
 }
 
-function jumpToShared() {
-  pluginsStore.selectPlatform('shared')
+function jumpToPlatform(id: string) {
+  pluginsStore.selectPlatform(id)
 }
 
 function loadCollapsedPanes(): Set<string> {
@@ -140,10 +179,10 @@ function togglePane(section: string) {
       <header class="ah-plugin-header">
         <div class="min-w-0">
           <h1 class="ah-page-title truncate">{{ platformTitle }}</h1>
-          <div v-if="isShared" class="ah-plugin-shared-agents">
+          <div v-if="isCodex" class="ah-plugin-shared-agents">
             <div class="ah-plugin-shared-agents__list">
               <button
-                v-for="agent in SHARED_PLATFORMS"
+                v-for="agent in CODEX_CONSUMING_AGENTS"
                 :key="agent.id"
                 type="button"
                 class="ah-plugin-shared-agent-badge"
@@ -157,6 +196,31 @@ function togglePane(section: string) {
           </div>
         </div>
       </header>
+
+      <!-- Search Active Banner -->
+      <div v-if="pluginsStore.searchQuery" class="ah-plugin-search-banner">
+        <div class="flex items-center gap-2 min-w-0">
+          <Search :size="13" class="ah-plugin-search-banner__icon shrink-0" />
+          <span class="text-xs font-medium truncate">
+            {{ t('plugin.search_active_banner', { query: pluginsStore.searchQuery }) }}
+          </span>
+          <span class="ah-plugin-search-banner__tag shrink-0">
+            {{ currentPlatformMatches > 0
+                ? t('plugin.search_matches_count', { count: currentPlatformMatches })
+                : (totalMatchesAcrossAll > 0
+                    ? t('plugin.search_no_matches_in_platform', { query: pluginsStore.searchQuery })
+                    : t('plugin.search_no_matches_total'))
+            }}
+          </span>
+        </div>
+        <button
+          type="button"
+          class="btn btn-secondary btn-xs shrink-0"
+          @click="pluginsStore.clearSearch()"
+        >
+          {{ t('plugin.search_clear') }}
+        </button>
+      </div>
 
       <div class="ah-plugin-grid">
         <!-- MCP Section -->
@@ -179,9 +243,9 @@ function togglePane(section: string) {
                 v-tooltip="`${pluginsStore.selectedPlatform.config_path} · ${t('plugin.copy_path')}`"
                 @click.stop="copyPath(pluginsStore.selectedPlatform.config_path)"
               >
-                <Folder :size="12" class="shrink-0 opacity-60" />
+                <Folder :size="12" class="ah-plugin-path-pill__folder shrink-0" />
                 <span class="truncate">{{ shortenPath(pluginsStore.selectedPlatform.config_path) }}</span>
-                <Copy :size="10" class="ah-plugin-path-pill__copy shrink-0" />
+                <Copy :size="10.5" class="ah-plugin-path-pill__copy shrink-0" />
               </button>
             </div>
             <div class="flex items-center gap-2 shrink-0">
@@ -349,18 +413,6 @@ function togglePane(section: string) {
           </div>
         </section>
 
-        <!-- Codex Special Skills Banner -->
-        <section v-if="isCodex" class="ah-plugin-codex-banner">
-          <div class="flex items-center gap-2.5 min-w-0">
-            <span class="ah-plugin-codex-banner__title">{{ t('plugin.skills') }}</span>
-            <span class="ah-plugin-codex-banner__desc truncate">{{ t('plugin.codex_shared_hint') }}</span>
-          </div>
-          <button class="btn btn-secondary btn-sm shrink-0 flex items-center gap-1.5" @click="jumpToShared">
-            <span>{{ t('plugin.jump_to_pool') }}</span>
-            <ExternalLink :size="12" />
-          </button>
-        </section>
-
         <!-- Skills Section -->
         <section
           v-if="showSkillsSection"
@@ -381,18 +433,19 @@ function togglePane(section: string) {
                 v-tooltip="`${pluginsStore.selectedPlatform.skill_dir} · ${t('plugin.copy_path')}`"
                 @click.stop="copyPath(pluginsStore.selectedPlatform.skill_dir)"
               >
-                <Folder :size="12" class="shrink-0 opacity-60" />
+                <Folder :size="12" class="ah-plugin-path-pill__folder shrink-0" />
                 <span class="truncate">{{ shortenPath(pluginsStore.selectedPlatform.skill_dir) }}</span>
-                <Copy :size="10" class="ah-plugin-path-pill__copy shrink-0" />
+                <Copy :size="10.5" class="ah-plugin-path-pill__copy shrink-0" />
               </button>
               <button
-                v-if="currentSharedPlatform"
+                v-for="ext in currentExternalSkillRefs"
+                :key="ext.id"
                 type="button"
                 class="ah-plugin-shared-link"
-                v-tooltip="currentSharedPlatform.projectOnly ? t('plugin.shared_skills_project_only_tooltip') : t('plugin.shared_skills_tooltip')"
-                @click.stop="jumpToShared"
+                v-tooltip="t('plugin.external_skills_tooltip', { agent: ext.name })"
+                @click.stop="jumpToPlatform(ext.id)"
               >
-                <span>{{ t('plugin.shared_skills_link') }}</span>
+                <span>{{ ext.name }}</span>
                 <ExternalLink :size="11" />
               </button>
             </div>
@@ -449,58 +502,83 @@ function togglePane(section: string) {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  max-width: 260px;
-  padding: 2px 7px;
-  border-radius: var(--radius-sm);
-  background: var(--sunken);
+  max-width: 280px;
+  height: 24px;
+  padding: 0 8px 0 7px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
   border: 1px solid var(--hairline);
   color: var(--ink-3);
   font-family: var(--font-mono);
   font-size: 11px;
+  line-height: 1;
   cursor: pointer;
+  user-select: none;
   transition: all var(--dur-fast) var(--ease-soft);
   min-width: 0;
 }
 .ah-plugin-path-pill:hover {
-  background: var(--hover);
-  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
   border-color: var(--border);
+  color: var(--ink);
+}
+.ah-plugin-path-pill__folder {
+  color: var(--ink-3);
+  opacity: 0.65;
+  transition: opacity var(--dur-fast) var(--ease-soft), color var(--dur-fast) var(--ease-soft);
+}
+.ah-plugin-path-pill:hover .ah-plugin-path-pill__folder {
+  opacity: 0.95;
+  color: var(--ink);
 }
 .ah-plugin-path-pill__copy {
   opacity: 0;
-  transition: opacity var(--dur-fast) var(--ease-soft);
+  width: 0;
+  margin-left: -5px;
+  transform: scale(0.7);
+  transition: opacity var(--dur-fast) var(--ease-soft),
+              width var(--dur-fast) var(--ease-soft),
+              margin-left var(--dur-fast) var(--ease-soft),
+              transform var(--dur-fast) var(--ease-soft);
 }
 .ah-plugin-path-pill:hover .ah-plugin-path-pill__copy {
-  opacity: 0.8;
+  opacity: 0.75;
+  width: 10.5px;
+  margin-left: 0;
+  transform: scale(1);
 }
 .ah-plugin-shared-link {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 8px;
+  height: 24px;
+  padding: 0 8px;
   border-radius: var(--radius-pill);
-  background: color-mix(in srgb, var(--accent) 9%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
   color: var(--accent);
   font-size: 11px;
   font-weight: 500;
+  line-height: 1;
   cursor: pointer;
   transition: all var(--dur-fast) var(--ease-soft);
   flex-shrink: 0;
 }
 .ah-plugin-shared-link:hover {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
   border-color: var(--accent);
 }
 .ah-plugin-readonly-badge {
   display: inline-flex;
   align-items: center;
-  padding: 1px 6px;
+  height: 24px;
+  padding: 0 7.5px;
   border-radius: var(--radius-pill);
-  background: var(--sunken);
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
   border: 1px solid var(--hairline);
   color: var(--ink-4);
   font-size: 10.5px;
+  line-height: 1;
   cursor: help;
   flex-shrink: 0;
 }
@@ -526,13 +604,19 @@ function togglePane(section: string) {
   color: var(--ink-3);
 }
 .ah-plugin-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  min-width: 24px;
   border: 1px solid var(--hairline);
   border-radius: var(--radius-pill);
   background: var(--surface);
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: 11.5px;
   font-family: var(--font-mono);
-  padding: 2px 8px;
+  padding: 0 7.5px;
+  line-height: 1;
 }
 .ah-plugin-grid {
   display: grid;
@@ -549,30 +633,23 @@ function togglePane(section: string) {
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-mist);
   overflow: hidden;
-  transition: background-color var(--dur-base) var(--ease-soft),
-              border-color var(--dur-base) var(--ease-soft),
+  transition: border-color var(--dur-base) var(--ease-soft),
               box-shadow var(--dur-base) var(--ease-soft);
 }
 .ah-plugin-pane.is-collapsed {
-  background: var(--sunken);
-  box-shadow: none;
-  border-color: var(--hairline);
+  box-shadow: var(--shadow-mist);
 }
 .ah-plugin-pane.is-collapsed:hover {
   border-color: var(--border);
-  box-shadow: var(--shadow-mist);
 }
 .ah-plugin-pane__header {
-  min-height: 46px;
-  padding: 9px 16px;
+  height: 48px;
+  min-height: 48px;
+  padding: 0 16px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  border-bottom: 1px solid var(--hairline);
-}
-.ah-plugin-pane.is-collapsed .ah-plugin-pane__header {
-  border-bottom: none;
 }
 .ah-plugin-pane__header--collapsible {
   cursor: pointer;
@@ -582,21 +659,13 @@ function togglePane(section: string) {
 .ah-plugin-pane__header--collapsible:hover {
   background: var(--hover);
 }
-.ah-plugin-pane.is-collapsed .ah-plugin-path-pill,
-.ah-plugin-pane.is-collapsed .ah-plugin-readonly-badge {
-  background: var(--surface);
-}
-.ah-plugin-pane.is-collapsed .ah-plugin-path-pill:hover {
-  background: var(--surface);
-  border-color: var(--border);
-}
 .ah-plugin-pane__toggle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 24px;
   height: 24px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   border: 1px solid transparent;
   background: transparent;
   color: var(--ink-4);
@@ -605,14 +674,8 @@ function togglePane(section: string) {
   padding: 0;
   flex-shrink: 0;
 }
-.ah-plugin-pane.is-collapsed .ah-plugin-pane__toggle {
-  color: var(--ink-3);
-}
-.ah-plugin-pane.is-collapsed:hover .ah-plugin-pane__toggle {
-  color: var(--ink);
-}
 .ah-plugin-pane__toggle:hover {
-  background: var(--surface);
+  background: var(--hover);
   border-color: var(--border);
   color: var(--ink);
 }
@@ -622,8 +685,8 @@ function togglePane(section: string) {
 .ah-plugin-pane__chevron.is-collapsed {
   transform: rotate(-90deg);
 }
-.ah-plugin-pane__header h2 { font-size: 13.5px; font-weight: 600; color: var(--ink); margin: 0; }
-.ah-plugin-pane__body { min-width: 0; }
+.ah-plugin-pane__header h2 { font-size: 13.5px; font-weight: 600; line-height: 1.2; color: var(--ink); margin: 0; }
+.ah-plugin-pane__body { min-width: 0; border-top: 1px solid var(--hairline); }
 .ah-plugin-shared-agents {
   margin-top: 8px;
   display: flex;
@@ -704,6 +767,30 @@ function togglePane(section: string) {
   overflow-wrap: anywhere;
   word-break: break-word;
   white-space: pre-wrap;
+}
+
+.ah-plugin-search-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+}
+.ah-plugin-search-banner__icon {
+  color: var(--accent);
+}
+.ah-plugin-search-banner__tag {
+  font-size: 11.5px;
+  color: var(--ink-2);
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
 }
 
 @media (max-width: 1050px) {

@@ -85,22 +85,22 @@ pub fn list_antigravity_sessions_all() -> Result<Vec<SessionSummary>, String> {
 
         let rows = match stmt.query_map([], |row| {
             let id: String = row.get(0)?;
-            let title: String = row.get(1)?;
-            let preview: String = row.get(2)?;
-            let step_count: i64 = row.get(3)?;
-            let last_modified: String = row.get(4)?;
-            let workspace_uris: String = row.get(5)?;
-            let app_data_dir: String = row.get(6)?;
-            let last_user_input: String = row.get(7)?;
+            let title: Option<String> = row.get(1)?;
+            let preview: Option<String> = row.get(2)?;
+            let step_count: Option<i64> = row.get(3)?;
+            let last_modified: Option<String> = row.get(4)?;
+            let workspace_uris: Option<String> = row.get(5)?;
+            let app_data_dir: Option<String> = row.get(6)?;
+            let last_user_input: Option<String> = row.get(7)?;
             Ok((
                 id,
-                title,
-                preview,
-                step_count,
-                last_modified,
-                workspace_uris,
-                app_data_dir,
-                last_user_input,
+                title.unwrap_or_default(),
+                preview.unwrap_or_default(),
+                step_count.unwrap_or(0),
+                last_modified.unwrap_or_default(),
+                workspace_uris.unwrap_or_default(),
+                app_data_dir.unwrap_or_default(),
+                last_user_input.unwrap_or_default(),
             ))
         }) {
             Ok(rows) => rows,

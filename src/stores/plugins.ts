@@ -1,5 +1,6 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
+import * as api from '@/lib/api'
 import { useSkillsStore } from './skills'
 import { useMcpStore } from './mcp'
 import { useClaudePluginsStore } from './claude-plugins'
@@ -15,9 +16,9 @@ export const usePluginsStore = defineStore('plugins', () => {
   // Migrate pre-rename platform id so the last selection still opens.
   const storedPlatformId = localStorage.getItem('ah-plugin-platform')
   const initialPlatformId =
-    storedPlatformId === 'shared-pool' ? 'shared' : storedPlatformId
-  if (storedPlatformId === 'shared-pool') {
-    localStorage.setItem('ah-plugin-platform', 'shared')
+    storedPlatformId === 'shared-pool' || storedPlatformId === 'shared' ? 'codex' : (storedPlatformId || 'codex')
+  if (storedPlatformId === 'shared-pool' || storedPlatformId === 'shared') {
+    localStorage.setItem('ah-plugin-platform', 'codex')
   }
   const selectedPlatformId = ref<string | null>(initialPlatformId)
   const workspaceDirectory = ref(localStorage.getItem('ah-plugin-workspace-dir') || '')
@@ -39,7 +40,6 @@ export const usePluginsStore = defineStore('plugins', () => {
       kiro: '.kiro/skills',
       dsh: '.dsh/skills',
       omp: '.omp/agent/skills',
-      shared: '.agents/skills',
     }
     const relative = relativeByPlatform[platformId]
     if (!relative || !workspaceDirectory.value) return ''
@@ -85,10 +85,59 @@ export const usePluginsStore = defineStore('plugins', () => {
   })
 
   const sharedSkillDir = computed(() => {
-    const shared = platforms.value.find(item => item.id === 'shared')
-    if (!shared) return ''
-    return isGlobalScope.value ? shared.skill_dir : workspaceSkillPath('shared')
+    const codex = platforms.value.find(item => item.id === 'codex')
+    if (!codex) return ''
+    return isGlobalScope.value ? codex.skill_dir : workspaceSkillPath('codex')
   })
+
+  // Global search across all plugins (skills + MCP)
+  const searchQuery = ref('')
+  const searchResults = ref<api.PluginSearchResult[]>([])
+  const isSearching = ref(false)
+
+  const platformMatchCounts = computed<Record<string, number>>(() => {
+    const counts: Record<string, number> = {}
+    if (!searchQuery.value.trim()) return counts
+    for (const r of searchResults.value) {
+      counts[r.platform_id] = (counts[r.platform_id] || 0) + 1
+    }
+    return counts
+  })
+
+  async function doSearch(query: string) {
+    const trimmed = query.trim()
+    if (!trimmed) {
+      clearSearch()
+      return
+    }
+    searchQuery.value = trimmed
+    isSearching.value = true
+    try {
+      const results = await api.searchPlugins(trimmed, workspaceDirectory.value)
+      if (searchQuery.value === trimmed) {
+        searchResults.value = results
+
+        // If current platform has 0 matches, auto switch to the first matching platform
+        const currentMatches = results.filter(r => r.platform_id === selectedPlatformId.value).length
+        if (currentMatches === 0 && results.length > 0) {
+          const firstPlatformId = platforms.value.find(p => results.some(r => r.platform_id === p.id))?.id
+          if (firstPlatformId && firstPlatformId !== selectedPlatformId.value) {
+            await selectPlatform(firstPlatformId)
+          }
+        }
+      }
+    } finally {
+      if (searchQuery.value === trimmed) {
+        isSearching.value = false
+      }
+    }
+  }
+
+  function clearSearch() {
+    searchQuery.value = ''
+    searchResults.value = []
+    isSearching.value = false
+  }
 
   async function loadPlatform(id: string) {
     selectedPlatformId.value = id
@@ -170,6 +219,12 @@ export const usePluginsStore = defineStore('plugins', () => {
     workspaceDirectory,
     isGlobalScope,
     isLoading,
+    searchQuery,
+    searchResults,
+    isSearching,
+    platformMatchCounts,
+    doSearch,
+    clearSearch,
     refreshPlatforms,
     selectPlatform,
     setWorkspaceDirectory,

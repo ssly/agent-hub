@@ -104,6 +104,16 @@ function fmtQueryTime(value: number): string {
   })
 }
 
+/**
+ * DeepSeek balance amounts arrive as decimal strings ("0.00", "12.34").
+ * Both detail segments are hidden when they carry no money, so an account
+ * with no granted credit only shows the topped-up amount (and vice versa).
+ */
+function hasAmount(value?: string | null): boolean {
+  if (value == null) return false
+  const amount = Number.parseFloat(value)
+  return Number.isFinite(amount) && amount > 0
+}
 
 // --- Codex ---
 const codexAccountName = computed(
@@ -576,9 +586,20 @@ async function handleConfirmClear() {
                     {{ balance.total_balance }}
                   </span>
                 </div>
-                <div class="text-xs mt-1" style="color: var(--ink-3)">
-                  {{ t('switch.deepseek_granted') }} {{ balance.granted_balance }}
-                  · {{ t('switch.deepseek_topped_up') }} {{ balance.topped_up_balance }}
+                <div
+                  v-if="hasAmount(balance.granted_balance) || hasAmount(balance.topped_up_balance)"
+                  class="text-xs mt-1"
+                  style="color: var(--ink-3)"
+                >
+                  <template v-if="hasAmount(balance.granted_balance)">
+                    {{ t('switch.deepseek_granted') }} {{ balance.granted_balance }}
+                  </template>
+                  <template v-if="hasAmount(balance.granted_balance) && hasAmount(balance.topped_up_balance)">
+                    ·
+                  </template>
+                  <template v-if="hasAmount(balance.topped_up_balance)">
+                    {{ t('switch.deepseek_topped_up') }} {{ balance.topped_up_balance }}
+                  </template>
                 </div>
               </div>
             </template>

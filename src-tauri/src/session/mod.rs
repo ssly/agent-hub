@@ -68,27 +68,59 @@ fn path_filter_value(path_filter: Option<&str>) -> Option<&str> {
 
 pub fn list_session_platforms(path_filter: Option<&str>) -> Result<Vec<SessionPlatform>, String> {
     let filter = path_filter_value(path_filter);
-    let mut platforms = Vec::new();
 
-    for spec in SESSION_PLATFORM_SPECS {
-        let total = (spec.count_sessions)()?;
-        if total == 0 {
-            continue;
+    let active_specs: Vec<(&SessionPlatformSpec, usize)> = SESSION_PLATFORM_SPECS
+        .iter()
+        .filter_map(|spec| {
+            let total = match (spec.count_sessions)() {
+                Ok(count) => count,
+                Err(err) => {
+                    eprintln!("Failed to count sessions for {}: {}", spec.id, err);
+                    0
+                }
+            };
+            if total == 0 {
+                None
+            } else {
+                Some((spec, total))
+            }
+        })
+        .collect();
+
+    let platforms = match filter {
+        None => active_specs
+            .into_iter()
+            .map(|(spec, total)| SessionPlatform {
+                id: spec.id.to_string(),
+                display_name: spec.display_name.to_string(),
+                session_count: total,
+            })
+            .collect(),
+        Some(path) => {
+            std::thread::scope(|s| {
+                let handles: Vec<_> = active_specs
+                    .into_iter()
+                    .map(|(spec, _total)| {
+                        s.spawn(move || {
+                            let count = match list_sessions_all(spec.id) {
+                                Ok(all) => filter_sessions_by_path(all, path).len(),
+                                Err(err) => {
+                                    eprintln!("Failed to list sessions for {}: {}", spec.id, err);
+                                    0
+                                }
+                            };
+                            SessionPlatform {
+                                id: spec.id.to_string(),
+                                display_name: spec.display_name.to_string(),
+                                session_count: count,
+                            }
+                        })
+                    })
+                    .collect();
+                handles.into_iter().map(|h| h.join().unwrap()).collect()
+            })
         }
-        // Unfiltered: the probe already answered. Filtered: the count that
-        // matters is the one inside the selected directory, which needs the
-        // full list (a platform may legitimately end up at zero and still be
-        // listed, so the user sees the scope emptied it).
-        let session_count = match filter {
-            None => total,
-            Some(path) => filter_sessions_by_path(list_sessions_all(spec.id)?, path).len(),
-        };
-        platforms.push(SessionPlatform {
-            id: spec.id.to_string(),
-            display_name: spec.display_name.to_string(),
-            session_count,
-        });
-    }
+    };
 
     Ok(platforms)
 }
@@ -1538,4 +1570,52 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn all_installed_platforms_real_data_smoke_test() {
+        println!("\n=== Checking all platforms in list_session_platforms ===");
+        let Ok(platforms) = list_session_platforms(None) else {
+            return;
+        };
+        let mut all_paths = HashSet::new();
+        for platform in &platforms {
+            println!("Platform: {} ({} sessions reported)", platform.id, platform.session_count);
+            let sessions = match list_sessions_all(&platform.id) {
+                Ok(s) => s,
+                Err(err) => {
+                    panic!("list_sessions_all failed for platform {}: {}", platform.id, err);
+                }
+            };
+            println!("  -> loaded {} sessions from list_sessions_all", sessions.len());
+            for session in &sessions {
+                if !session.project_path.is_empty() {
+                    all_paths.insert(session.project_path.clone());
+                }
+            }
+            for session in sessions.iter().take(2) {
+                let msgs = match get_session_messages(&platform.id, &session.id, 0, 10) {
+                    Ok(m) => m,
+                    Err(err) => {
+                        panic!("get_session_messages failed for platform {} session {}: {}", platform.id, session.id, err);
+                    }
+                };
+                println!("     session {} has {} messages in first page", session.id, msgs.len());
+            }
+        }
+
+        println!("\n=== Testing path filtering across discovered paths (total: {}) ===", all_paths.len());
+        for path in all_paths.iter().take(5) {
+            let res = list_session_platforms(Some(path));
+            assert!(res.is_ok(), "list_session_platforms failed for path {}: {:?}", path, res.err());
+        }
+        if all_paths.iter().any(|p| p.contains("medkeep")) {
+            println!("Found medkeep path, testing specifically...");
+            for path in all_paths.iter().filter(|p| p.contains("medkeep")) {
+                let res = list_session_platforms(Some(path));
+                assert!(res.is_ok(), "list_session_platforms failed for medkeep path {}: {:?}", path, res.err());
+                println!("  medkeep path {} succeeded: {:?}", path, res.unwrap().len());
+            }
+        }
+    }
 }
+

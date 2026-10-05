@@ -291,19 +291,30 @@ fn is_repeated_user_message(previous_user: Option<&str>, message: &SessionMessag
 
 fn parse_codex_summary_row(row: &Row<'_>) -> Result<SessionSummary, rusqlite::Error> {
     let id: String = row.get(0)?;
-    let title: String = row.get(1)?;
-    let project_path: String = row.get(2)?;
+    let title: Option<String> = row.get(1)?;
+    let project_path: Option<String> = row.get(2)?;
     let model: Option<String> = row.get(3)?;
-    let tokens_used: u64 = row.get(4)?;
-    let created_at: i64 = row.get(5)?;
-    let updated_at: i64 = row.get(6)?;
-    let first_user_message: String = row.get(7)?;
-    let raw_source: String = row.get(8)?;
-    let title = if title.trim().is_empty() {
-        truncate_chars(first_user_message, 80)
-    } else {
-        title
-    };
+    let tokens_used: Option<u64> = row.get(4)?;
+    let created_at: Option<i64> = row.get(5)?;
+    let updated_at: Option<i64> = row.get(6)?;
+    let first_user_message: Option<String> = row.get(7)?;
+    let raw_source: Option<String> = row.get(8)?;
+
+    let first_user_message = first_user_message.unwrap_or_default();
+    let title = title
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| {
+            if first_user_message.trim().is_empty() {
+                id.clone()
+            } else {
+                truncate_chars(first_user_message, 80)
+            }
+        });
+    let project_path = project_path.unwrap_or_default();
+    let created_at = created_at.unwrap_or(0);
+    let updated_at = updated_at.unwrap_or(created_at);
+    let raw_source = raw_source.unwrap_or_default();
 
     Ok(SessionSummary {
         id,
@@ -313,7 +324,7 @@ fn parse_codex_summary_row(row: &Row<'_>) -> Result<SessionSummary, rusqlite::Er
         started_at: created_at.saturating_mul(1000),
         updated_at: updated_at.saturating_mul(1000),
         message_count: None,
-        tokens_used: Some(tokens_used),
+        tokens_used,
         platform_id: PLATFORM_ID.to_string(),
         source: codex_client_source(&raw_source),
     })
@@ -466,20 +477,30 @@ pub fn search_codex_messages(
     let rows = stmt
         .query_map([], |row| {
             let id: String = row.get(0)?;
-            let title: String = row.get(1)?;
-            let project_path: String = row.get(2)?;
+            let title: Option<String> = row.get(1)?;
+            let project_path: Option<String> = row.get(2)?;
             let model: Option<String> = row.get(3)?;
-            let tokens_used: u64 = row.get(4)?;
-            let created_at: i64 = row.get(5)?;
-            let updated_at: i64 = row.get(6)?;
-            let first_user_message: String = row.get(7)?;
-            let rollout_path: String = row.get(8)?;
+            let tokens_used: Option<u64> = row.get(4)?;
+            let created_at: Option<i64> = row.get(5)?;
+            let updated_at: Option<i64> = row.get(6)?;
+            let first_user_message: Option<String> = row.get(7)?;
+            let rollout_path: Option<String> = row.get(8)?;
 
-            let title = if title.trim().is_empty() {
-                truncate_chars(first_user_message, 80)
-            } else {
-                title
-            };
+            let first_user_message = first_user_message.unwrap_or_default();
+            let title = title
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .unwrap_or_else(|| {
+                    if first_user_message.trim().is_empty() {
+                        id.clone()
+                    } else {
+                        truncate_chars(first_user_message, 80)
+                    }
+                });
+            let project_path = project_path.unwrap_or_default();
+            let created_at = created_at.unwrap_or(0);
+            let updated_at = updated_at.unwrap_or(created_at);
+            let rollout_path = rollout_path.unwrap_or_default();
 
             Ok(ThreadInfo {
                 summary: SessionSummary {
@@ -490,7 +511,7 @@ pub fn search_codex_messages(
                     started_at: created_at.saturating_mul(1000),
                     updated_at: updated_at.saturating_mul(1000),
                     message_count: None,
-                    tokens_used: Some(tokens_used),
+                    tokens_used,
                     platform_id: PLATFORM_ID.to_string(),
                     source: None,
                 },

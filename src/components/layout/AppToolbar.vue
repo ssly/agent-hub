@@ -12,6 +12,7 @@ import * as api from '@/lib/api'
 
 import { useToast } from '@/composables/useToast'
 import { useHoverResetBool } from '@/composables/useHoverReset'
+import { Search, X } from 'lucide-vue-next'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -79,7 +80,7 @@ const breadcrumb = computed(() => {
   return ''
 })
 
-const showBack = computed(() => appStore.currentTab === 'plugins' && appStore.currentView !== 'plugins')
+const showBack = computed(() => appStore.currentTab === 'plugins' && appStore.currentView === 'detail')
 const showOpenFolder = computed(() =>
   appStore.currentTab === 'plugins'
   && appStore.currentView === 'detail'
@@ -147,6 +148,25 @@ async function handleSyncClick() {
     showToast(String(e), 'error')
   }
 }
+
+let searchDebounce: ReturnType<typeof setTimeout>
+function handleSearch(e: Event) {
+  const query = (e.target as HTMLInputElement).value
+  clearTimeout(searchDebounce)
+  searchDebounce = setTimeout(() => {
+    pluginsStore.doSearch(query)
+    appStore.setView('plugins')
+  }, 250)
+}
+
+function handleClearSearch() {
+  pluginsStore.clearSearch()
+}
+
+const totalPluginMatches = computed(() => {
+  if (!pluginsStore.searchQuery) return 0
+  return pluginsStore.searchResults.length
+})
 </script>
 
 <template>
@@ -157,6 +177,41 @@ async function handleSyncClick() {
     </button>
 
     <span class="ah-toolbar__breadcrumb">{{ breadcrumb }}</span>
+
+    <!-- Search (plugins tab, list view only) -->
+    <div
+      v-if="appStore.currentTab === 'plugins' && appStore.currentView === 'plugins'"
+      class="ah-toolbar-search ml-1"
+      :class="{ 'is-active': Boolean(pluginsStore.searchQuery) }"
+      data-tauri-drag-region="none"
+    >
+      <Search :size="12" class="ah-toolbar-search__icon" />
+      <input
+        type="text"
+        :value="pluginsStore.searchQuery"
+        :placeholder="t('ui.search_placeholder')"
+        class="ah-toolbar-search__input"
+        @input="handleSearch"
+        @keydown.esc="handleClearSearch"
+      />
+      <span
+        v-if="pluginsStore.searchQuery"
+        class="ah-toolbar-search__badge"
+        :class="{ 'ah-toolbar-search__badge--zero': totalPluginMatches === 0 }"
+        v-tooltip="totalPluginMatches > 0 ? t('plugin.search_matches_count', { count: totalPluginMatches }) : t('plugin.search_no_matches_total')"
+      >
+        {{ totalPluginMatches }}
+      </span>
+      <button
+        v-if="pluginsStore.searchQuery"
+        type="button"
+        class="ah-toolbar-search__clear"
+        :title="t('action.clear')"
+        @click="handleClearSearch"
+      >
+        <X :size="11" />
+      </button>
+    </div>
 
     <div class="flex-1" />
 
@@ -211,6 +266,92 @@ async function handleSyncClick() {
 </template>
 
 <style scoped>
+.ah-toolbar-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 14rem;
+  height: 28px;
+  background: var(--sunken);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  padding: 0 6px 0 8px;
+  gap: 6px;
+  transition: all var(--dur-fast) var(--ease-soft);
+}
+.ah-toolbar-search:hover {
+  border-color: var(--border);
+}
+.ah-toolbar-search:focus-within,
+.ah-toolbar-search.is-active {
+  width: 17rem;
+  background: var(--surface);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.ah-toolbar-search__icon {
+  flex-shrink: 0;
+  color: var(--ink-3);
+  pointer-events: none;
+  transition: color var(--dur-fast) var(--ease-soft);
+}
+.ah-toolbar-search:focus-within .ah-toolbar-search__icon,
+.ah-toolbar-search.is-active .ah-toolbar-search__icon {
+  color: var(--accent);
+}
+.ah-toolbar-search__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10.5px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  padding: 0 5px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  flex-shrink: 0;
+  line-height: 1;
+}
+.ah-toolbar-search__badge--zero {
+  background: var(--sunken);
+  color: var(--ink-3);
+  border: 1px solid var(--hairline);
+}
+.ah-toolbar-search__input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font-size: 12px;
+  outline: none;
+}
+.ah-toolbar-search__input::placeholder {
+  color: var(--ink-3);
+}
+.ah-toolbar-search__clear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-soft);
+}
+.ah-toolbar-search__clear:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
 /* Windows-style caption buttons, flush with the toolbar's top-right corner. */
 .ah-win-controls {
   display: flex;

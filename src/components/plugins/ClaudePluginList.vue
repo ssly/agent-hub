@@ -1,12 +1,24 @@
-<script setup lang="ts">
+i<script setup lang="ts">
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useToast } from '@/composables/useToast'
 import { useClaudePluginsStore, type ClaudeCodePlugin } from '@/stores/claude-plugins'
+import { usePluginsStore } from '@/stores/plugins'
+import { highlightText } from '@/lib/utils'
 import AppLoading from '@/components/ui/AppLoading.vue'
 
 const { t } = useI18n()
 const { showToast } = useToast()
 const store = useClaudePluginsStore()
+const pluginsStore = usePluginsStore()
+
+const displayedPlugins = computed(() => {
+  const q = pluginsStore.searchQuery.toLowerCase().trim()
+  if (!q) return store.plugins
+  return store.plugins.filter((p: ClaudeCodePlugin) =>
+    p.name.toLowerCase().includes(q) || (p.description || '').toLowerCase().includes(q)
+  )
+})
 
 function scopeLabel(scope: string) {
   const key = `plugin.claude_scope_${scope}`
@@ -44,19 +56,23 @@ async function handleToggle(plugin: ClaudeCodePlugin) {
       {{ t(store.workspaceDirectory ? 'plugin.claude_project_empty' : 'plugin.claude_empty') }}
     </div>
 
+    <div v-else-if="displayedPlugins.length === 0" class="ah-cc-plugins__state">
+      {{ t('plugin.no_matching_skills') }}
+    </div>
+
     <div v-else class="ah-cc-plugin-list">
       <article
-        v-for="plugin in store.plugins"
+        v-for="plugin in displayedPlugins"
         :key="plugin.id"
         :class="['ah-cc-plugin', plugin.enabled ? 'is-enabled' : 'is-disabled']"
       >
         <span class="ah-cc-plugin__status" aria-hidden="true"></span>
         <div class="ah-cc-plugin__main">
           <div class="ah-cc-plugin__title-row">
-            <strong class="ah-cc-plugin__name">{{ plugin.name }}</strong>
+            <strong class="ah-cc-plugin__name" v-html="highlightText(plugin.name, pluginsStore.searchQuery)"></strong>
             <span v-if="plugin.version && plugin.version !== 'unknown'" class="ah-version-chip">v{{ plugin.version }}</span>
           </div>
-          <p v-if="plugin.description" class="ah-cc-plugin__description">{{ plugin.description }}</p>
+          <p v-if="plugin.description" class="ah-cc-plugin__description" v-html="highlightText(plugin.description, pluginsStore.searchQuery)"></p>
           <div class="ah-cc-plugin__meta">
             <span v-if="plugin.marketplace">{{ plugin.marketplace }}</span>
             <span class="ah-cc-plugin__scope">{{ scopeLabel(plugin.scope) }}</span>

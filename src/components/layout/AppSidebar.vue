@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Activity, Blocks, ChartColumn, FolderOpen, Gauge, Globe2, MessagesSquare, Settings, UserRound, X } from 'lucide-vue-next'
+import { Activity, Blocks, ChartColumn, FolderOpen, Gauge, Globe2, MessagesSquare, Settings, Trash2, UserRound, X } from 'lucide-vue-next'
 import { useAppStore } from '@/stores/app'
 import { useSkillsStore } from '@/stores/skills'
 import { usePluginsStore } from '@/stores/plugins'
@@ -254,33 +254,18 @@ async function handleItemClick(id: string) {
   else if (appStore.currentTab === 'monitor') sessionMonitorStore.activeAgent = id as MonitorTab
   else if (appStore.currentTab === 'accounts') await switchStore.selectAgent(id)
   else {
-    pluginsStore.selectPlatform(id)
+    await pluginsStore.selectPlatform(id)
     appStore.setView('plugins')
   }
 }
 
-let searchDebounce: ReturnType<typeof setTimeout>
-function handleSearch(e: Event) {
-  const query = (e.target as HTMLInputElement).value
-  clearTimeout(searchDebounce)
-  searchDebounce = setTimeout(() => {
-    if (query.trim()) {
-      skillsStore.doSearch(query)
-      appStore.setView('search')
-    } else {
-      skillsStore.searchResults = []
-      appStore.setView('plugins')
-    }
-  }, 300)
-}
-
-let sessionSearchDebounce: ReturnType<typeof setTimeout>
-function handleSessionSearch(e: Event) {
-  const query = (e.target as HTMLInputElement).value
-  clearTimeout(sessionSearchDebounce)
-  sessionSearchDebounce = setTimeout(() => {
-    sessionsStore.doSearch(query)
-  }, 300)
+function isItemMuted(id: string) {
+  if (appStore.currentTab === 'plugins' && pluginsStore.searchQuery) {
+    if (pluginsStore.searchResults.length === 0) return false
+    if (getSelectedId() === id) return false
+    return (pluginsStore.platformMatchCounts[id] || 0) === 0
+  }
+  return false
 }
 </script>
 
@@ -379,10 +364,14 @@ function handleSessionSearch(e: Event) {
         <button
           v-for="item in getSidebarItems()"
           :key="item.id"
-          :class="['ah-platform-item', getSelectedId() === item.id ? 'is-active' : '']"
+          :class="[
+            'ah-platform-item',
+            getSelectedId() === item.id ? 'is-active' : '',
+            isItemMuted(item.id) ? 'is-search-muted' : ''
+          ]"
           @click="handleItemClick(item.id)"
         >
-          <div class="flex items-center justify-between">
+          <div class="flex items-center justify-between w-full">
             <span class="ah-platform-item__label">
               <ChartColumn
                 v-if="item.id === STATS_PLATFORM_ID"
@@ -394,6 +383,12 @@ function handleSessionSearch(e: Event) {
             </span>
             <span v-if="appStore.currentTab === 'sessions' && item.session_count != null" class="ah-platform-item__count">
               {{ item.session_count }}
+            </span>
+            <span
+              v-else-if="appStore.currentTab === 'plugins' && pluginsStore.searchQuery && (pluginsStore.platformMatchCounts[item.id] || 0) > 0"
+              class="ah-platform-item__count ah-platform-item__count--search"
+            >
+              {{ pluginsStore.platformMatchCounts[item.id] }}
             </span>
             <span
               v-else-if="appStore.currentTab === 'monitor' && getAgentLatestStatus(item.id)"
@@ -409,43 +404,7 @@ function handleSessionSearch(e: Event) {
         </p>
       </div>
 
-      <!-- Search (skills tab only) -->
-      <div v-if="appStore.currentTab === 'plugins'" class="p-2.5" style="border-top: 1px solid var(--hairline)">
-        <input
-          type="text"
-          :placeholder="t('ui.search_placeholder')"
-          class="ah-search-input"
-          @input="handleSearch"
-        />
-      </div>
-
-      <!-- Search (sessions tab only — the "All" statistics view has no search) -->
-      <div
-        v-if="appStore.currentTab === 'sessions' && sessionsStore.selectedPlatformId && sessionsStore.selectedPlatformId !== STATS_PLATFORM_ID"
-        class="p-2.5"
-        style="border-top: 1px solid var(--hairline)"
-      >
-        <input
-          type="text"
-          :placeholder="t('session.search_placeholder', { agent: sessionsStore.platforms.find(p => p.id === sessionsStore.selectedPlatformId)?.display_name || '' })"
-          class="ah-search-input"
-          :value="sessionsStore.searchQuery"
-          @input="handleSessionSearch"
-        />
-      </div>
-
-      <!-- Trash badge -->
-      <div
-        v-if="appStore.trashCount > 0"
-        class="px-3 py-2 cursor-pointer flex items-center gap-2 text-xs"
-        style="border-top: 1px solid var(--hairline); color: var(--ink-3)"
-        @click="appStore.openTrash()"
-      >
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-        {{ t('trash.title') }} ({{ appStore.trashCount }})
-      </div>
-
-      <!-- Version (+ footer shortcuts: monitor panel, language, theme) -->
+      <!-- Version (+ footer shortcuts: settings, usage, trash, language, theme) -->
       <div
         class="sidebar-footer cursor-pointer select-none transition-colors hover:bg-[color:var(--sunken)]"
         style="border-top: 1px solid var(--hairline)"
@@ -482,23 +441,34 @@ function handleSessionSearch(e: Event) {
             {{ appStore.isNight ? '☾' : '☀' }}
           </button>
         </div>
-        <!-- Downloading: spinner + percent -->
-        <span
-          v-if="appStore.isDownloading"
-          class="sidebar-footer-version inline-flex items-center gap-1.5"
-          style="color: var(--accent)"
-        >
-          <svg class="about-spin" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-          {{ appStore.updateProgress }}%
-        </span>
-        <span
-          v-else
-          class="sidebar-footer-version"
-          :style="appStore.availableUpdate ? { color: 'var(--warning)' } : { color: 'var(--ink-4)' }"
-        >
-          v{{ appStore.appVersion }}
-          <span v-if="appStore.availableUpdate" class="ml-1 text-[10px] font-semibold">{{ t('about.update_available_short') }}</span>
-        </span>
+        <div class="sidebar-footer-right">
+          <button
+            v-tooltip="appStore.trashCount > 0 ? `${t('trash.title')} (${appStore.trashCount})` : t('trash.title')"
+            class="sidebar-footer-btn relative"
+            :class="{ 'sidebar-footer-btn--has-trash': appStore.trashCount > 0 }"
+            @click.stop="appStore.openTrash()"
+          >
+            <Trash2 :size="12" />
+            <span v-if="appStore.trashCount > 0" class="sidebar-footer-trash-badge">{{ appStore.trashCount }}</span>
+          </button>
+          <!-- Downloading: spinner + percent -->
+          <span
+            v-if="appStore.isDownloading"
+            class="sidebar-footer-version inline-flex items-center gap-1.5"
+            style="color: var(--accent)"
+          >
+            <svg class="about-spin" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+            {{ appStore.updateProgress }}%
+          </span>
+          <span
+            v-else
+            class="sidebar-footer-version"
+            :style="appStore.availableUpdate ? { color: 'var(--warning)' } : { color: 'var(--ink-4)' }"
+          >
+            v{{ appStore.appVersion }}
+            <span v-if="appStore.availableUpdate" class="ml-1 text-[10px] font-semibold">{{ t('about.update_available_short') }}</span>
+          </span>
+        </div>
       </div>
     </template>
 
@@ -541,7 +511,7 @@ function handleSessionSearch(e: Event) {
   padding: 0;
   border: 0;
   border-radius: var(--radius-sm);
-  color: var(--ink-4);
+  color: var(--ink-3);
   background: transparent;
   cursor: pointer;
   transition: color .15s ease, background-color .15s ease;
@@ -557,38 +527,71 @@ function handleSessionSearch(e: Event) {
   color: var(--accent);
   background: var(--sunken);
 }
+.sidebar-footer-btn--has-trash {
+  color: var(--danger);
+}
+.sidebar-footer-btn--has-trash:hover {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+.sidebar-footer-trash-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 12px;
+  height: 12px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 8.5px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  line-height: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sidebar-footer-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex: none;
+}
 
 .ah-nav {
-  padding: 8px 10px 7px;
+  padding: 6px 8px;
   border-bottom: 1px solid var(--hairline);
-  /* 2×2 grid: icon above label, one cell per main tab. */
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 .ah-nav-item {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 8px 4px;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 6px 9px;
+  height: 30px;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--ink-2);
-  font-size: 12px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease-soft), color var(--dur-fast) var(--ease-soft);
 }
 .ah-nav-item:hover { background: var(--hover); color: var(--ink); }
 .ah-nav-item.is-active {
-  background: var(--surface);
+  background: var(--hover);
   color: var(--ink);
   font-weight: 600;
-  box-shadow: inset 0 0 0 1px var(--hairline);
+  box-shadow: none;
 }
-.ah-nav-item__icon { flex-shrink: 0; color: var(--ink-3); transition: color var(--dur-fast) var(--ease-soft); }
-.ah-nav-item:hover .ah-nav-item__icon { color: var(--ink-2); }
+.ah-nav-item__icon { flex-shrink: 0; color: var(--ink-2); transition: color var(--dur-fast) var(--ease-soft); }
+.ah-nav-item:hover .ah-nav-item__icon { color: var(--ink); }
 .ah-nav-item.is-active .ah-nav-item__icon { color: var(--accent); }
 .ah-scope-picker {
   padding: 6px 10px;

@@ -88,31 +88,29 @@ pub fn count_opencode_sessions() -> Result<usize, String> {
 
 fn map_session_summary_row(row: &Row) -> rusqlite::Result<SessionSummary> {
     let id: String = row.get(0)?;
-    let title: String = row.get(1)?;
-    let project_path: String = row.get(2)?;
+    let title: Option<String> = row.get(1)?;
+    let project_path: Option<String> = row.get(2)?;
     let model_raw: Option<String> = row.get(3)?;
-    let created_at: i64 = row.get(4)?;
-    let updated_at: i64 = row.get(5)?;
-    let tokens_val: i64 = row.get(6)?;
-    let message_count: i64 = row.get(7)?;
+    let created_at: Option<i64> = row.get(4)?;
+    let updated_at: Option<i64> = row.get(5)?;
+    let tokens_val: Option<i64> = row.get(6)?;
+    let message_count: Option<i64> = row.get(7)?;
 
-    let title = if title.trim().is_empty() {
-        id.clone()
-    } else {
-        title
-    };
+    let title = title
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| id.clone());
+    let project_path = project_path.unwrap_or_default();
+    let created_at = created_at.unwrap_or(0);
+    let updated_at = updated_at.unwrap_or(created_at);
 
     let model = model_raw.as_deref().map(opencode_display_model);
-    let tokens_used = if tokens_val > 0 {
-        u64::try_from(tokens_val).ok()
-    } else {
-        None
-    };
-    let message_count = if message_count > 0 {
-        u32::try_from(message_count).ok()
-    } else {
-        None
-    };
+    let tokens_used = tokens_val
+        .filter(|&v| v > 0)
+        .and_then(|v| u64::try_from(v).ok());
+    let message_count = message_count
+        .filter(|&v| v > 0)
+        .and_then(|v| u32::try_from(v).ok());
 
     Ok(SessionSummary {
         id,
@@ -257,9 +255,9 @@ fn get_opencode_v2_messages(
         .query_map([session_id], |row| {
             Ok((
                 row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                row.get::<_, Option<String>>(3)?.unwrap_or_default(),
             ))
         })
         .map_err(|err| err.to_string())?;
@@ -361,8 +359,8 @@ fn get_opencode_v1_messages(
         .query_map([session_id], |row| {
             Ok((
                 row.get::<_, String>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, String>(2)?,
+                row.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                row.get::<_, Option<String>>(2)?.unwrap_or_default(),
             ))
         })
         .map_err(|err| err.to_string())?;
@@ -407,14 +405,14 @@ fn read_opencode_parts(
     message_id: &str,
 ) -> Result<(String, Option<String>), String> {
     let parts = part_stmt
-        .query_map([message_id], |row| row.get::<_, String>(0))
+        .query_map([message_id], |row| row.get::<_, Option<String>>(0))
         .map_err(|err| err.to_string())?;
 
     let mut texts = Vec::new();
     let mut reasonings = Vec::new();
 
     for part in parts {
-        let data: Value = match part.ok().and_then(|raw| serde_json::from_str(&raw).ok()) {
+        let data: Value = match part.ok().flatten().and_then(|raw| serde_json::from_str(&raw).ok()) {
             Some(value) => value,
             None => continue,
         };
@@ -525,3 +523,49 @@ pub fn search_opencode_messages(
     }
     Ok(results)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn map_session_summary_row_handles_null_title_and_columns() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute(
+            "CREATE TABLE test_session (
+                id TEXT NOT NULL,
+                title TEXT,
+                directory TEXT,
+                model TEXT,
+                time_created INTEGER,
+                time_updated INTEGER,
+                tokens INTEGER,
+                cnt INTEGER
+            )",
+            [],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO test_session (id, title, directory, model, time_created, time_updated, tokens, cnt)
+             VALUES ('ses_null_title', NULL, NULL, NULL, NULL, NULL, NULL, NULL)",
+            [],
+        )
+        .unwrap();
+
+        let mut stmt = conn
+            .prepare("SELECT id, title, directory, model, time_created, time_updated, tokens, cnt FROM test_session")
+            .unwrap();
+        let session = stmt
+            .query_row([], |row| map_session_summary_row(row))
+            .expect("should successfully parse row with NULL title and columns");
+
+        assert_eq!(session.id, "ses_null_title");
+        assert_eq!(session.title, "ses_null_title");
+        assert_eq!(session.project_path, "");
+        assert_eq!(session.started_at, 0);
+        assert_eq!(session.tokens_used, None);
+        assert_eq!(session.message_count, None);
+    }
+}
+

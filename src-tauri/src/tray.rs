@@ -13,6 +13,9 @@ const TRAY_LOADING_HEIGHT: f64 = 120.0;
 const TRAY_MAX_HEIGHT: f64 = 620.0;
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
+#[allow(dead_code)]
+const MENU_OPEN_MONITOR: &str = "tray-open-monitor";
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 const MENU_CHECK_UPDATE: &str = "tray-check-update";
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 const MENU_QUIT: &str = "tray-quit";
@@ -1065,6 +1068,7 @@ fn expand_dock(window: &tauri::WebviewWindow, animate: bool) {
             },
         );
     } else {
+        emit_dock_animating(window);
         set_tray_physical_frame(window, target.0, target.1, target.2, target.3);
         emit_dock_changed(window);
     }
@@ -1134,6 +1138,11 @@ fn animate_tray_window(
     std::thread::spawn(move || {
         use std::sync::mpsc::sync_channel;
         use std::time::{Duration, Instant};
+
+        // Brief yield so the webview IPC event loop has time to receive
+        // usage-tray-dock-animating and hide the inner content before the native
+        // window starts resizing.
+        std::thread::sleep(Duration::from_millis(25));
 
         const ANIMATION_DURATION: Duration = Duration::from_millis(220);
         const FRAME_INTERVAL: Duration = Duration::from_micros(16_667);
@@ -1265,6 +1274,7 @@ pub const TRAY_CHECK_UPDATES_EVENT: &str = "tray-check-updates";
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 struct TrayLabels {
     tooltip: &'static str,
+    open_monitor: &'static str,
     check_update: &'static str,
     quit: &'static str,
 }
@@ -1273,13 +1283,15 @@ struct TrayLabels {
 fn tray_labels(locale: &str) -> TrayLabels {
     if locale.to_ascii_lowercase().starts_with("zh") {
         TrayLabels {
-            tooltip: "监控面板",
+            tooltip: "Agent Hub",
+            open_monitor: "监控面板",
             check_update: "检查更新",
             quit: "退出",
         }
     } else {
         TrayLabels {
-            tooltip: "Monitor Panel",
+            tooltip: "Agent Hub",
+            open_monitor: "Monitor Panel",
             check_update: "Check for Updates",
             quit: "Quit",
         }
@@ -1289,6 +1301,7 @@ fn tray_labels(locale: &str) -> TrayLabels {
 /// Owned tray menu items so locale switches can rewrite their titles in place.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 struct TrayMenuHandles {
+    open_monitor: tauri::menu::MenuItem<tauri::Wry>,
     check_update: tauri::menu::MenuItem<tauri::Wry>,
     quit: tauri::menu::MenuItem<tauri::Wry>,
 }
@@ -1354,9 +1367,15 @@ pub fn open_usage_tray(app: AppHandle) {
     {
         if let Some(window) = app.get_webview_window("codex-usage") {
             let monitor = app
-                .get_webview_window("main")
-                .and_then(|main| main.current_monitor().ok().flatten())
-                .or_else(|| window.current_monitor().ok().flatten());
+                .cursor_position()
+                .ok()
+                .and_then(|pos| app.monitor_from_point(pos.x, pos.y).ok().flatten())
+                .or_else(|| {
+                    app.get_webview_window("main")
+                        .and_then(|main| main.current_monitor().ok().flatten())
+                })
+                .or_else(|| window.current_monitor().ok().flatten())
+                .or_else(|| app.primary_monitor().ok().flatten());
             reopen_usage_tray(&window, monitor);
         }
     }
@@ -1371,6 +1390,7 @@ pub fn apply_locale(app: &AppHandle, locale: &str) {
     {
         let labels = tray_labels(locale);
         if let Some(handles) = app.try_state::<TrayMenuHandles>() {
+            let _ = handles.open_monitor.set_text(labels.open_monitor);
             let _ = handles.check_update.set_text(labels.check_update);
             let _ = handles.quit.set_text(labels.quit);
         }
@@ -1378,7 +1398,7 @@ pub fn apply_locale(app: &AppHandle, locale: &str) {
             let _ = tray.set_tooltip(Some(labels.tooltip));
         }
         if let Some(window) = app.get_webview_window("codex-usage") {
-            let _ = window.set_title(labels.tooltip);
+            let _ = window.set_title(labels.open_monitor);
         }
     }
 
@@ -1418,7 +1438,7 @@ fn setup_desktop(app: &mut App) -> tauri::Result<()> {
         "codex-usage",
         WebviewUrl::App("index.html?view=codex-usage".into()),
     )
-    .title(labels.tooltip)
+    .title(labels.open_monitor)
     .inner_size(TRAY_WINDOW_WIDTH, TRAY_LOADING_HEIGHT)
     .center()
     .resizable(false)
@@ -1519,8 +1539,15 @@ fn setup_desktop(app: &mut App) -> tauri::Result<()> {
         _ => {}
     });
 
-    // Right-click context menu: Check for Updates + Quit.
+    // Right-click context menu: Monitor Panel + Check for Updates + Quit.
     // Left click remains reserved for the usage popup (show_menu_on_left_click=false).
+    let open_monitor = MenuItem::with_id(
+        app,
+        MENU_OPEN_MONITOR,
+        labels.open_monitor,
+        true,
+        None::<&str>,
+    )?;
     let check_update = MenuItem::with_id(
         app,
         MENU_CHECK_UPDATE,
@@ -1529,8 +1556,9 @@ fn setup_desktop(app: &mut App) -> tauri::Result<()> {
         None::<&str>,
     )?;
     let quit = MenuItem::with_id(app, MENU_QUIT, labels.quit, true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&check_update, &quit])?;
+    let menu = Menu::with_items(app, &[&open_monitor, &check_update, &quit])?;
     app.manage(TrayMenuHandles {
+        open_monitor: open_monitor.clone(),
         check_update: check_update.clone(),
         quit: quit.clone(),
     });
@@ -1552,6 +1580,9 @@ fn setup_desktop(app: &mut App) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| {
             match event.id.as_ref() {
+                MENU_OPEN_MONITOR => {
+                    open_usage_tray(app.clone());
+                }
                 MENU_CHECK_UPDATE => {
                     // Hide the usage popup if open, then hand off to the main
                     // window's existing About / updater UI.

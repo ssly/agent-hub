@@ -67,8 +67,19 @@ export const refreshPlatformSkills = (platformId: string, workspaceDir = '') =>
   invoke<any[]>('refresh_platform_skills', { platformId, workspaceDir: workspaceDir || null })
 export const getLocale = () => invoke<string>('get_locale')
 export const setLocale = (locale: string) => invoke<void>('set_locale', { locale })
+export interface PluginSearchResult {
+  platform_id: string
+  platform_name: string
+  kind: 'skill' | 'mcp'
+  name: string
+  folder?: string | null
+  description: string
+}
+
 export const searchSkills = (query: string, workspaceDir = '') =>
   invoke<any[]>('search_skills', { query, workspaceDir: workspaceDir || null })
+export const searchPlugins = (query: string, workspaceDir = '') =>
+  invoke<PluginSearchResult[]>('search_plugins', { query, workspaceDir: workspaceDir || null })
 export const readSkillFile = (platformId: string, skillName: string, folder: string, filePath: string, workspaceDir = '') =>
   invoke<string>('read_skill_file', { platformId, skillName, folder, filePath, workspaceDir: workspaceDir || null })
 export const deleteSkill = (platformId: string, skillName: string, folder: string) =>

@@ -38,9 +38,8 @@ async function loadData() {
     refreshMinutesDraft.value = null
     monitorLimitDraft.value = null
     const list = await api.getSupportedAgents()
-    const filtered = list.filter(a => a.id !== 'shared')
-    supportedAgents.value = filtered
-    enabledIds.value = new Set(filtered.filter(a => a.enabled).map(a => a.id))
+    supportedAgents.value = list
+    enabledIds.value = new Set(list.filter(a => a.enabled).map(a => a.id))
   } catch (error: any) {
     showToast(t('settings.save_failed', { error: error?.message || String(error) }), 'error')
   } finally {
@@ -62,9 +61,8 @@ async function persistEnabledAgents(nextIds: string[]) {
   saving.value = true
   try {
     const updated = await api.setEnabledAgents(nextIds)
-    const filtered = updated.filter(a => a.id !== 'shared')
-    supportedAgents.value = filtered
-    enabledIds.value = new Set(filtered.filter(a => a.enabled).map(a => a.id))
+    supportedAgents.value = updated
+    enabledIds.value = new Set(updated.filter(a => a.enabled).map(a => a.id))
     emit('change')
   } catch (error: any) {
     showToast(t('settings.save_failed', { error: error?.message || String(error) }), 'error')

@@ -130,6 +130,16 @@ pub struct SearchResult {
     pub description: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PluginSearchResult {
+    pub platform_id: String,
+    pub platform_name: String,
+    pub kind: String,
+    pub name: String,
+    pub folder: Option<String>,
+    pub description: String,
+}
+
 // --- Error ---
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -572,6 +582,117 @@ pub fn search_skills(
             }
         }
     }
+    results
+}
+
+#[tauri::command]
+pub fn search_plugins(
+    state: tauri::State<'_, SafeState>,
+    query: String,
+    workspace_dir: Option<String>,
+) -> Vec<PluginSearchResult> {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return Vec::new();
+    }
+    let mut s = state.lock().unwrap();
+    let mut results = Vec::new();
+    let workspace = resolve_workspace_dir(workspace_dir.as_deref())
+        .ok()
+        .flatten();
+
+    // 1. Search Skills
+    if let Some(ref ws) = workspace {
+        let platform_ids: Vec<String> = s
+            .platforms
+            .iter()
+            .map(|platform| platform.id.clone())
+            .collect();
+        for platform_id in platform_ids {
+            let Ok(platform) = scoped_platform(&mut s, &platform_id, Some(ws.to_str().unwrap_or("")))
+            else {
+                continue;
+            };
+            for skill in &platform.skills {
+                if skill.name.to_lowercase().contains(&q)
+                    || skill.description.to_lowercase().contains(&q)
+                {
+                    results.push(PluginSearchResult {
+                        platform_id: platform.id.clone(),
+                        platform_name: platform.display_name.clone(),
+                        kind: "skill".into(),
+                        name: skill.name.clone(),
+                        folder: if skill.folder.is_empty() { None } else { Some(skill.folder.clone()) },
+                        description: skill.description.clone(),
+                    });
+                }
+            }
+        }
+    } else {
+        crate::platform::ensure_all_skills_loaded(&mut s.platforms);
+        for platform in &s.platforms {
+            for skill in &platform.skills {
+                if skill.name.to_lowercase().contains(&q)
+                    || skill.description.to_lowercase().contains(&q)
+                {
+                    results.push(PluginSearchResult {
+                        platform_id: platform.id.clone(),
+                        platform_name: platform.display_name.clone(),
+                        kind: "skill".into(),
+                        name: skill.name.clone(),
+                        folder: if skill.folder.is_empty() { None } else { Some(skill.folder.clone()) },
+                        description: skill.description.clone(),
+                    });
+                }
+            }
+        }
+    }
+
+    // 2. Search MCP Servers
+    let enabled_platforms = s.config.general.enabled_platforms.clone();
+    let mcp_defs = crate::mcp::builtin_mcp_platforms();
+    for global_def in mcp_defs {
+        if let Some(ref enabled) = enabled_platforms {
+            if !enabled.contains(&global_def.id) {
+                continue;
+            }
+        } else if workspace.is_none() && !global_def.presence_path.exists() {
+            continue;
+        }
+
+        let def = workspace
+            .as_deref()
+            .and_then(|root| crate::mcp::find_workspace_mcp_platform(&global_def.id, root))
+            .unwrap_or(global_def);
+
+        let servers = if let Some(root) = workspace.as_deref() {
+            crate::mcp::read_workspace_mcp_servers(&def.id, root).unwrap_or_default()
+        } else {
+            crate::mcp::read_mcp_servers(&def.id).unwrap_or_default()
+        };
+
+        for server in servers {
+            let config_str = serde_json::to_string(&server.config).unwrap_or_default().to_lowercase();
+            if server.name.to_lowercase().contains(&q) || config_str.contains(&q) {
+                let desc = server
+                    .config
+                    .get("command")
+                    .or_else(|| server.config.get("url"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                results.push(PluginSearchResult {
+                    platform_id: def.id.clone(),
+                    platform_name: def.display_name.clone(),
+                    kind: "mcp".into(),
+                    name: server.name.clone(),
+                    folder: None,
+                    description: desc,
+                });
+            }
+        }
+    }
+
     results
 }
 

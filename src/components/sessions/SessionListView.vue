@@ -4,11 +4,11 @@ import { useSessionsStore } from '@/stores/sessions'
 import { formatInt, formatSessionTime, isPlatformResumable } from '@/lib/utils'
 import { useToast } from '@/composables/useToast'
 import { useHoverResetBool } from '@/composables/useHoverReset'
-import { compactSessionPreview } from '@/lib/session-display'
+import { compactSessionPreview, extractSearchSnippets, type SearchSnippetMatch } from '@/lib/session-display'
 import * as api from '@/lib/api'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import AppLoading from '@/components/ui/AppLoading.vue'
-import { Folder, MessagesSquare, PanelRightClose, PanelRightOpen, Play } from 'lucide-vue-next'
+import { Folder, MessagesSquare, PanelRightClose, PanelRightOpen, Play, Search, X } from 'lucide-vue-next'
 import AppSelect from '@/components/ui/AppSelect.vue'
 import AgentIcon from '@/components/agents/AgentIcon.vue'
 import SessionCard from '@/components/sessions/SessionCard.vue'
@@ -164,6 +164,7 @@ onUnmounted(() => {
   observer?.disconnect()
   pageObserver?.disconnect()
   window.removeEventListener('keydown', onKeydown)
+  if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
 })
 
 function handleSelect(sessionId: string, event: MouseEvent) {
@@ -313,9 +314,59 @@ function highlightText(text: string, query: string) {
   return escapedText.replace(regex, '<mark class="ah-mark">$1</mark>')
 }
 
+const currentPlatformName = computed(() => {
+  const p = store.platforms.find(p => p.id === store.selectedPlatformId)
+  return p?.display_name || ''
+})
+
+const searchInputRef = ref<HTMLInputElement | null>(null)
+const searchInputValue = ref(store.searchQuery)
+let searchDebounceTimer: ReturnType<typeof setTimeout> | undefined
+
+watch(() => store.searchQuery, (newVal) => {
+  searchInputValue.value = newVal
+})
+
+function handleSearchInput(e: Event) {
+  const val = (e.target as HTMLInputElement).value
+  searchInputValue.value = val
+  clearTimeout(searchDebounceTimer)
+  searchDebounceTimer = setTimeout(() => {
+    store.doSearch(val)
+  }, 250)
+}
+
 function clearSessionSearch() {
+  clearTimeout(searchDebounceTimer)
+  searchInputValue.value = ''
   store.searchQuery = ''
   store.searchResults = []
+  searchInputRef.value?.focus()
+}
+
+function handleSearchKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    clearSessionSearch()
+    searchInputRef.value?.blur()
+  }
+}
+
+function getResultSnippets(result: any): SearchSnippetMatch[] {
+  return extractSearchSnippets(result.message, store.searchQuery)
+}
+
+function handleOpenSearchResult(result: any, snippet?: SearchSnippetMatch) {
+  const payload = {
+    id: result.session_id,
+    title: result.session_title,
+    project_path: result.project_path,
+    platform_id: result.platform_id,
+    target_timestamp: result.message?.timestamp,
+    target_content: snippet?.matchText || result.message?.content?.slice(0, 80),
+    search_query: store.searchQuery,
+  }
+  store.openMessages(payload)
 }
 </script>
 
@@ -333,107 +384,32 @@ function clearSessionSearch() {
       <SessionStatsView v-else-if="store.isStatsView" />
 
       <template v-else>
-        <!-- Search results view -->
-        <template v-if="store.searchQuery">
-          <div class="ah-filter-bar">
-            <div class="ah-filter-bar__inner flex justify-between items-center gap-3">
-            <div class="text-sm font-medium" style="color: var(--ink-2)">
-              {{ t('session.search_results', { query: store.searchQuery, count: store.searchResults.length }) }}
-            </div>
-            <button class="btn btn-secondary btn-sm" @click="clearSessionSearch">
-              {{ t('session.clear_search') }}
-            </button>
-            </div>
-          </div>
-
-          <div class="session-page__body session-page__body--single">
-          <div class="ah-view-content">
-          <AppLoading v-if="store.isSearching" class="py-12">{{ t('session.loading_messages') }}</AppLoading>
-
-          <div v-else-if="store.searchResults.length === 0" class="py-12 text-center" style="color: var(--ink-3)">
-            {{ t('session.no_search_results', { query: store.searchQuery }) }}
-          </div>
-
-          <div v-else class="space-y-2">
-            <div
-              v-for="(result, index) in store.searchResults"
-              :key="index"
-              class="ah-session-card flex flex-col gap-2"
-            >
-              <div class="flex items-center justify-between gap-3 border-b pb-2" style="border-color: var(--hairline)">
-                <div>
-                  <span class="text-xs" style="color: var(--ink-3)">{{ t('session.search_match_in') }}</span>
-                  <span class="text-sm font-semibold" style="color: var(--ink)">{{ compactSessionPreview(result.session_title) || t('session.untitled') }}</span>
-                </div>
-                <span class="text-[10px]" style="color: var(--ink-4)">
-                  {{ result.message.timestamp ? formatSessionTime(result.message.timestamp, locale) : '' }}
-                </span>
-              </div>
-
-              <div class="text-xs truncate" style="color: var(--ink-3)">
-                {{ result.project_path || t('session.no_project') }}
-              </div>
-
-              <div
-                class="rounded p-3 flex flex-col gap-1.5 border"
-                :style="result.message.role === 'user'
-                  ? { background: 'var(--accent-soft)', borderColor: 'var(--accent-mid)' }
-                  : { background: 'var(--surface)', borderColor: 'var(--hairline)' }"
-              >
-                <div class="flex items-center justify-between">
-                  <span
-                    class="text-xs font-semibold"
-                    :style="{ color: result.message.role === 'user' ? 'var(--accent)' : 'var(--success)' }"
-                  >
-                    {{ result.message.role === 'user' ? t('session.role_user') : t('session.role_assistant') }}
-                  </span>
-                </div>
-                <pre
-                  class="text-xs font-mono whitespace-pre-wrap break-words m-0 leading-relaxed select-text"
-                  style="color: var(--ink)"
-                  v-html="highlightText(compactSessionPreview(result.message.content), store.searchQuery)"
-                ></pre>
-              </div>
-
-              <div class="mt-1 flex justify-end gap-2">
-                <button
-                  class="btn btn-secondary btn-sm"
-                  @click="store.openMessages({ id: result.session_id, title: result.session_title, project_path: result.project_path, platform_id: result.platform_id })"
-                >
-                  {{ t('session.view_messages') }}
-                </button>
-                <button
-                  v-if="isPlatformResumable(result.platform_id)"
-                  class="btn btn-primary btn-sm"
-                  @click="store.openResume({ id: result.session_id, title: result.session_title, project_path: result.project_path, platform_id: result.platform_id })"
-                >
-                  {{ t('session.resume') }}
-                </button>
-              </div>
-            </div>
-          </div>
-          </div>
-          </div>
-        </template>
-
-        <!-- Standard session list view -->
-        <template v-else>
-          <div
-            class="ah-filter-bar ah-filter-bar--list"
-            :class="{ 'ah-filter-bar--selecting': store.selectedCount > 0 }"
-          >
-            <div class="ah-filter-bar__inner flex items-center justify-between gap-3">
+        <!-- Filter / Action bar: integrated search and actions -->
+        <div
+          class="ah-filter-bar ah-filter-bar--list"
+          :class="{ 'ah-filter-bar--selecting': !store.searchQuery && store.selectedCount > 0 }"
+        >
+          <div class="ah-filter-bar__inner flex items-center justify-between gap-3">
             <div class="flex items-center gap-2 min-w-0">
-              <span v-if="store.selectedCount > 0" class="ah-filter-bar__count">
-                {{ t('session.selected_count', { n: formatInt(store.selectedCount) }) }}
-              </span>
-              <span class="ah-filter-bar__stats">
-                {{ t('session.loaded_summary', { loaded: formatInt(store.sessions.length), total: formatInt(store.sessionTotal) }) }}
-              </span>
+              <template v-if="store.searchQuery">
+                <span class="text-sm font-medium truncate" style="color: var(--ink-2)">
+                  {{ t('session.search_results', { query: store.searchQuery, count: store.searchResults.length }) }}
+                </span>
+              </template>
+              <template v-else>
+                <span v-if="store.selectedCount > 0" class="ah-filter-bar__count">
+                  {{ t('session.selected_count', { n: formatInt(store.selectedCount) }) }}
+                </span>
+                <span class="ah-filter-bar__stats">
+                  {{ t('session.loaded_summary', { loaded: formatInt(store.sessions.length), total: formatInt(store.sessionTotal) }) }}
+                </span>
+              </template>
             </div>
+
             <div class="flex items-center gap-2 flex-none">
+              <!-- Path filter (standard list only) -->
               <div
-                v-if="store.selectedCount === 0 && !store.directoryFilter && pathSelectOptions.length > 2"
+                v-if="!store.searchQuery && store.selectedCount === 0 && !store.directoryFilter && pathSelectOptions.length > 2"
                 class="ah-path-select"
               >
                 <AppSelect
@@ -449,64 +425,197 @@ function clearSessionSearch() {
                   </template>
                 </AppSelect>
               </div>
-              <button
-                v-if="store.selectedCount > 0"
-                class="btn btn-secondary btn-sm"
-                @click="clearSelection"
-              >
-                {{ t('session.batch_deselect') }}
-              </button>
-              <button
-                class="btn btn-secondary btn-sm"
-                :disabled="store.sessions.length === 0 || allLoadedSelected"
-                @click="toggleSelectAll"
-              >
-                {{ t('session.batch_select_all') }}
-              </button>
-              <template v-if="store.selectedCount > 0">
+
+              <!-- Search in action bar -->
+              <div class="ah-session-search">
+                <Search :size="13" :stroke-width="2" class="ah-session-search-icon" />
+                <input
+                  ref="searchInputRef"
+                  type="text"
+                  class="ah-session-search-input"
+                  :placeholder="t('session.search_placeholder', { agent: currentPlatformName })"
+                  :value="searchInputValue"
+                  autocomplete="off"
+                  spellcheck="false"
+                  @input="handleSearchInput"
+                  @keydown="handleSearchKeydown"
+                />
                 <button
-                  class="btn btn-primary btn-sm"
-                  :disabled="store.isBulkExporting || store.isBulkDeleting"
-                  @click="handleBulkExport"
+                  v-if="searchInputValue"
+                  type="button"
+                  class="ah-session-search-clear"
+                  :aria-label="t('session.clear_search')"
+                  @mousedown.prevent
+                  @click="clearSessionSearch"
                 >
-                  {{ store.isBulkExporting
-                    ? t('session.batch_exporting')
-                    : t('session.batch_export_n', { n: store.selectedCount }) }}
+                  <X :size="12" :stroke-width="2.25" />
+                </button>
+              </div>
+
+              <!-- Clear button when searching -->
+              <button
+                v-if="store.searchQuery"
+                class="btn btn-secondary btn-sm"
+                @click="clearSessionSearch"
+              >
+                {{ t('session.clear_search') }}
+              </button>
+
+              <!-- Standard action buttons -->
+              <template v-else>
+                <button
+                  v-if="store.selectedCount > 0"
+                  class="btn btn-secondary btn-sm"
+                  @click="clearSelection"
+                >
+                  {{ t('session.batch_deselect') }}
                 </button>
                 <button
-                  class="btn btn-sm"
-                  :class="confirmBatch ? 'session-card__delete is-confirming' : 'btn-danger'"
-                  :style="confirmBatch ? { width: 'auto' } : null"
-                  :disabled="store.isBulkDeleting || store.isBulkExporting"
-                  :title="confirmBatch ? t('session.batch_delete_confirm', { n: store.selectedCount }) : ''"
-                  @click="handleBulkDelete"
-                  @mouseleave="resetBatch()"
+                  class="btn btn-secondary btn-sm"
+                  :disabled="store.sessions.length === 0 || allLoadedSelected"
+                  @click="toggleSelectAll"
                 >
-                  {{ store.isBulkDeleting
-                    ? t('session.deleting')
-                    : confirmBatch
-                      ? t('session.confirm_delete')
-                      : t('session.batch_delete_n', { n: store.selectedCount }) }}
+                  {{ t('session.batch_select_all') }}
+                </button>
+                <template v-if="store.selectedCount > 0">
+                  <button
+                    class="btn btn-primary btn-sm"
+                    :disabled="store.isBulkExporting || store.isBulkDeleting"
+                    @click="handleBulkExport"
+                  >
+                    {{ store.isBulkExporting
+                      ? t('session.batch_exporting')
+                      : t('session.batch_export_n', { n: store.selectedCount }) }}
+                  </button>
+                  <button
+                    class="btn btn-sm"
+                    :class="confirmBatch ? 'session-card__delete is-confirming' : 'btn-danger'"
+                    :style="confirmBatch ? { width: 'auto' } : null"
+                    :disabled="store.isBulkDeleting || store.isBulkExporting"
+                    :title="confirmBatch ? t('session.batch_delete_confirm', { n: store.selectedCount }) : ''"
+                    @click="handleBulkDelete"
+                    @mouseleave="resetBatch()"
+                  >
+                    {{ store.isBulkDeleting
+                      ? t('session.deleting')
+                      : confirmBatch
+                        ? t('session.confirm_delete')
+                        : t('session.batch_delete_n', { n: store.selectedCount }) }}
+                  </button>
+                </template>
+                <button
+                  v-if="isSplit"
+                  v-tooltip="paneCollapsed ? t('session.preview_show') : t('session.preview_hide')"
+                  type="button"
+                  class="btn btn-secondary btn-sm btn-icon"
+                  :aria-label="paneCollapsed ? t('session.preview_show') : t('session.preview_hide')"
+                  :aria-pressed="!paneCollapsed"
+                  @click="togglePane"
+                >
+                  <PanelRightOpen v-if="paneCollapsed" :size="14" />
+                  <PanelRightClose v-else :size="14" />
                 </button>
               </template>
-              <!-- Reading-pane toggle: only exists once the window is wide
-                   enough for the split layout (below that it is the modal). -->
-              <button
-                v-if="isSplit"
-                v-tooltip="paneCollapsed ? t('session.preview_show') : t('session.preview_hide')"
-                type="button"
-                class="btn btn-secondary btn-sm btn-icon"
-                :aria-label="paneCollapsed ? t('session.preview_show') : t('session.preview_hide')"
-                :aria-pressed="!paneCollapsed"
-                @click="togglePane"
-              >
-                <PanelRightOpen v-if="paneCollapsed" :size="14" />
-                <PanelRightClose v-else :size="14" />
-              </button>
-            </div>
             </div>
           </div>
+        </div>
 
+        <!-- Search results view -->
+        <template v-if="store.searchQuery">
+          <div class="session-page__body session-page__body--single">
+          <div class="ah-view-content">
+          <AppLoading v-if="store.isSearching" class="py-12">{{ t('session.loading_messages') }}</AppLoading>
+
+          <div v-else-if="store.searchResults.length === 0" class="py-12 text-center" style="color: var(--ink-3)">
+            {{ t('session.no_search_results', { query: store.searchQuery }) }}
+          </div>
+
+          <div v-else class="space-y-3">
+            <div
+              v-for="(result, index) in store.searchResults"
+              :key="index"
+              class="ah-session-card ah-search-result-card flex flex-col gap-2 cursor-pointer transition-all hover:border-[color:var(--accent)]"
+              @click="handleOpenSearchResult(result, getResultSnippets(result)[0])"
+            >
+              <div class="flex items-center justify-between gap-3 border-b pb-2" style="border-color: var(--hairline)">
+                <div class="flex items-center gap-2 min-w-0">
+                  <span class="text-xs" style="color: var(--ink-3)">{{ t('session.search_match_in') }}</span>
+                  <span class="text-sm font-semibold truncate" style="color: var(--ink)">
+                    {{ compactSessionPreview(result.session_title) || t('session.untitled') }}
+                  </span>
+                  <span
+                    class="text-[11px] px-1.5 py-0.5 rounded font-medium flex-none"
+                    :style="result.message.role === 'user'
+                      ? { background: 'var(--accent-soft)', color: 'var(--accent)' }
+                      : { background: 'var(--success-soft)', color: 'var(--success)' }"
+                  >
+                    {{ result.message.role === 'user' ? t('session.role_user') : t('session.role_assistant') }}
+                  </span>
+                </div>
+                <span class="text-[10px] flex-none" style="color: var(--ink-4)">
+                  {{ result.message.timestamp ? formatSessionTime(result.message.timestamp, locale) : '' }}
+                </span>
+              </div>
+
+              <div class="text-xs truncate" style="color: var(--ink-3)">
+                {{ result.project_path || t('session.no_project') }}
+              </div>
+
+              <!-- Compact contextual snippets around query match -->
+              <div class="space-y-2 mt-1">
+                <div
+                  v-for="(snippet, sIdx) in getResultSnippets(result)"
+                  :key="sIdx"
+                  class="ah-search-snippet rounded p-2.5 flex flex-col gap-1 border transition-colors hover:border-[color:var(--accent)]"
+                  :style="result.message.role === 'user'
+                    ? { background: 'var(--accent-soft)', borderColor: 'var(--accent-mid)' }
+                    : { background: 'var(--surface)', borderColor: 'var(--hairline)' }"
+                  @click.stop="handleOpenSearchResult(result, snippet)"
+                >
+                  <div class="flex items-center justify-between text-[11px]" style="color: var(--ink-3)">
+                    <span v-if="snippet.locationLabelKey" class="font-medium text-[10px] px-1.5 py-0.5 rounded bg-[color:var(--sunken)]" style="color: var(--accent)">
+                      {{ t(snippet.locationLabelKey) }}
+                    </span>
+                    <span v-if="getResultSnippets(result).length > 1" class="text-[10px] ml-auto font-mono text-[color:var(--ink-4)]">
+                      #{{ sIdx + 1 }}
+                    </span>
+                  </div>
+                  <pre
+                    class="text-xs font-mono whitespace-pre-wrap break-words m-0 leading-relaxed select-text"
+                    style="color: var(--ink)"
+                    v-html="highlightText(snippet.snippet, store.searchQuery)"
+                  ></pre>
+                </div>
+              </div>
+
+              <div class="mt-1 flex justify-between items-center pt-1 border-t" style="border-color: var(--hairline)">
+                <span class="text-[11px]" style="color: var(--ink-4)">
+                  {{ t('session.click_to_locate') }}
+                </span>
+                <div class="flex gap-2">
+                  <button
+                    class="btn btn-secondary btn-sm"
+                    @click.stop="handleOpenSearchResult(result, getResultSnippets(result)[0])"
+                  >
+                    {{ t('session.view_messages') }}
+                  </button>
+                  <button
+                    v-if="isPlatformResumable(result.platform_id)"
+                    class="btn btn-primary btn-sm"
+                    @click.stop="store.openResume({ id: result.session_id, title: result.session_title, project_path: result.project_path, platform_id: result.platform_id })"
+                  >
+                    {{ t('session.resume') }}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          </div>
+          </div>
+        </template>
+
+        <!-- Standard session list view -->
+        <template v-else>
           <div
             class="session-page__body"
             :class="{ 'session-page__body--split': isSplit && !paneCollapsed }"
@@ -613,6 +722,9 @@ function clearSessionSearch() {
                 :model="store.previewSession.model"
                 :tokens="store.previewSession.tokens_used"
                 :started-at="store.previewSession.started_at"
+                :target-timestamp="store.previewSession.target_timestamp"
+                :target-content="store.previewSession.target_content"
+                :search-query="store.previewSession.search_query"
               />
               </div>
             </template>
@@ -637,6 +749,9 @@ function clearSessionSearch() {
           :model="store.activeSession?.model"
           :tokens="store.activeSession?.tokens_used"
           :started-at="store.activeSession?.started_at"
+          :target-timestamp="store.activeSession?.target_timestamp"
+          :target-content="store.activeSession?.target_content"
+          :search-query="store.activeSession?.search_query"
           @close="store.messagesModalOpen = false"
         />
 
@@ -823,5 +938,96 @@ function clearSessionSearch() {
   color: var(--on-accent);
   background: var(--danger);
   border-color: var(--danger);
+}
+
+.ah-search-result-card {
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-soft), box-shadow var(--dur-fast) var(--ease-soft);
+}
+.ah-search-result-card:hover {
+  border-color: var(--accent);
+}
+.ah-search-snippet {
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-soft), background-color var(--dur-fast) var(--ease-soft);
+}
+.ah-search-snippet:hover {
+  border-color: var(--accent);
+  filter: brightness(0.97);
+}
+:root.dark .ah-search-snippet:hover {
+  filter: brightness(1.15);
+}
+
+/* Session search in action bar */
+.ah-session-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 190px;
+  flex-shrink: 0;
+  transition: width var(--dur-fast) var(--ease-soft);
+}
+
+.ah-session-search:focus-within {
+  width: 230px;
+}
+
+.ah-session-search-icon {
+  position: absolute;
+  left: 8px;
+  color: var(--ink-4);
+  pointer-events: none;
+  transition: color var(--dur-fast) var(--ease-soft);
+}
+
+.ah-session-search:focus-within .ah-session-search-icon {
+  color: var(--accent);
+}
+
+.ah-session-search-input {
+  width: 100%;
+  height: 28px;
+  padding: 0 24px 0 26px;
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  outline: none;
+  transition: border-color var(--dur-fast) var(--ease-soft),
+              box-shadow var(--dur-fast) var(--ease-soft);
+}
+
+.ah-session-search-input::placeholder {
+  color: var(--ink-4);
+  font-size: 12px;
+}
+
+.ah-session-search-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.ah-session-search-clear {
+  position: absolute;
+  right: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-4);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-soft), background var(--dur-fast) var(--ease-soft);
+}
+
+.ah-session-search-clear:hover {
+  color: var(--ink);
+  background: var(--hover);
 }
 </style>

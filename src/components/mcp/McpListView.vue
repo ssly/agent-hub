@@ -2,9 +2,11 @@
 import { useI18n } from 'vue-i18n'
 import { useMcpStore } from '@/stores/mcp'
 import { useAppStore } from '@/stores/app'
+import { usePluginsStore } from '@/stores/plugins'
 import { useToast } from '@/composables/useToast'
 import * as api from '@/lib/api'
 import { ref, computed, watch } from 'vue'
+import { highlightText } from '@/lib/utils'
 import AppModal from '@/components/ui/AppModal.vue'
 import AppLoading from '@/components/ui/AppLoading.vue'
 
@@ -16,7 +18,18 @@ const props = withDefaults(defineProps<{ embedded?: boolean; readonly?: boolean 
 const { t } = useI18n()
 const store = useMcpStore()
 const appStore = useAppStore()
+const pluginsStore = usePluginsStore()
 const { showToast } = useToast()
+
+const displayedServers = computed(() => {
+  const q = pluginsStore.searchQuery.toLowerCase().trim()
+  if (!q) return store.servers
+  return store.servers.filter((server: any) => {
+    const nameMatch = (server.name || '').toLowerCase().includes(q)
+    const summaryMatch = (server.summary || '').toLowerCase().includes(q)
+    return nameMatch || summaryMatch
+  })
+})
 
 const newServerName = ref('')
 const newServerConfig = ref('')
@@ -215,18 +228,21 @@ function stripTomlHeader(text: string, name: string): string {
         <div v-if="store.servers.length === 0" class="flex flex-col items-center justify-center py-12 text-center">
           <p style="color: var(--ink-3)">{{ t('mcp.no_servers') }}</p>
         </div>
+        <div v-else-if="displayedServers.length === 0" class="flex flex-col items-center justify-center py-12 text-center">
+          <p style="color: var(--ink-3)">{{ t('mcp.no_matching_servers') }}</p>
+        </div>
 
         <!-- Server List: click a row to open its config in a modal -->
-        <div class="ah-server-list">
+        <div v-else class="ah-server-list">
           <div
-            v-for="server in store.servers"
+            v-for="server in displayedServers"
             :key="server.name"
             class="ah-server-row"
             @click="openServerDetail(server.name)"
           >
             <div class="flex-1 min-w-0">
-              <div class="ah-server-row__name">{{ server.name }}</div>
-              <div class="ah-server-row__summary">{{ server.summary }}</div>
+              <div class="ah-server-row__name" v-html="highlightText(server.name, pluginsStore.searchQuery)"></div>
+              <div class="ah-server-row__summary" v-html="highlightText(server.summary || '', pluginsStore.searchQuery)"></div>
             </div>
             <span class="ah-server-row__chevron">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>

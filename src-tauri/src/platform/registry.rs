@@ -17,20 +17,11 @@ pub fn builtin_platforms() -> Vec<PlatformDef> {
     let home = dirs::home_dir().expect("no home directory");
     vec![
         PlatformDef {
-            id: "shared".into(),
-            display_name: "Shared".into(),
-            description: "Shared skill directory for agents".into(),
-            presence_path: home.join(".agents"),
-            skill_dir: join_relative(home.clone(), ".agents/skills"),
-        },
-        PlatformDef {
             id: "codex".into(),
             display_name: "Codex".into(),
             description: "OpenAI Codex agent skills".into(),
             presence_path: home.join(".codex"),
-            // Codex officially reads user-level skills only from the shared
-            // pool (~/.agents/skills); ~/.codex/skills is a community myth
-            // that Codex itself never loads.
+            // Codex officially reads user-level skills from ~/.agents/skills.
             skill_dir: join_relative(home.clone(), ".agents/skills"),
         },
         PlatformDef {
@@ -172,16 +163,8 @@ pub fn get_supported_agents(config: &crate::config::Config) -> Vec<SupportedAgen
 
     let builtin = builtin_platforms();
     for p in builtin {
-        // "shared" is the shared skill directory across agents, not an
-        // individual configurable agent. It is always enabled and omitted
-        // from the Settings agent toggle list.
-        if p.id == "shared" {
-            continue;
-        }
-
         let (display_path, candidates) = match p.id.as_str() {
-            "shared" => ("~/.agents", vec![home.join(".agents")]),
-            "codex" => ("~/.codex", vec![home.join(".codex")]),
+            "codex" => ("~/.codex", vec![home.join(".codex"), home.join(".agents")]),
             "claude-code" => ("~/.claude", vec![home.join(".claude"), home.join(".claude.json")]),
             "cursor" => ("~/.cursor", vec![home.join(".cursor")]),
             "antigravity" => (
@@ -276,10 +259,6 @@ mod tests {
             Some(root.join(".claude").join("skills"))
         );
         assert_eq!(
-            workspace_skill_dir("shared", &root),
-            Some(root.join(".agents").join("skills"))
-        );
-        assert_eq!(
             workspace_skill_dir("codex", &root),
             Some(root.join(".agents").join("skills"))
         );
@@ -315,16 +294,13 @@ mod tests {
     }
 
     #[test]
-    fn codex_user_skills_live_in_shared() {
+    fn codex_user_skills_live_in_dot_agents() {
         let codex = builtin_platforms()
             .into_iter()
             .find(|platform| platform.id == "codex")
             .expect("codex platform should exist");
-        let shared = builtin_platforms()
-            .into_iter()
-            .find(|platform| platform.id == "shared")
-            .expect("shared platform should exist");
-        assert_eq!(codex.skill_dir, shared.skill_dir);
+        let home = dirs::home_dir().expect("no home directory");
+        assert_eq!(codex.skill_dir, home.join(".agents").join("skills"));
     }
 
     #[test]
@@ -337,7 +313,6 @@ mod tests {
         assert_eq!(
             ids,
             [
-                "shared",
                 "codex",
                 "claude-code",
                 "cursor",

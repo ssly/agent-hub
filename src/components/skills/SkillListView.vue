@@ -3,7 +3,8 @@ import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useSkillsStore } from '@/stores/skills'
-import { formatBytes, shortenPath } from '@/lib/utils'
+import { usePluginsStore } from '@/stores/plugins'
+import { formatBytes, shortenPath, highlightText } from '@/lib/utils'
 import { Link2 } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import { useHoverResetId } from '@/composables/useHoverReset'
@@ -16,16 +17,25 @@ withDefaults(defineProps<{ embedded?: boolean; readonly?: boolean }>(), {
 const { t } = useI18n()
 const appStore = useAppStore()
 const store = useSkillsStore()
+const pluginsStore = usePluginsStore()
 const { showToast } = useToast()
 
-const totalSkills = computed(() => store.skills.length)
-const enabledSkills = computed(() => store.skills.filter((s: any) => s.version || s.description).length)
-const totalSize = computed(() => formatBytes(store.skills.reduce((acc: number, s: any) => acc + (s.total_size || 0), 0)))
+const sourceSkills = computed(() => {
+  const q = pluginsStore.searchQuery.toLowerCase().trim()
+  if (!q) return store.skills
+  return store.skills.filter((s: any) =>
+    s.name.toLowerCase().includes(q) || (s.description || '').toLowerCase().includes(q)
+  )
+})
+
+const totalSkills = computed(() => sourceSkills.value.length)
+const enabledSkills = computed(() => sourceSkills.value.filter((s: any) => s.version || s.description).length)
+const totalSize = computed(() => formatBytes(sourceSkills.value.reduce((acc: number, s: any) => acc + (s.total_size || 0), 0)))
 
 const groupedSkills = computed(() => {
   const groups = new Map<string, any[]>()
   groups.set('', [])
-  for (const s of store.skills) {
+  for (const s of sourceSkills.value) {
     const key = s.folder || ''
     if (!groups.has(key)) groups.set(key, [])
     groups.get(key)!.push(s)
@@ -127,6 +137,9 @@ onUnmounted(() => {
       <div v-if="store.skills.length === 0" class="flex flex-col items-center justify-center py-20 text-center">
         <p style="color: var(--ink-3)">{{ t('ui.no_skills') }}</p>
       </div>
+      <div v-else-if="sourceSkills.length === 0" class="flex flex-col items-center justify-center py-12 text-center">
+        <p style="color: var(--ink-3)">{{ t('ui.no_matching_skills') }}</p>
+      </div>
 
       <template v-else>
         <!-- Page Header -->
@@ -207,7 +220,7 @@ onUnmounted(() => {
                 <!-- Name -->
                 <div class="ah-row__name">
                   <div class="ah-row__name-text">
-                    <span class="ah-row__skill-name">{{ skill.name }}</span>
+                    <span class="ah-row__skill-name" v-html="highlightText(skill.name, pluginsStore.searchQuery)"></span>
                     <span
                       v-if="skill.is_symlink"
                       class="ah-symlink-icon"
@@ -219,7 +232,7 @@ onUnmounted(() => {
                 </div>
 
                 <!-- Description -->
-                <div class="ah-row__desc" :title="skill.description || undefined">{{ skill.description || '' }}</div>
+                <div class="ah-row__desc" v-html="highlightText(skill.description || '', pluginsStore.searchQuery)"></div>
 
                 <!-- Size -->
                 <div class="ah-row__size">{{ formatBytes(skill.total_size || 0) }}</div>

@@ -309,7 +309,7 @@ export const useSessionsStore = defineStore('sessions', () => {
 
   async function doSearch(query: string) {
     searchQuery.value = query
-    // The "All" view aggregates across platforms and has no search of its own.
+    // The statistics view aggregates across platforms and has no search of its own.
     if (!query.trim() || !selectedPlatformId.value || isStatsView.value) {
       searchResults.value = []
       isSearching.value = false

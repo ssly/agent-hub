@@ -409,6 +409,9 @@ const props = defineProps<{
   model?: string | null
   tokens?: number | null
   startedAt?: number | string | null
+  targetTimestamp?: number | string | null
+  targetContent?: string | null
+  searchQuery?: string | null
   metaStats?: boolean
 }>()
 
@@ -451,7 +454,7 @@ function setupMessagesObserver() {
   messagesObserver = new IntersectionObserver(
     entries => {
       if (entries[0]?.isIntersecting && hasMore.value && !loadingMore.value && !loading.value && !loadingAll.value) {
-        loadMessages(true)
+        loadMessages()
       }
     },
     { root: msgListRef.value, rootMargin: '300px' },
@@ -522,16 +525,24 @@ watch(msgListRef, el => {
   }
 })
 
-async function loadMessages(append: boolean) {
+async function loadMessages() {
   if (!props.platformId || !props.sessionId) return
-  const wasNearBottom = !append || isNearBottom()
-  if (append) loadingMore.value = true
-  else loading.value = true
+  loading.value = true
+  loadError.value = ''
   try {
-    const list = await api.getSessionMessages(props.platformId, props.sessionId, offset, PAGE_SIZE)
-    messages.value = append ? [...messages.value, ...list] : list
-    offset += list.length
-    hasMore.value = list.length === PAGE_SIZE
+    const all: SessionMsg[] = []
+    let curOffset = 0
+    const BATCH_SIZE = 500
+    while (props.platformId && props.sessionId) {
+      const list = await api.getSessionMessages(props.platformId, props.sessionId, curOffset, BATCH_SIZE)
+      all.push(...list)
+      if (list.length < BATCH_SIZE) break
+      curOffset += list.length
+      if (curOffset >= 5000) break
+    }
+    messages.value = all
+    offset = all.length
+    hasMore.value = false
     loadError.value = ''
     if (searchVisible.value && searchQuery.value.trim()) {
       nextTick(() => {
@@ -543,13 +554,99 @@ async function loadMessages(append: boolean) {
   } finally {
     loading.value = false
     loadingMore.value = false
-    if (!append) {
-      scrollToBottom()
-    } else if (wasNearBottom) {
-      nextTick(() => scrollToBottomInstant())
-    }
+    nextTick(() => {
+      handlePostLoadNavigation()
+    })
   }
 }
+
+function findTargetIndex(): number {
+  const list = displayMessages.value
+  if (props.targetTimestamp != null) {
+    const tsNum = typeof props.targetTimestamp === 'string' ? Number(props.targetTimestamp) : props.targetTimestamp
+    const idx = list.findIndex(
+      m => (m.timestamp && Number(m.timestamp) === tsNum) || (m.startedAt && Number(m.startedAt) === tsNum),
+    )
+    if (idx !== -1) return idx
+  }
+  if (props.targetContent) {
+    const clean = props.targetContent.trim().toLowerCase()
+    if (clean) {
+      const sub = clean.slice(0, 50)
+      const idx = list.findIndex(
+        m =>
+          m.content?.toLowerCase().includes(sub) ||
+          m.thinking?.toLowerCase().includes(sub) ||
+          m.system?.toLowerCase().includes(sub),
+      )
+      if (idx !== -1) return idx
+    }
+  }
+  return -1
+}
+
+function locateTargetElement(targetIdx: number) {
+  autoScrollPinned = false
+  if (pinTimer) {
+    clearTimeout(pinTimer)
+    pinTimer = null
+  }
+  if (!msgListRef.value) return
+  const msgEls = msgListRef.value.querySelectorAll<HTMLElement>('.ah-msg')
+  const el = msgEls[targetIdx]
+  if (!el) return
+
+  // If match is inside thinking or system details, expand them
+  if (props.searchQuery) {
+    const qLower = props.searchQuery.toLowerCase()
+    const detailsEls = el.querySelectorAll<HTMLDetailsElement>('details')
+    detailsEls.forEach(d => {
+      if (d.textContent?.toLowerCase().includes(qLower)) {
+        d.open = true
+      }
+    })
+  }
+
+  el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  el.classList.add('ah-msg--target-highlight')
+  setTimeout(() => {
+    el.classList.remove('ah-msg--target-highlight')
+  }, 2600)
+
+  // If search query is provided, open find widget and apply highlights
+  if (props.searchQuery && props.searchQuery.trim()) {
+    searchQuery.value = props.searchQuery.trim()
+    searchVisible.value = true
+    nextTick(() => {
+      applyHighlights()
+    })
+  }
+}
+
+function handlePostLoadNavigation() {
+  const hasTarget = props.targetTimestamp != null || (props.targetContent && props.targetContent.trim().length > 0)
+  if (hasTarget) {
+    const targetIdx = findTargetIndex()
+    if (targetIdx !== -1) {
+      locateTargetElement(targetIdx)
+      return
+    }
+  }
+  scrollToBottom()
+}
+
+watch(
+  () => [props.targetTimestamp, props.targetContent] as const,
+  ([newTs, newContent]) => {
+    if (!props.active || (newTs == null && !newContent)) return
+    nextTick(() => {
+      const idx = findTargetIndex()
+      if (idx !== -1) {
+        locateTargetElement(idx)
+      }
+    })
+  },
+)
 
 /** Whole-session tally for the footer / meta line, plus the same numbers for
  *  the host (the modal renders them next to its Close button). */
@@ -569,26 +666,7 @@ async function loadMessageStats() {
 }
 
 async function loadAllRemainingMessages() {
-  if (!props.platformId || !props.sessionId || !hasMore.value || loadingAll.value) return
-  loadingAll.value = true
-  try {
-    while (hasMore.value && props.platformId && props.sessionId) {
-      const list = await api.getSessionMessages(props.platformId, props.sessionId, offset, 100)
-      messages.value = [...messages.value, ...list]
-      offset += list.length
-      hasMore.value = list.length === 100
-      if (list.length < 100) break
-    }
-    nextTick(() => {
-      if (searchVisible.value && searchQuery.value) {
-        applyHighlights()
-      }
-    })
-  } catch (e: any) {
-    console.error('Failed to load all messages for search:', e)
-  } finally {
-    loadingAll.value = false
-  }
+  // All messages are already fully loaded on entry
 }
 
 /** (Re)start paging for the current identity. Called both when the identity
@@ -602,8 +680,10 @@ function resetAndLoad() {
   loadError.value = ''
   messageStats.value = null
   emit('stats', null)
-  closeSearch()
-  loadMessages(false)
+  if (!props.searchQuery) {
+    closeSearch()
+  }
+  loadMessages()
   scheduleStats()
 }
 
@@ -853,7 +933,7 @@ onUnmounted(() => {
         </template>
 
         <!-- Infinite scroll sentinel for messages -->
-        <div ref="messagesSentinel" class="py-2 flex justify-center">
+        <div v-if="hasMore" ref="messagesSentinel" class="py-2 flex justify-center">
           <AppLoading v-if="loadingMore" class="py-2">{{ t('session.loading_more') }}</AppLoading>
         </div>
       </div>
@@ -868,5 +948,23 @@ onUnmounted(() => {
   color: var(--ink-3);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+@keyframes ah-msg-target-pulse {
+  0% {
+    box-shadow: 0 0 0 3px var(--accent), 0 0 16px rgba(59, 130, 246, 0.5);
+    border-color: var(--accent);
+  }
+  50% {
+    box-shadow: 0 0 0 2.5px var(--accent), 0 0 12px rgba(59, 130, 246, 0.3);
+    border-color: var(--accent);
+  }
+  100% {
+    box-shadow: none;
+  }
+}
+
+:deep(.ah-msg--target-highlight .ah-msg__bubble) {
+  animation: ah-msg-target-pulse 2.6s ease-out;
 }
 </style>

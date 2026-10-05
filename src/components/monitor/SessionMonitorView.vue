@@ -682,7 +682,7 @@ onUnmounted(() => {
 .hook-card__ok { color: var(--success); flex: none; }
 .hook-card__missing { color: var(--warning); flex: none; }
 .hook-card__title { color: var(--ink); font-size: 14px; font-weight: 600; }
-.hook-card__path { margin-top: 2px; color: var(--ink-4); font: 11px/1.4 var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hook-card__path { margin-top: 2px; color: var(--ink-3); font: 11px/1.4 var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hook-card__meta { display: flex; gap: 14px; flex: none; color: var(--ink-3); font-size: 12px; }
 
 .monitor-notice {
@@ -693,7 +693,7 @@ onUnmounted(() => {
   background: transparent;
 }
 .session-list-header { display: flex; align-items: center; justify-content: space-between; margin: 14px 0 8px; }
-.session-list-header h2 { color: var(--ink); font: 600 15px/1.2 var(--font-serif); }
+.session-list-header h2 { color: var(--ink); font: 600 15px/1.2 var(--font-sans); }
 .session-list-header__actions { display: flex; align-items: center; gap: 8px; }
 /* auto-fill keeps it to one column as soon as a card would drop under 24rem,
    so narrow windows and the 760px breakpoint below stay single-column. */
@@ -705,15 +705,15 @@ onUnmounted(() => {
 /* Q&A line inside the shared card's default slot (monitor-specific body). */
 .session-row__line { min-width: 0; margin-top: 3px; font-size: 12.5px; line-height: 1.45; }
 .session-row__line > p { min-width: 0; overflow: hidden; color: var(--ink-2); text-overflow: ellipsis; white-space: nowrap; }
-.monitor-empty { min-height: 230px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--ink-4); text-align: center; }
+.monitor-empty { min-height: 230px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--ink-3); text-align: center; }
 .monitor-empty--boot { min-height: min(52vh, 420px); }
-.monitor-empty strong { color: var(--ink-2); font-size: 14px; }
+.monitor-empty strong { color: var(--ink); font-size: 14px; }
 .monitor-empty span { font-size: 12px; }
 .preview-loading { padding: 16px 0; color: var(--ink-3); font-size: 13px; }
 .preview-explanation { color: var(--ink-2); font-size: 13px; line-height: 1.65; }
 .preview-fields { display: grid; gap: 9px; margin: 14px 0; }
 .preview-fields > div { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 10px; }
-.preview-fields dt { color: var(--ink-4); font-size: 12px; }
+.preview-fields dt { color: var(--ink-3); font-size: 12px; }
 .preview-fields dd { min-width: 0; overflow-wrap: anywhere; color: var(--ink-2); font: 11.5px/1.55 var(--font-mono); }
 .preview-stats { margin: 14px 0 7px; color: var(--accent); font-size: 12px; font-weight: 600; }
 .hook-diff { max-height: 340px; overflow: auto; padding: 11px 0; border: 1px solid var(--hairline); border-radius: var(--radius-sm); background: var(--sunken); font: 11.5px/1.55 var(--font-mono); }

@@ -92,3 +92,20 @@ export function isPlatformResumable(platformId?: string | null): boolean {
   return !NON_RESUMABLE_PLATFORMS.has(platformId)
 }
 
+export function escapeHtml(text: string): string {
+  return (text || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;')
+}
+
+export function highlightText(text: string, query?: string | null): string {
+  const escapedText = escapeHtml(text)
+  if (!query || !query.trim()) return escapedText
+  const escapedQuery = escapeHtml(query.trim()).replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')
+  const regex = new RegExp(`(${escapedQuery})`, 'gi')
+  return escapedText.replace(regex, '<mark class="ah-mark">$1</mark>')
+}
+

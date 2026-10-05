@@ -4,7 +4,7 @@ Agent Hub 的项目上下文文档，供 AI Agent 和开发者快速了解项目
 
 ## 项目概述
 
-Agent Hub 是一个基于 Tauri 2.x 的桌面应用，用于统一管理本地多个 AI Agent 平台的插件（Skill、MCP Server、Claude Code 原生插件）、会话和账号。当前版本 **0.28.0**。
+Agent Hub 是一个基于 Tauri 2.x 的桌面应用，用于统一管理本地多个 AI Agent 平台的插件（Skill、MCP Server、Claude Code 原生插件）、会话和账号。当前版本 **0.31.0**。
 
 ## 架构
 
@@ -140,10 +140,11 @@ npm run version [-- <ver>] # 从 git tag 同步版本号
 
 插件工作区按 Agent 聚合 Skill、MCP Server 与 Claude Code 原生插件，支持全局用户目录和项目目录两种范围。项目范围用于查看仓库内配置，当前保持只读；Claude Code 用户范围原生插件支持启用/停用。
 
-平台顺序（`platform/registry.rs` 定义顺序即侧边栏顺序，会话/监听/账号子集保持同一相对顺序）：Shared → Codex → Claude Code → Cursor → Antigravity → Grok Build → Kimi Code → Qwen Code → ZCode → WorkBuddy → Kiro → DeepSeek Harness → Oh My Pi → OpenCode。关键约定：
+平台顺序（`platform/registry.rs` 定义顺序即侧边栏顺序，会话/监听/账号子集保持同一相对顺序）：Codex → Claude Code → Cursor → Antigravity → Grok Build → Kimi Code → Qwen Code → ZCode → WorkBuddy → Kiro → DeepSeek Harness → Oh My Pi → OpenCode。关键约定：
 
-- **Shared（id `shared`，`~/.agents/skills`）**：Codex、Cursor、Antigravity（项目级）、Grok Build、Kimi Code、Qwen Code、ZCode、DeepSeek Harness、OpenCode 官方默认读取；Claude Code、WorkBuddy、Kiro、Oh My Pi 仅读自身目录。显示名中英文均为 Shared（侧边栏无中文 Agent 名）。Shared 为公共技能池而非独立 Agent，始终保持启用且不在偏好设置的 Agent 启停列表中展示；Shared 视图顶部展示按官方顺序排列的支持 Agent 交互胶囊；支持 Shared 的双技能 Agent 顶部展示 Shared 技能引导卡片（支持跳转），下方保留专属技能管理。
-- **Codex**：官方用户级 skills 仅 Shared（`~/.codex/skills` 是社区误传），前端显示 Skills 在 Shared 目录下并提供跳转，不渲染自己的 Skills 区块。
+- **Codex**：官方用户级 skills 目录为 `~/.agents/skills`（项目级 `.agents/skills`）。Codex 拥有完整的技能与 MCP 管理工作区；头部展示兼容读取此目录技能的外部 Agent 胶囊列表（Cursor、Antigravity、Grok Build、Kimi Code、Qwen Code、ZCode、DeepSeek Harness、OpenCode）。
+- **外部技能兼容标记**：各 Agent 官方支持读取外部技能目录时，在技能卡片标题栏展示明确的外部 Agent 直达胶囊（如 OpenCode 同时展示 Codex 与 Claude Code，Oh My Pi 展示 Claude Code，Cursor/Grok/Kimi/Qwen/ZCode/DSH/Antigravity 展示 Codex），点击平滑跳转至对应 Agent 工作区。
+- **全局插件搜索**：侧边栏搜索框同时覆盖各平台的 Skill 与 MCP Server；侧边栏实时在各 Agent 名字后显示匹配计数 Badge，无命中的 Agent 适度弱化置灰；右侧在原生 Agent 工作区就地过滤展示，并在无结果时自动切换聚焦到首个命中平台；进入技能详情后返回完整保持搜索词与过滤上下文。
 - **Antigravity**（agy CLI / Antigravity 2.0）：共享 `~/.gemini/config/`（skills + mcp_config.json + plugins）；项目级为 `.agents/skills`、`.agents/mcp_config.json`（`workspace_skill_dir` 有特判，不走镜像）。
 - **Grok Build / Kimi Code / Antigravity / Codex 的插件体系**只在前端小字标注（`plugin.notes.*` i18n key），不管理；Claude Code 是唯一可启停管理的插件体系；ZCode 插件市场为只读列表（见下条）。
 - **ZCode**（智谱 Z.ai 官方编程工具）：skills 为 `~/.zcode/skills`（项目级 `.zcode/skills`）并同时读 Shared；MCP 在 `~/.zcode/cli/config.json` 的 `mcp.servers`（嵌套 map，server schema 严格——未知键会被 ZCode 整个丢弃，读写必须经 serde_json::Value 保留未知字段；禁用写 `"enabled": false`）。插件为 Claude Code 风格的市场制，**只读列表**（`get_zcode_plugins`，`zcode_plugin.rs`）：`~/.zcode/cli/plugins/marketplaces/<id>/marketplace.json` 登记插件（`plugins[].cachePath` 为准，登记 version 可能与缓存目录不一致），实体在 `cache/<市场>/<插件>/<版本>/`（manifest 优先 `.zcode-plugin/plugin.json`，回退 `.claude-plugin/plugin.json`）；`installed` 按 `data/<plugin>@<marketplace>/` 目录存在性判定（**推测语义**，官方文档只说启停状态在 config.json 的 plugins 键、本机未见，未证实），不做启停，UI 小字引导去 ZCode 设置操作。
@@ -172,7 +173,7 @@ Skill 复制（`sync/service.rs`）支持“复制文件（推荐）”与“创
 
 ### 会话浏览器
 
-每个平台有独立的会话适配器（`claude.rs`、`codex.rs`、`kiro.rs`、`grok.rs`、`kimi.rs`、`qwen.rs`、`zcode.rs`、`workbuddy.rs`、`dsh.rs`、`omp.rs`、`opencode.rs`），读取各自的会话存储格式。支持分页浏览、消息查看、终端恢复（ZCode 是 Electron 桌面应用，无终端恢复命令，`build_resume_command` 对其返回明确错误，由恢复弹窗展示），以及将批量选中的会话导出为可搜索、自包含的 HTML 文件。**消息统计**：侧边栏 Sessions 列表首项「全部」（伪平台 id `all`，`STATS_PLATFORM_ID`）只展示统计——各 Agent 的会话数/消息数/AI/我 + 汇总（`SessionStatsView.vue`，环形图与堆叠条均为纯 CSS，不引图表库）；`get_session_stats(days, pathFilter)` 按会话最近活动时间圈定 近 1/7/31 天窗口（前端 range 存 localStorage，默认 7 天），逐平台列表→过滤→计数，计数按"面板渲染口径"折叠：每条 user 记录 1 条、连续 assistant 记录算 1 轮（`fold_role_counts`，与 `groupSessionMessages` 一致），结果按 `(platform, sessionId, updated_at)` 记忆化（`session/mod.rs` 的 `message_stats_cache`，仅在该平台当前列表内保留），计数用 6 线程分片，release 下 31 天窗口约 0.5s；单个会话的明细口径由 `get_session_message_stats` 提供，弹窗底部「关闭」行左侧显示「共 N 条 · AI x · 我 y」（面板通过 `stats` 事件上报，独占 footer 的宿主用 `meta-stats=false` 关掉 meta 行里的同一行数字）。DeepSeek Harness 会话（`dsh.rs`）：列表扫描 `~/.dsh/sessions/<项目>/<sessionId>/session.jsonl.zstd`（zstd 拼接帧容器：每批追加一个 frame，用 `ruzstd`（纯 Rust，无 C 依赖）流式解码；首行 `{"type":"session",…}` 头含 id/createdAt/cwd/origin，后续行为事件信封 `{type,seq,time,data}` 或打包 chunk 行 text-chunks/reasoning-chunks/tool-call-chunks——chunk 行只存增量可跳过）；标题/轮数/Token 统计读 `~/.dsh/storages/session_projcache.json`（rows.title/sessionStats/tokenUsage/sessionListMetadata）；消息取 `user/message`（仅 `source.kind=="user"`，过滤 plugin 注入与 goal 轮）与 `assistant/message`（text 块为正文、reasoning 块为思维链；compaction 的 `surfaceOp:{op:"replace"}` 拷贝跳过，避免重复）；子 agent 会话（`origin:"subagent"`）跳过；删除会移除会话目录并同步清理 `workspace.json` 的 sessionIds 与 projcache 表；恢复命令：无终端恢复（`dsh --resume` 只对 headless/tui profile 生效，web 界面在 GUI 内继续），恢复弹窗展示引导错误信息。平台显示名用产品名（如 "Kiro"），具体客户端在会话卡片 badge 上按 `SessionSummary.source` 区分（Kiro 会话全部来自 `~/.kiro/sessions/cli`，只有 kiro-cli 写这里，故 source 固定 `terminal`、badge 标 "Kiro CLI"；Codex 按 `threads.source` 列映射，`vscode`→ChatGPT 客户端）。
+每个平台有独立的会话适配器（`claude.rs`、`codex.rs`、`kiro.rs`、`grok.rs`、`kimi.rs`、`qwen.rs`、`zcode.rs`、`workbuddy.rs`、`dsh.rs`、`omp.rs`、`opencode.rs`），读取各自的会话存储格式。支持分页浏览、消息查看、终端恢复（ZCode 是 Electron 桌面应用，无终端恢复命令，`build_resume_command` 对其返回明确错误，由恢复弹窗展示），以及将批量选中的会话导出为可搜索、自包含的 HTML 文件。**消息统计**：侧边栏 Sessions 列表首项「统计信息」（伪平台 id `all`，`STATS_PLATFORM_ID`）只展示统计——各 Agent 的会话数/消息数/AI/我 + 汇总（`SessionStatsView.vue`，环形图与堆叠条均为纯 CSS，不引图表库）；`get_session_stats(days, pathFilter)` 按会话最近活动时间圈定 近 1/7/31 天窗口（前端 range 存 localStorage，默认 7 天），逐平台列表→过滤→计数，计数按"面板渲染口径"折叠：每条 user 记录 1 条、连续 assistant 记录算 1 轮（`fold_role_counts`，与 `groupSessionMessages` 一致），结果按 `(platform, sessionId, updated_at)` 记忆化（`session/mod.rs` 的 `message_stats_cache`，仅在该平台当前列表内保留），计数用 6 线程分片，release 下 31 天窗口约 0.5s；单个会话的明细口径由 `get_session_message_stats` 提供，弹窗底部「关闭」行左侧显示「共 N 条 · AI x · 我 y」（面板通过 `stats` 事件上报，独占 footer 的宿主用 `meta-stats=false` 关掉 meta 行里的同一行数字）。DeepSeek Harness 会话（`dsh.rs`）：列表扫描 `~/.dsh/sessions/<项目>/<sessionId>/session.jsonl.zstd`（zstd 拼接帧容器：每批追加一个 frame，用 `ruzstd`（纯 Rust，无 C 依赖）流式解码；首行 `{"type":"session",…}` 头含 id/createdAt/cwd/origin，后续行为事件信封 `{type,seq,time,data}` 或打包 chunk 行 text-chunks/reasoning-chunks/tool-call-chunks——chunk 行只存增量可跳过）；标题/轮数/Token 统计读 `~/.dsh/storages/session_projcache.json`（rows.title/sessionStats/tokenUsage/sessionListMetadata）；消息取 `user/message`（仅 `source.kind=="user"`，过滤 plugin 注入与 goal 轮）与 `assistant/message`（text 块为正文、reasoning 块为思维链；compaction 的 `surfaceOp:{op:"replace"}` 拷贝跳过，避免重复）；子 agent 会话（`origin:"subagent"`）跳过；删除会移除会话目录并同步清理 `workspace.json` 的 sessionIds 与 projcache 表；恢复命令：无终端恢复（`dsh --resume` 只对 headless/tui profile 生效，web 界面在 GUI 内继续），恢复弹窗展示引导错误信息。平台显示名用产品名（如 "Kiro"），具体客户端在会话卡片 badge 上按 `SessionSummary.source` 区分（Kiro 会话全部来自 `~/.kiro/sessions/cli`，只有 kiro-cli 写这里，故 source 固定 `terminal`、badge 标 "Kiro CLI"；Codex 按 `threads.source` 列映射，`vscode`→ChatGPT 客户端）。
 
 ### 会话监听（session_monitor）
 
@@ -213,12 +214,12 @@ cd src-tauri && cargo test
 
 ## CI/CD
 
-`.github/workflows/release.yml` — 推送 `v*` tag 触发，构建 macOS（aarch64 + x86_64）和 Windows 产物，使用 minisign 签名，生成 updater manifest。**发布流程防竞态**：三个 matrix job 统一上传到 **draft** release（`releaseDraft: true`，资产用 `releaseAssetNamePattern: agent-hub_[version]_[arch][setup][ext]` 命名，updater 清单 URL 自动跟随），全部完成后 publish job 才 `gh release edit --draft=false` 公开（job 不 checkout，必须设 `GH_REPO`，否则 gh 找不到仓库，draft 永远不会公开）——构建窗口期 `releases/latest` 一直指向上一个正式版，检查更新不会拿到残缺的 latest.json。
+`.github/workflows/release.yml` — 推送 `v*` tag 触发，构建 macOS（aarch64 + x86_64）和 Windows 产物，使用 minisign 签名，生成 updater manifest。**发布流程防竞态与小写命名规整**：三个 matrix job 统一上传到 **draft** release（`releaseDraft: true`，Windows 仅保留 NSIS 目标以节省耗时并移除多余 MSI）；全部完成后 publish job 下载资产将 `Agent.Hub_*` 统一重命名为小写规范的 `agent-hub_*`，同步修正 `latest.json` 中的 URL，最后 `gh release edit --draft=false` 公开（job 不 checkout，必须设 `GH_REPO`，否则 gh 找不到仓库，draft 永远不会公开）——构建窗口期 `releases/latest` 一直指向上一个正式版，检查更新不会拿到残缺的 latest.json。
 
 ## 应用名称统一约定
 
 **macOS 主窗口与 Dock**：红灯/关闭主窗口时 `prevent_close` + `hide`（不销毁），进程由菜单栏托盘保活；点 Dock 图标走 `RunEvent::Reopen` → `show_main_window`（先 `app.show()` 解除 Cmd+H 级应用隐藏，再 show/unminimize/focus main；main 已销毁则按 `tauri.conf.json` 参数重建）。调度中心/App Exposé 在主窗口隐藏时看不到应用窗口属预期，重新打开后恢复。
 
-软件底层路径与安装包命名统一为 **Agent Hub** / `agent-hub` 格式：可执行文件由 Cargo 包名天然产出（`agent-hub`）；release 资产经 tauri-action 的 `releaseAssetNamePattern: agent-hub_[version]_[arch][setup][ext]` 命名；macOS Bundle 目录及安装路径统一为 `/Applications/Agent Hub.app`（Hook 命令及内部路径坚决避免全大写 `AGENT HUB` 或中文路径）。
+软件底层路径与安装包命名统一为 **Agent Hub** / `agent-hub` 格式：可执行文件由 Cargo 包名天然产出（`agent-hub`）；release 资产统一归一化为全小写 `agent-hub_[version]_[arch][setup][ext]`（如 `agent-hub_0.30.0_aarch64.dmg`、`agent-hub_0.30.0_x64-setup.exe`）；macOS Bundle 目录及安装路径统一为 `/Applications/Agent Hub.app`（Hook 命令及内部路径坚决避免全大写 `AGENT HUB` 或中文路径）。
 
-软件显示名称支持中英文区分：中文环境下为 **智能体中枢**（macOS Dock 悬停、系统应用菜单、Finder 显示名经 `zh-Hans.lproj/InfoPlist.strings` 本地化；主窗口标题与 Windows 任务栏、侧边栏品牌名、关于弹窗、导出 HTML 标题等经 UI 国际化显示为「智能体中枢」）；英文或系统底层无法区分语言的场景统一为 **Agent Hub**。
+软件整体对外的包名、英文名、中文名、目录名等，全都统一叫 **Agent Hub**，不做任何调整（macOS Bundle Display Name、Finder 显示名、系统应用菜单、安装包、托盘悬浮提示及数据目录等对外统一为 **Agent Hub**）；仅在打开软件里面的名字，在中文环境下才显示为「**智能体中枢**」（主窗口标题、侧边栏品牌名、关于弹窗、导出 HTML 标题等经 UI 国际化在中文下显示为「智能体中枢」，英文下为「Agent Hub」）。

@@ -19,6 +19,9 @@ const props = defineProps<{
   model?: string | null
   tokens?: number | null
   startedAt?: number | string | null
+  targetTimestamp?: number | string | null
+  targetContent?: string | null
+  searchQuery?: string | null
 }>()
 
 const emit = defineEmits<{ close: [] }>()
@@ -56,6 +59,9 @@ watch(
       :model="model"
       :tokens="tokens"
       :started-at="startedAt"
+      :target-timestamp="targetTimestamp"
+      :target-content="targetContent"
+      :search-query="searchQuery"
       :meta-stats="false"
       @stats="stats = $event"
     />

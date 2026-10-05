@@ -1,10 +1,22 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useQwenPluginsStore, type QwenPlugin } from '@/stores/qwen-plugins'
+import { usePluginsStore } from '@/stores/plugins'
+import { highlightText } from '@/lib/utils'
 import AppLoading from '@/components/ui/AppLoading.vue'
 
 const { t } = useI18n()
 const store = useQwenPluginsStore()
+const pluginsStore = usePluginsStore()
+
+const displayedPlugins = computed(() => {
+  const q = pluginsStore.searchQuery.toLowerCase().trim()
+  if (!q) return store.plugins
+  return store.plugins.filter((p: QwenPlugin) =>
+    p.name.toLowerCase().includes(q) || (p.description || '').toLowerCase().includes(q)
+  )
+})
 
 function componentsLabel(plugin: QwenPlugin) {
   const parts: string[] = []
@@ -31,19 +43,23 @@ function componentsLabel(plugin: QwenPlugin) {
       {{ t('plugin.qwen_empty') }}
     </div>
 
+    <div v-else-if="displayedPlugins.length === 0" class="ah-qwen-plugins__state">
+      {{ t('plugin.no_matching_skills') }}
+    </div>
+
     <template v-else>
       <div class="ah-qwen-plugin-list">
         <article
-          v-for="plugin in store.plugins"
+          v-for="plugin in displayedPlugins"
           :key="plugin.id"
           class="ah-qwen-plugin"
         >
           <div class="ah-qwen-plugin__main">
             <div class="ah-qwen-plugin__title-row">
-              <strong class="ah-qwen-plugin__name">{{ plugin.name }}</strong>
+              <strong class="ah-qwen-plugin__name" v-html="highlightText(plugin.name, pluginsStore.searchQuery)"></strong>
               <span v-if="plugin.version" class="ah-version-chip">v{{ plugin.version }}</span>
             </div>
-            <p v-if="plugin.description" class="ah-qwen-plugin__description">{{ plugin.description }}</p>
+            <p v-if="plugin.description" class="ah-qwen-plugin__description" v-html="highlightText(plugin.description, pluginsStore.searchQuery)"></p>
             <div class="ah-qwen-plugin__meta">
               <span v-if="componentsLabel(plugin)">{{ componentsLabel(plugin) }}</span>
               <span v-if="plugin.installPath">{{ plugin.installPath }}</span>

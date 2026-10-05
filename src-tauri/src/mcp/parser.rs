@@ -28,6 +28,9 @@ fn read_mcp_servers_from_def(def: &McpPlatformDef) -> Result<Vec<McpServer>, Str
         return Ok(Vec::new());
     }
     let content = fs::read_to_string(&def.config_path).map_err(|e| e.to_string())?;
+    if content.trim().is_empty() {
+        return Ok(Vec::new());
+    }
     let servers = match def.format {
         McpFormat::Json => parse_json_servers(&content, &def.mcp_key),
         McpFormat::Toml => parse_toml_servers(&content, &def.mcp_key),
@@ -55,6 +58,9 @@ pub fn read_workspace_mcp_server(
 }
 
 fn parse_json_servers(content: &str, mcp_key: &str) -> Result<Vec<McpServer>, String> {
+    if content.trim().is_empty() {
+        return Ok(Vec::new());
+    }
     let mut doc: Value = serde_json::from_str(content).map_err(|e| e.to_string())?;
     // Dotted keys (e.g. ZCode's "mcp.servers") address a nested servers map.
     let mut node = &mut doc;

@@ -5,10 +5,10 @@
 @theme {
   --radius-xs: 2px;
   --radius-sm: 2px;
-  --radius-md: 4px;
+  --radius-md: 3px;
   --radius-lg: 4px;
   --radius-xl: 6px;
-  --radius: 2px;
+  --radius: 3px;
 }
 
 /* ============================================================
@@ -20,8 +20,6 @@ html, body, #app { height: 100%; margin: 0; }
 
 body {
   background-color: var(--canvas);
-  background-image: var(--paper-grain), var(--canvas-wash);
-  background-attachment: fixed;
   color: var(--ink);
   font-family: var(--font-sans);
   font-size: 14px;
